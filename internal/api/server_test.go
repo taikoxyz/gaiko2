@@ -23,6 +23,10 @@ func (f fakeService) Prove(context.Context, *prover.ValidatedRequest) (protocol.
 	return f.result, f.err
 }
 
+func (f fakeService) Aggregate(context.Context, *prover.ValidatedAggregateRequest) (protocol.ProofResult, error) {
+	return f.result, f.err
+}
+
 func TestNewServerReturnsValidationErrorEnvelope(t *testing.T) {
 	server := NewServer(fakeService{})
 	req := httptest.NewRequest(http.MethodPost, "/prove/shasta", bytes.NewBufferString(`{

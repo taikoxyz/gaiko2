@@ -12,10 +12,19 @@ type ShastaRequest struct {
 	Payload ShastaPayload `json:"payload"`
 }
 
+type ShastaAggregateRequest struct {
+	Schema  string                 `json:"schema"`
+	Payload ShastaAggregatePayload `json:"payload"`
+}
+
 type ShastaPayload struct {
 	ChainID        uint64          `json:"chain_id"`
 	Blocks         []ReplayBlock   `json:"blocks"`
 	ProofCarryData json.RawMessage `json:"proof_carry_data"`
+}
+
+type ShastaAggregatePayload struct {
+	Proofs []AggregateProof `json:"proofs"`
 }
 
 type ReplayBlock struct {
@@ -23,6 +32,12 @@ type ReplayBlock struct {
 	ChainSpec json.RawMessage `json:"chain_spec"`
 	Witness   json.RawMessage `json:"witness"`
 	Accounts  json.RawMessage `json:"accounts"`
+}
+
+type AggregateProof struct {
+	Input          string          `json:"input"`
+	Proof          string          `json:"proof"`
+	ProofCarryData json.RawMessage `json:"proof_carry_data"`
 }
 
 type ProofResponse struct {

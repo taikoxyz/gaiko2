@@ -10,7 +10,8 @@ import (
 )
 
 const (
-	proveShastaPath = "/prove/shasta"
+	proveShastaPath          = "/prove/shasta"
+	proveShastaAggregatePath = "/prove/shasta-aggregate"
 )
 
 func NewServer(service prover.Service) http.Handler {
@@ -34,6 +35,38 @@ func NewServer(service prover.Service) http.Handler {
 		}
 
 		result, err := service.Prove(r.Context(), validated)
+		if err != nil {
+			statusCode := http.StatusInternalServerError
+			code := "PROVER_ERROR"
+			if errors.Is(err, prover.ErrNotImplemented) {
+				statusCode = http.StatusNotImplemented
+				code = "NOT_IMPLEMENTED"
+			}
+			writeError(w, statusCode, code, err.Error())
+			return
+		}
+
+		writeJSON(w, http.StatusOK, protocol.Success(result))
+	})
+	mux.HandleFunc(proveShastaAggregatePath, func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost {
+			writeError(w, http.StatusMethodNotAllowed, "METHOD_NOT_ALLOWED", "expected POST")
+			return
+		}
+
+		var req protocol.ShastaAggregateRequest
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			writeError(w, http.StatusBadRequest, "INVALID_JSON", err.Error())
+			return
+		}
+
+		validated, err := prover.ValidateAggregateRequest(req)
+		if err != nil {
+			writeError(w, http.StatusBadRequest, "INVALID_REQUEST", err.Error())
+			return
+		}
+
+		result, err := service.Aggregate(r.Context(), validated)
 		if err != nil {
 			statusCode := http.StatusInternalServerError
 			code := "PROVER_ERROR"

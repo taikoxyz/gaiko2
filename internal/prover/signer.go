@@ -28,6 +28,13 @@ type ServiceConfig struct {
 
 type ProofSigner interface {
 	SignHash(common.Hash) (SignerOutput, error)
+	Identity() (SignerIdentity, error)
+}
+
+type SignerIdentity struct {
+	PublicKey       []byte
+	InstanceAddress common.Address
+	InstanceID      uint32
 }
 
 type SignerOutput struct {
@@ -98,11 +105,26 @@ func (s *NativeProofSigner) SignHash(hash common.Hash) (SignerOutput, error) {
 	return buildSignerOutput(hash, privateKey, nil, s.instanceID)
 }
 
+func (s *NativeProofSigner) Identity() (SignerIdentity, error) {
+	privateKey, err := crypto.HexToECDSA(nativeProofPrivateKey)
+	if err != nil {
+		return SignerIdentity{}, fmt.Errorf("load native proof private key: %w", err)
+	}
+	return signerIdentity(privateKey, s.instanceID), nil
+}
+
 func (s *TEEProofSigner) SignHash(hash common.Hash) (SignerOutput, error) {
 	if s.instanceID == 0 {
 		return SignerOutput{}, fmt.Errorf("tee proving requires %s or a registered %s mapping", envInstanceID, envFork)
 	}
 	return buildSignerOutput(hash, s.privateKey, nil, s.instanceID)
+}
+
+func (s *TEEProofSigner) Identity() (SignerIdentity, error) {
+	if s.instanceID == 0 {
+		return SignerIdentity{}, fmt.Errorf("tee proving requires %s or a registered %s mapping", envInstanceID, envFork)
+	}
+	return signerIdentity(s.privateKey, s.instanceID), nil
 }
 
 func buildProofResult(inputHash common.Hash, signer ProofSigner) (protocol.ProofResult, error) {
@@ -111,6 +133,10 @@ func buildProofResult(inputHash common.Hash, signer ProofSigner) (protocol.Proof
 		return protocol.ProofResult{}, err
 	}
 
+	return proofResultFromSignerOutput(inputHash, output), nil
+}
+
+func proofResultFromSignerOutput(inputHash common.Hash, output SignerOutput) protocol.ProofResult {
 	proof := prefixedHex(encodeOneshotProof(output.InstanceID, output.InstanceAddress, output.Signature))
 	publicKey := prefixedHex(output.PublicKey)
 	instanceAddress := output.InstanceAddress.Hex()
@@ -125,7 +151,7 @@ func buildProofResult(inputHash common.Hash, signer ProofSigner) (protocol.Proof
 		quote := prefixedHex(output.Quote)
 		result.Quote = &quote
 	}
-	return result, nil
+	return result
 }
 
 func buildSignerOutput(
@@ -150,6 +176,14 @@ func buildSignerOutput(
 		InstanceAddress: crypto.PubkeyToAddress(privateKey.PublicKey),
 		InstanceID:      instanceID,
 	}, nil
+}
+
+func signerIdentity(privateKey *ecdsa.PrivateKey, instanceID uint32) SignerIdentity {
+	return SignerIdentity{
+		PublicKey:       crypto.FromECDSAPub(&privateKey.PublicKey),
+		InstanceAddress: crypto.PubkeyToAddress(privateKey.PublicKey),
+		InstanceID:      instanceID,
+	}
 }
 
 func encodeOneshotProof(instanceID uint32, instanceAddress common.Address, signature [65]byte) []byte {

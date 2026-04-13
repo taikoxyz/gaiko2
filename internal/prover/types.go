@@ -1,6 +1,8 @@
 package prover
 
 import (
+	"encoding/json"
+
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/core/stateless"
 	"github.com/taikoxyz/gaiko2/internal/protocol"
@@ -10,6 +12,11 @@ type ValidatedRequest struct {
 	Request protocol.ShastaRequest
 	Carry   CarryView
 	Blocks  []BlockView
+}
+
+type ValidatedAggregateRequest struct {
+	Request protocol.ShastaAggregateRequest
+	Proofs  []AggregateProofView
 }
 
 type CarryView struct {
@@ -29,6 +36,13 @@ type BlockView struct {
 	ParentHash   string
 	StateRoot    string
 	ReceiptsRoot string
+}
+
+type AggregateProofView struct {
+	InputHash    common.Hash
+	ProofBytes   []byte
+	RawCarry     json.RawMessage
+	DecodedCarry rawProofCarryData
 }
 
 type ReplayWitness struct {

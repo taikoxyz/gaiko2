@@ -43,6 +43,41 @@ func TestShastaV1RoundTrip(t *testing.T) {
 	}
 }
 
+func TestShastaAggregateV1RoundTrip(t *testing.T) {
+	req := ShastaAggregateRequest{
+		Schema: "v1",
+		Payload: ShastaAggregatePayload{
+			Proofs: []AggregateProof{
+				{
+					Input:          "0x" + "11",
+					Proof:          "0x" + "22",
+					ProofCarryData: mustRawMessage(t, `{"chain_id":167013}`),
+				},
+			},
+		},
+	}
+
+	data, err := json.Marshal(req)
+	if err != nil {
+		t.Fatalf("marshal request: %v", err)
+	}
+
+	var decoded ShastaAggregateRequest
+	if err := json.Unmarshal(data, &decoded); err != nil {
+		t.Fatalf("unmarshal request: %v", err)
+	}
+
+	if decoded.Schema != "v1" {
+		t.Fatalf("unexpected schema: %s", decoded.Schema)
+	}
+	if len(decoded.Payload.Proofs) != 1 {
+		t.Fatalf("unexpected proof count: %d", len(decoded.Payload.Proofs))
+	}
+	if decoded.Payload.Proofs[0].Input != "0x11" {
+		t.Fatalf("unexpected proof input: %s", decoded.Payload.Proofs[0].Input)
+	}
+}
+
 func TestProofResponseHelpers(t *testing.T) {
 	proof := "0xproof"
 	input := "0xinput"
