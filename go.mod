@@ -46,4 +46,4 @@ require (
 	gopkg.in/yaml.v2 v2.4.0 // indirect
 )
 
-replace github.com/ethereum/go-ethereum => ../taiko-geth
+replace github.com/ethereum/go-ethereum => github.com/taikoxyz/taiko-geth v0.0.0-20260412021214-f367d18451e5
