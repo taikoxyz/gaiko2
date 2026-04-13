@@ -25,8 +25,8 @@ func (f fakeService) Prove(context.Context, *prover.ValidatedRequest) (protocol.
 
 func TestNewServerReturnsValidationErrorEnvelope(t *testing.T) {
 	server := NewServer(fakeService{})
-	req := httptest.NewRequest(http.MethodPost, "/internal/prove/shasta-proposal", bytes.NewBufferString(`{
-		"schema":"gaiko2-shasta-v2",
+	req := httptest.NewRequest(http.MethodPost, "/prove/shasta", bytes.NewBufferString(`{
+		"schema":"v2",
 		"payload":{"chain_id":1,"blocks":[],"proof_carry_data":{}}
 	}`))
 	recorder := httptest.NewRecorder()
@@ -57,8 +57,8 @@ func TestNewServerReturnsSuccessEnvelope(t *testing.T) {
 	})
 
 	parentHash := testHash("11")
-	req := httptest.NewRequest(http.MethodPost, "/internal/prove/shasta-proposal", bytes.NewBufferString(fmt.Sprintf(`{
-			"schema":"gaiko2-shasta-v1",
+	req := httptest.NewRequest(http.MethodPost, "/prove/shasta", bytes.NewBufferString(fmt.Sprintf(`{
+			"schema":"v1",
 			"payload":{
 				"chain_id":167013,
 				"blocks":[

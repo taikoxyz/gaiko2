@@ -3,7 +3,7 @@ package protocol
 import "encoding/json"
 
 const (
-	ShastaSchemaV1 = "gaiko2-shasta-v1"
+	ShastaSchemaV1 = "v1"
 	ProofSchemaV1  = "gaiko2-proof-v1"
 )
 

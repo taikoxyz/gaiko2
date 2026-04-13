@@ -23,7 +23,7 @@ func TestSharedShastaFixtureMetadata(t *testing.T) {
 		t.Fatalf("validate request: %v", err)
 	}
 
-	if req.Schema != protocol.ShastaSchemaV1 {
+	if req.Schema != "v1" {
 		t.Fatalf("unexpected schema: %s", req.Schema)
 	}
 	if req.Payload.ChainID != 167000 {

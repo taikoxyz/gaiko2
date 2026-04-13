@@ -5,7 +5,7 @@ with `taiko-geth` and producing a TEE proof envelope.
 
 ## Baseline
 
-- `gaiko2-shasta-v1` request/response protocol is implemented.
+- `/prove/shasta` is implemented with request `schema: "v1"`.
 - `gaiko2` can decode `raiko2`-adapted execution packets and replay them with
   native `taiko-geth` stateless execution.
 - `gaiko2` validates replay continuity against `proof_carry_data`.

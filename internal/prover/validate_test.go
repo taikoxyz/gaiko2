@@ -12,7 +12,7 @@ func TestValidateRequestAcceptsContiguousPacket(t *testing.T) {
 	parentHash := testHash("11")
 	lastStateRoot := testHash("bb")
 	req := protocol.ShastaRequest{
-		Schema: protocol.ShastaSchemaV1,
+		Schema: "v1",
 		Payload: protocol.ShastaPayload{
 			ChainID: 167013,
 			Blocks: []protocol.ReplayBlock{
@@ -55,9 +55,9 @@ func TestValidateRequestAcceptsContiguousPacket(t *testing.T) {
 
 func TestValidateRequestRejectsUnsupportedSchema(t *testing.T) {
 	_, err := ValidateRequest(protocol.ShastaRequest{
-		Schema: "gaiko2-shasta-v2",
+		Schema: "v2",
 	})
-	if err == nil || err.Error() != `unsupported schema "gaiko2-shasta-v2"` {
+	if err == nil || err.Error() != `unsupported schema "v2"` {
 		t.Fatalf("unexpected error: %v", err)
 	}
 }
@@ -65,7 +65,7 @@ func TestValidateRequestRejectsUnsupportedSchema(t *testing.T) {
 func TestValidateRequestRejectsNonContiguousBlocks(t *testing.T) {
 	parentHash := testHash("11")
 	req := protocol.ShastaRequest{
-		Schema: protocol.ShastaSchemaV1,
+		Schema: "v1",
 		Payload: protocol.ShastaPayload{
 			ChainID: 1,
 			Blocks: []protocol.ReplayBlock{

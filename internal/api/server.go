@@ -10,12 +10,12 @@ import (
 )
 
 const (
-	proveShastaProposalPath = "/internal/prove/shasta-proposal"
+	proveShastaPath = "/prove/shasta"
 )
 
 func NewServer(service prover.Service) http.Handler {
 	mux := http.NewServeMux()
-	mux.HandleFunc(proveShastaProposalPath, func(w http.ResponseWriter, r *http.Request) {
+	mux.HandleFunc(proveShastaPath, func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodPost {
 			writeError(w, http.StatusMethodNotAllowed, "METHOD_NOT_ALLOWED", "expected POST")
 			return

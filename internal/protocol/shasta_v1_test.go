@@ -7,7 +7,7 @@ import (
 
 func TestShastaV1RoundTrip(t *testing.T) {
 	req := ShastaRequest{
-		Schema: ShastaSchemaV1,
+		Schema: "v1",
 		Payload: ShastaPayload{
 			ChainID: 167013,
 			Blocks: []ReplayBlock{
@@ -32,7 +32,7 @@ func TestShastaV1RoundTrip(t *testing.T) {
 		t.Fatalf("unmarshal request: %v", err)
 	}
 
-	if decoded.Schema != ShastaSchemaV1 {
+	if decoded.Schema != "v1" {
 		t.Fatalf("unexpected schema: %s", decoded.Schema)
 	}
 	if decoded.Payload.ChainID != 167013 {

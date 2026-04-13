@@ -3,11 +3,18 @@ package main
 import (
 	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"os"
+	"strconv"
 
 	"github.com/taikoxyz/gaiko2/internal/api"
 	"github.com/taikoxyz/gaiko2/internal/prover"
+)
+
+var (
+	listenFn = net.Listen
+	serveFn  = http.Serve
 )
 
 func main() {
@@ -40,10 +47,27 @@ func run(args []string, stdout io.Writer) error {
 		if err != nil {
 			return err
 		}
-		return http.ListenAndServe(addr, api.NewServer(service))
+		listener, err := listenFn("tcp", addr)
+		if err != nil {
+			return err
+		}
+		_, _ = fmt.Fprintf(stdout, "listening on %s\n", formatListeningAddr(listener.Addr()))
+		return serveFn(listener, api.NewServer(service))
 	default:
 		return fmt.Errorf("unknown command %q", args[0])
 	}
+}
+
+func formatListeningAddr(addr net.Addr) string {
+	tcpAddr, ok := addr.(*net.TCPAddr)
+	if !ok {
+		return addr.String()
+	}
+
+	if tcpAddr.IP == nil || tcpAddr.IP.IsUnspecified() {
+		return net.JoinHostPort("0.0.0.0", strconv.Itoa(tcpAddr.Port))
+	}
+	return tcpAddr.String()
 }
 
 func printUsage(stdout io.Writer) {

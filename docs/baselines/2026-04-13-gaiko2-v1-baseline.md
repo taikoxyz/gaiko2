@@ -78,7 +78,7 @@ The current wire contract is JSON with a top-level schema field:
 
 ```json
 {
-  "schema": "gaiko2-shasta-v1",
+  "schema": "v1",
   "payload": { "...": "..." }
 }
 ```
@@ -110,6 +110,11 @@ The following is in place inside `gaiko2`:
 - `ego` provider in `internal/tee`,
 - internal HTTP API in `internal/api/server.go`,
 - CLI entrypoint in `cmd/gaiko2/main.go`.
+
+The current fork-specific prove endpoint is:
+
+- `POST /prove/shasta`
+- request body version is carried by `schema`, currently `v1`
 
 The repository also contains a shared replay fixture:
 
@@ -146,7 +151,7 @@ These are known and accepted at this baseline:
 - on-chain verifier contracts are not implemented here,
 - `gaiko2` still assumes `raiko2` owns canonical preflight and packet
   construction,
-- schema evolution policy is documented, but only `gaiko2-shasta-v1` exists so
+- schema evolution policy is documented, but only request schema `v1` exists so
   far.
 
 ## Immediate Next Steps
