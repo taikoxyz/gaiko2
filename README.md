@@ -11,7 +11,8 @@ with `taiko-geth` and producing a TEE proof envelope.
 - `gaiko2` validates replay continuity against `proof_carry_data`.
 - proof output now supports two signer modes behind one envelope:
   - `native`: sign the final input hash with the fixed GoldenTouch key.
-  - `tee`: sign with an enclave-managed key and attach an `ego` quote.
+  - `tee`: sign with an enclave-managed key; the bootstrap step emits the `ego`
+    quote used by external registration flows.
 - the checked-in shared fixture under `testdata/` is derived from a real
   `raiko2` GuestInput fixture and replays successfully.
 
@@ -51,8 +52,8 @@ Optional proving configuration:
 If unset, `gaiko2` defaults to `native` mode.
 
 TEE mode expects the enclave key to be bootstrapped ahead of proving. `gaiko2 server`
-checks that the sealed key is readable at startup, and proving also returns an error if
-the key cannot be loaded.
+checks that the sealed key is readable at startup and caches the loaded key for
+later signing.
 
 Bootstrap the local tee state with:
 
@@ -98,10 +99,14 @@ docker run --rm -p 8080:8080 gaiko2-native:latest
 
 The tee image also starts as a server and defaults to port `8080`, but it still
 requires the usual SGX runtime devices and host configuration to run correctly.
-Bootstrap the tee image explicitly before starting the server:
+Bootstrap the tee image explicitly before starting the server.
+
+If you run the container on the same Docker network as a `pccs` service, the
+default `PCCS_HOST=pccs:8081` works out of the box:
 
 ```bash
 docker run --rm \
+  --network docker_default \
   --device /dev/sgx_enclave \
   --device /dev/sgx_provision \
   -e GAIKO2_PROVING_MODE=tee \
@@ -110,6 +115,7 @@ docker run --rm \
   gaiko2-tee:latest --init
 
 docker run --rm \
+  --network docker_default \
   --device /dev/sgx_enclave \
   --device /dev/sgx_provision \
   -p 8080:8080 \
@@ -117,6 +123,21 @@ docker run --rm \
   -v /path/to/config:/var/lib/gaiko2/config \
   -v /path/to/secrets:/var/lib/gaiko2/secrets \
   gaiko2-tee:latest
+```
+
+If you run `gaiko2-tee` outside that compose network, set `PCCS_HOST`
+explicitly. For example, with host gateway routing:
+
+```bash
+docker run --rm \
+  --add-host host.docker.internal:host-gateway \
+  --device /dev/sgx_enclave \
+  --device /dev/sgx_provision \
+  -e GAIKO2_PROVING_MODE=tee \
+  -e PCCS_HOST=host.docker.internal:8081 \
+  -v /path/to/config:/var/lib/gaiko2/config \
+  -v /path/to/secrets:/var/lib/gaiko2/secrets \
+  gaiko2-tee:latest --init
 ```
 
 ## Docs
