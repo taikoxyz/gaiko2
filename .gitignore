@@ -1,0 +1,12 @@
+/gaiko2
+/bin/
+/dist/
+/tmp/
+/coverage.out
+/.env
+/.idea/
+/.vscode/
+*.test
+*.out
+*.log
+secrets/
