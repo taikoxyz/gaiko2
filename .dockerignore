@@ -1,0 +1,11 @@
+.git
+.gitignore
+.codex
+bin
+dist
+tmp
+coverage.out
+docs
+testdata
+*.log
+*.out

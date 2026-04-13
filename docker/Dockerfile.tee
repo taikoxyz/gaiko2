@@ -1,0 +1,56 @@
+FROM ghcr.io/edgelesssys/ego-dev:v1.9.0 AS builder
+WORKDIR /opt/gaiko2
+
+COPY go.mod go.sum ./
+RUN go mod download
+
+COPY cmd ./cmd
+COPY internal ./internal
+
+RUN ego-go build -o gaiko2-ego ./cmd/gaiko2
+
+COPY ego/enclave.json .
+COPY docker/enclave-key.pem private.pem
+
+RUN ego sign && ego bundle gaiko2-ego gaiko2
+RUN ego uniqueid gaiko2-ego
+RUN ego signerid gaiko2-ego
+
+FROM gramineproject/gramine:1.8-jammy AS runtime
+ENV DEBIAN_FRONTEND=noninteractive \
+    GAIKO2_PROVING_MODE=tee \
+    GAIKO2_TEE_TYPE=ego \
+    GAIKO2_CONFIG_DIR=/var/lib/gaiko2/config \
+    GAIKO2_SECRET_DIR=/var/lib/gaiko2/secrets \
+    GAIKO2_PORT=8080
+
+WORKDIR /opt/gaiko2
+
+RUN apt-get update && \
+    apt-get install -y \
+    ca-certificates \
+    time \
+    cracklib-runtime \
+    libsgx-dcap-default-qpl \
+    libsgx-dcap-ql \
+    libsgx-urts \
+    sgx-pck-id-retrieval-tool \
+    build-essential \
+    libssl-dev \
+    jq \
+    sudo && \
+    apt-get clean all && \
+    rm -rf /var/lib/apt/lists/*
+
+RUN sed -i 's/#default quoting type = ecdsa_256/default quoting type = ecdsa_256/' /etc/aesmd.conf && \
+    sed -i 's/,"use_secure_cert": true/,"use_secure_cert": false/' /etc/sgx_default_qcnl.conf
+
+RUN mkdir -p /opt/gaiko2/bin /var/lib/gaiko2/config /var/lib/gaiko2/secrets
+
+COPY --from=builder /opt/gaiko2/gaiko2 ./bin/
+COPY docker/entrypoint.sh ./bin/entrypoint.sh
+RUN chmod +x ./bin/entrypoint.sh
+
+EXPOSE 8080
+
+ENTRYPOINT ["/opt/gaiko2/bin/entrypoint.sh"]

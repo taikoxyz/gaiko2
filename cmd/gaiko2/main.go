@@ -1,21 +1,29 @@
 package main
 
 import (
+	"encoding/json"
+	"flag"
 	"fmt"
 	"io"
 	"net"
 	"net/http"
 	"os"
 	"strconv"
+	"strings"
 
 	"github.com/taikoxyz/gaiko2/internal/api"
 	"github.com/taikoxyz/gaiko2/internal/prover"
+	"github.com/taikoxyz/gaiko2/internal/tee"
 )
 
 var (
-	listenFn = net.Listen
-	serveFn  = http.Serve
+	listenFn           = net.Listen
+	serveFn            = http.Serve
+	bootstrapCommandFn = runBootstrapCommand
+	checkCommandFn     = runCheckCommand
 )
+
+const envPort = "GAIKO2_PORT"
 
 func main() {
 	if err := run(os.Args[1:], os.Stdout); err != nil {
@@ -34,8 +42,12 @@ func run(args []string, stdout io.Writer) error {
 	case "version":
 		_, err := fmt.Fprintln(stdout, "gaiko2 dev")
 		return err
+	case "bootstrap":
+		return bootstrapCommandFn(args[1:], stdout)
+	case "check":
+		return checkCommandFn(args[1:], stdout)
 	case "server", "serve", "s":
-		addr := ":8080"
+		addr := defaultServerAddr()
 		if len(args) > 1 {
 			addr = args[1]
 		}
@@ -70,11 +82,85 @@ func formatListeningAddr(addr net.Addr) string {
 	return tcpAddr.String()
 }
 
+func defaultServerAddr() string {
+	port := strings.TrimSpace(os.Getenv(envPort))
+	if port == "" {
+		return ":8080"
+	}
+	if strings.HasPrefix(port, ":") {
+		return port
+	}
+	return ":" + port
+}
+
 func printUsage(stdout io.Writer) {
 	_, _ = fmt.Fprintln(stdout, "gaiko2")
 	_, _ = fmt.Fprintln(stdout, "")
 	_, _ = fmt.Fprintln(stdout, "Usage:")
 	_, _ = fmt.Fprintln(stdout, "  gaiko2 help")
 	_, _ = fmt.Fprintln(stdout, "  gaiko2 version")
+	_, _ = fmt.Fprintln(stdout, "  gaiko2 bootstrap")
+	_, _ = fmt.Fprintln(stdout, "  gaiko2 check")
 	_, _ = fmt.Fprintln(stdout, "  gaiko2 server")
+}
+
+func runBootstrapCommand(args []string, stdout io.Writer) error {
+	flags := flag.NewFlagSet("bootstrap", flag.ContinueOnError)
+	flags.SetOutput(io.Discard)
+
+	teeType := flags.String("tee-type", strings.TrimSpace(os.Getenv("GAIKO2_TEE_TYPE")), "tee provider type")
+	secretDir := flags.String("secret-dir", envOrDefault("GAIKO2_SECRET_DIR", tee.DefaultSecretDir()), "directory for sealed keys")
+	configDir := flags.String("config-dir", envOrDefault("GAIKO2_CONFIG_DIR", tee.DefaultConfigDir()), "directory for bootstrap metadata")
+	if err := flags.Parse(args); err != nil {
+		return err
+	}
+
+	provider, err := tee.NewProvider(tee.Config{
+		Type:      *teeType,
+		SecretDir: *secretDir,
+	})
+	if err != nil {
+		return err
+	}
+
+	data, err := tee.Bootstrap(provider)
+	if err != nil {
+		return err
+	}
+	if err := tee.SaveBootstrapData(*configDir, data); err != nil {
+		return err
+	}
+	return json.NewEncoder(stdout).Encode(data)
+}
+
+func runCheckCommand(args []string, stdout io.Writer) error {
+	flags := flag.NewFlagSet("check", flag.ContinueOnError)
+	flags.SetOutput(io.Discard)
+
+	teeType := flags.String("tee-type", strings.TrimSpace(os.Getenv("GAIKO2_TEE_TYPE")), "tee provider type")
+	secretDir := flags.String("secret-dir", envOrDefault("GAIKO2_SECRET_DIR", tee.DefaultSecretDir()), "directory for sealed keys")
+	if err := flags.Parse(args); err != nil {
+		return err
+	}
+
+	provider, err := tee.NewProvider(tee.Config{
+		Type:      *teeType,
+		SecretDir: *secretDir,
+	})
+	if err != nil {
+		return err
+	}
+	if err := tee.Check(provider); err != nil {
+		return err
+	}
+	_, err = fmt.Fprintln(stdout, "ok")
+	return err
+}
+
+func envOrDefault(key, fallback string) string {
+	value := strings.TrimSpace(os.Getenv(key))
+	if value == "" {
+		return fallback
+	}
+	return value
 }

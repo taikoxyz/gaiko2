@@ -1,0 +1,69 @@
+{
+  "exe": "gaiko2-ego",
+  "key": "private.pem",
+  "debug": false,
+  "heapSize": 8192,
+  "executableHeap": false,
+  "productID": 1,
+  "securityVersion": 1,
+  "mounts": [
+    {
+      "source": "/var/lib/gaiko2/config",
+      "target": "/var/lib/gaiko2/config",
+      "type": "hostfs",
+      "readOnly": false
+    },
+    {
+      "source": "/var/lib/gaiko2/secrets",
+      "target": "/var/lib/gaiko2/secrets",
+      "type": "hostfs",
+      "readOnly": false
+    },
+    {
+      "source": "/proc/self/mountinfo",
+      "target": "/proc/self/mountinfo",
+      "type": "hostfs",
+      "readOnly": true
+    },
+    {
+      "source": "/proc/self/cgroup",
+      "target": "/proc/self/cgroup",
+      "type": "hostfs",
+      "readOnly": true
+    },
+    {
+      "source": "/sys/fs/cgroup/",
+      "target": "/sys/fs/cgroup/",
+      "type": "hostfs",
+      "readOnly": true
+    }
+  ],
+  "env": [
+    {
+      "name": "GAIKO2_PROVING_MODE",
+      "value": "tee"
+    },
+    {
+      "name": "GAIKO2_TEE_TYPE",
+      "value": "ego"
+    },
+    {
+      "name": "GAIKO2_SECRET_DIR",
+      "value": "/var/lib/gaiko2/secrets"
+    },
+    {
+      "name": "GAIKO2_PORT",
+      "value": "8080"
+    },
+    {
+      "name": "HOME",
+      "value": "/root"
+    }
+  ],
+  "files": [
+    {
+      "source": "/etc/ssl/certs/ca-certificates.crt",
+      "target": "/etc/ssl/certs/ca-certificates.crt"
+    }
+  ]
+}

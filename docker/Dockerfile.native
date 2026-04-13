@@ -1,0 +1,30 @@
+FROM golang:1.24-bookworm AS builder
+WORKDIR /opt/gaiko2
+
+COPY go.mod go.sum ./
+RUN go mod download
+
+COPY cmd ./cmd
+COPY internal ./internal
+
+RUN go build -trimpath -o gaiko2 ./cmd/gaiko2
+
+FROM debian:bookworm-slim AS runtime
+ENV DEBIAN_FRONTEND=noninteractive \
+    GAIKO2_PROVING_MODE=native \
+    GAIKO2_PORT=8080
+
+WORKDIR /opt/gaiko2
+
+RUN apt-get update && \
+    apt-get install -y --no-install-recommends ca-certificates tzdata && \
+    apt-get clean all && \
+    rm -rf /var/lib/apt/lists/*
+
+RUN mkdir -p /opt/gaiko2/bin
+
+COPY --from=builder /opt/gaiko2/gaiko2 ./bin/
+
+EXPOSE 8080
+
+ENTRYPOINT ["/opt/gaiko2/bin/gaiko2", "server"]

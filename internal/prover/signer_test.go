@@ -3,6 +3,7 @@ package prover
 import (
 	"crypto/ecdsa"
 	"errors"
+	"io/fs"
 	"testing"
 
 	"github.com/ethereum/go-ethereum/common"
@@ -41,33 +42,23 @@ func TestNativeProofSignerMatchesGoldenTouchAccount(t *testing.T) {
 	}
 }
 
-func TestTEEProofSignerReturnsQuote(t *testing.T) {
+func TestTEEProofSignerOmitsQuoteDuringProving(t *testing.T) {
 	privateKey, err := crypto.GenerateKey()
 	if err != nil {
 		t.Fatalf("generate key: %v", err)
 	}
-	provider := &fakeTEEProvider{
-		privateKey: privateKey,
-		quote:      []byte{0xca, 0xfe},
-	}
-	signer := NewTEEProofSigner(provider, 0x12345678)
+	signer := NewTEEProofSigner(privateKey, 0x12345678)
 	hash := crypto.Keccak256Hash([]byte("gaiko2-tee"))
 
 	output, err := signer.SignHash(hash)
 	if err != nil {
 		t.Fatalf("sign hash: %v", err)
 	}
-	if provider.loadCalls != 1 {
-		t.Fatalf("expected key load once, got %d", provider.loadCalls)
-	}
-	if provider.quoteCalls != 1 {
-		t.Fatalf("expected quote load once, got %d", provider.quoteCalls)
+	if len(output.Quote) != 0 {
+		t.Fatalf("expected prove path to omit quote, got %x", output.Quote)
 	}
 	if output.InstanceID != 0x12345678 {
 		t.Fatalf("unexpected instance id: %x", output.InstanceID)
-	}
-	if string(output.Quote) != string([]byte{0xca, 0xfe}) {
-		t.Fatalf("unexpected quote: %x", output.Quote)
 	}
 	if output.InstanceAddress != crypto.PubkeyToAddress(privateKey.PublicKey) {
 		t.Fatalf("unexpected instance address: %s", output.InstanceAddress.Hex())
@@ -83,9 +74,60 @@ func TestNewConfiguredReplayServiceRejectsUnknownMode(t *testing.T) {
 	}
 }
 
+func TestNewConfiguredReplayServiceTEERequiresBootstrappedKeyAtStartup(t *testing.T) {
+	prev := newTEEProviderFn
+	t.Cleanup(func() {
+		newTEEProviderFn = prev
+	})
+
+	newTEEProviderFn = func(tee.Config) (tee.Provider, error) {
+		return &fakeTEEProvider{loadErr: fs.ErrNotExist}, nil
+	}
+
+	_, err := NewConfiguredReplayService(ServiceConfig{
+		Mode:       ProvingModeTEE,
+		TeeType:    tee.TypeEGo,
+		SecretDir:  t.TempDir(),
+		InstanceID: 0x12345678,
+	}, nil)
+	if err == nil || err.Error() != "tee bootstrap required: file does not exist" {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
+func TestNewConfiguredReplayServiceTEELoadsBootstrappedKeyAtStartup(t *testing.T) {
+	prev := newTEEProviderFn
+	t.Cleanup(func() {
+		newTEEProviderFn = prev
+	})
+
+	privateKey, err := crypto.GenerateKey()
+	if err != nil {
+		t.Fatalf("generate key: %v", err)
+	}
+	provider := &fakeTEEProvider{privateKey: privateKey}
+	newTEEProviderFn = func(tee.Config) (tee.Provider, error) {
+		return provider, nil
+	}
+
+	_, err = NewConfiguredReplayService(ServiceConfig{
+		Mode:       ProvingModeTEE,
+		TeeType:    tee.TypeEGo,
+		SecretDir:  t.TempDir(),
+		InstanceID: 0x12345678,
+	}, nil)
+	if err != nil {
+		t.Fatalf("new configured replay service: %v", err)
+	}
+	if provider.loadCalls != 1 {
+		t.Fatalf("expected startup key load once, got %d", provider.loadCalls)
+	}
+}
+
 type fakeTEEProvider struct {
 	privateKey *ecdsa.PrivateKey
 	quote      []byte
+	loadErr    error
 	loadCalls  int
 	quoteCalls int
 }
@@ -97,6 +139,9 @@ func (f *fakeTEEProvider) LoadQuote(instance common.Address) (tee.Quote, error) 
 
 func (f *fakeTEEProvider) LoadPrivateKey() (*ecdsa.PrivateKey, error) {
 	f.loadCalls++
+	if f.loadErr != nil {
+		return nil, f.loadErr
+	}
 	if f.privateKey == nil {
 		return nil, errors.New("missing key")
 	}

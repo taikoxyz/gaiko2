@@ -3,9 +3,7 @@ package prover
 import (
 	"crypto/ecdsa"
 	"encoding/binary"
-	"errors"
 	"fmt"
-	"io/fs"
 	"strings"
 
 	"github.com/ethereum/go-ethereum/common"
@@ -23,6 +21,8 @@ type ServiceConfig struct {
 	Mode       string
 	TeeType    string
 	SecretDir  string
+	ConfigDir  string
+	Fork       string
 	InstanceID uint32
 }
 
@@ -43,18 +43,20 @@ type NativeProofSigner struct {
 }
 
 type TEEProofSigner struct {
-	provider   tee.Provider
+	privateKey *ecdsa.PrivateKey
 	instanceID uint32
 }
+
+var newTEEProviderFn = tee.NewProvider
 
 func NewNativeProofSigner(instanceID uint32) *NativeProofSigner {
 	return &NativeProofSigner{instanceID: defaultInstanceID(instanceID)}
 }
 
-func NewTEEProofSigner(provider tee.Provider, instanceID uint32) *TEEProofSigner {
+func NewTEEProofSigner(privateKey *ecdsa.PrivateKey, instanceID uint32) *TEEProofSigner {
 	return &TEEProofSigner{
-		provider:   provider,
-		instanceID: defaultInstanceID(instanceID),
+		privateKey: privateKey,
+		instanceID: instanceID,
 	}
 }
 
@@ -69,14 +71,18 @@ func NewConfiguredReplayService(cfg ServiceConfig, runner Runner) (ReplayService
 	case ProvingModeNative:
 		signer = NewNativeProofSigner(cfg.InstanceID)
 	case ProvingModeTEE:
-		provider, err := tee.NewProvider(tee.Config{
+		provider, err := newTEEProviderFn(tee.Config{
 			Type:      cfg.TeeType,
 			SecretDir: cfg.SecretDir,
 		})
 		if err != nil {
 			return ReplayService{}, err
 		}
-		signer = NewTEEProofSigner(provider, cfg.InstanceID)
+		privateKey, err := provider.LoadPrivateKey()
+		if err != nil {
+			return ReplayService{}, fmt.Errorf("tee bootstrap required: %w", err)
+		}
+		signer = NewTEEProofSigner(privateKey, cfg.InstanceID)
 	default:
 		return ReplayService{}, fmt.Errorf("unsupported proving mode %q", cfg.Mode)
 	}
@@ -93,18 +99,10 @@ func (s *NativeProofSigner) SignHash(hash common.Hash) (SignerOutput, error) {
 }
 
 func (s *TEEProofSigner) SignHash(hash common.Hash) (SignerOutput, error) {
-	privateKey, err := s.loadOrCreatePrivateKey()
-	if err != nil {
-		return SignerOutput{}, err
+	if s.instanceID == 0 {
+		return SignerOutput{}, fmt.Errorf("tee proving requires %s or a registered %s mapping", envInstanceID, envFork)
 	}
-
-	instanceAddress := crypto.PubkeyToAddress(privateKey.PublicKey)
-	quote, err := s.provider.LoadQuote(instanceAddress)
-	if err != nil {
-		return SignerOutput{}, fmt.Errorf("load tee quote: %w", err)
-	}
-
-	return buildSignerOutput(hash, privateKey, quote.Bytes(), s.instanceID)
+	return buildSignerOutput(hash, s.privateKey, nil, s.instanceID)
 }
 
 func buildProofResult(inputHash common.Hash, signer ProofSigner) (protocol.ProofResult, error) {
@@ -150,14 +148,14 @@ func buildSignerOutput(
 		Quote:           append([]byte(nil), quote...),
 		PublicKey:       crypto.FromECDSAPub(&privateKey.PublicKey),
 		InstanceAddress: crypto.PubkeyToAddress(privateKey.PublicKey),
-		InstanceID:      defaultInstanceID(instanceID),
+		InstanceID:      instanceID,
 	}, nil
 }
 
 func encodeOneshotProof(instanceID uint32, instanceAddress common.Address, signature [65]byte) []byte {
 	proofBytes := make([]byte, 0, 4+common.AddressLength+len(signature))
 	var encodedInstanceID [4]byte
-	binary.BigEndian.PutUint32(encodedInstanceID[:], defaultInstanceID(instanceID))
+	binary.BigEndian.PutUint32(encodedInstanceID[:], instanceID)
 	proofBytes = append(proofBytes, encodedInstanceID[:]...)
 	proofBytes = append(proofBytes, instanceAddress.Bytes()...)
 	proofBytes = append(proofBytes, signature[:]...)
@@ -169,23 +167,4 @@ func defaultInstanceID(instanceID uint32) uint32 {
 		return shastaNativeMockInstance
 	}
 	return instanceID
-}
-
-func (s *TEEProofSigner) loadOrCreatePrivateKey() (*ecdsa.PrivateKey, error) {
-	privateKey, err := s.provider.LoadPrivateKey()
-	if err == nil {
-		return privateKey, nil
-	}
-	if !errors.Is(err, fs.ErrNotExist) {
-		return nil, fmt.Errorf("load tee private key: %w", err)
-	}
-
-	privateKey, err = crypto.GenerateKey()
-	if err != nil {
-		return nil, fmt.Errorf("generate tee private key: %w", err)
-	}
-	if err := s.provider.SavePrivateKey(privateKey); err != nil {
-		return nil, fmt.Errorf("save tee private key: %w", err)
-	}
-	return privateKey, nil
 }
