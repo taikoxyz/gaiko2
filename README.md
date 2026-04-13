@@ -91,6 +91,20 @@ docker build -f docker/Dockerfile.native -t gaiko2-native:latest .
 docker build -f docker/Dockerfile.tee -t gaiko2-tee:latest .
 ```
 
+Or use Compose profiles:
+
+```bash
+docker compose up --build
+docker compose --profile tee-init run --rm gaiko2-tee-init
+docker compose --profile tee up --build gaiko2-tee
+```
+
+The compose file defaults `PCCS_HOST` to `host.docker.internal:8081` and adds the
+host gateway mapping automatically, which works well when your local `pccs`
+container already publishes `8081` on the host. If you run `gaiko2` on the same
+Docker network as a `pccs` service, override `PCCS_HOST=pccs:8081` before
+starting the tee profile.
+
 Run the native server container on the default port:
 
 ```bash

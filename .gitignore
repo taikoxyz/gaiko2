@@ -2,6 +2,7 @@
 /bin/
 /dist/
 /tmp/
+/var/
 /coverage.out
 /.env
 /.idea/
