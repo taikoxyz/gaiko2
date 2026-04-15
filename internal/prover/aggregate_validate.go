@@ -2,7 +2,6 @@ package prover
 
 import (
 	"encoding/hex"
-	"encoding/json"
 	"fmt"
 	"strings"
 
@@ -19,7 +18,7 @@ func ValidateAggregateRequest(req protocol.ShastaAggregateRequest) (*ValidatedAg
 	}
 
 	proofs := make([]AggregateProofView, 0, len(req.Payload.Proofs))
-	carries := make([]rawProofCarryData, 0, len(req.Payload.Proofs))
+	carries := make([]CarryView, 0, len(req.Payload.Proofs))
 
 	for index, item := range req.Payload.Proofs {
 		if strings.TrimSpace(item.Input) == "" {
@@ -29,8 +28,8 @@ func ValidateAggregateRequest(req protocol.ShastaAggregateRequest) (*ValidatedAg
 			return nil, fmt.Errorf("aggregate proof %d is missing proof", index)
 		}
 
-		var carry rawProofCarryData
-		if err := json.Unmarshal(item.ProofCarryData, &carry); err != nil {
+		carry, err := decodeCarry(item.ProofCarryData)
+		if err != nil {
 			return nil, fmt.Errorf("decode proof_carry_data for proof %d: %w", index, err)
 		}
 
@@ -55,25 +54,45 @@ func ValidateAggregateRequest(req protocol.ShastaAggregateRequest) (*ValidatedAg
 		if err != nil {
 			return nil, fmt.Errorf("decode aggregate proof %d: %w", index, err)
 		}
-		if len(proofBytes) != 89 {
-			return nil, fmt.Errorf(
-				"aggregate proof %d length mismatch: got %d expected 89",
-				index,
-				len(proofBytes),
-			)
+		instanceID, instanceAddress, signature, err := decodeOneshotProof(proofBytes)
+		if err != nil {
+			return nil, fmt.Errorf("decode aggregate proof %d metadata: %w", index, err)
 		}
 
 		carries = append(carries, carry)
 		proofs = append(proofs, AggregateProofView{
-			InputHash:    inputHash,
-			ProofBytes:   proofBytes,
-			RawCarry:     item.ProofCarryData,
-			DecodedCarry: carry,
+			InputHash:       inputHash,
+			ProofBytes:      proofBytes,
+			InstanceID:      instanceID,
+			InstanceAddress: instanceAddress,
+			Signature:       signature,
+			RawCarry:        item.ProofCarryData,
+			Carry:           carry,
 		})
 	}
 
 	if !validateShastaProofCarryDataVec(carries) {
 		return nil, fmt.Errorf("invalid shasta proof carry data")
+	}
+	expectedInstanceID := proofs[0].InstanceID
+	expectedInstanceAddress := proofs[0].InstanceAddress
+	for index, proof := range proofs[1:] {
+		if proof.InstanceID != expectedInstanceID {
+			return nil, fmt.Errorf(
+				"aggregate proof %d instance id mismatch: got %d expected %d",
+				index+1,
+				proof.InstanceID,
+				expectedInstanceID,
+			)
+		}
+		if proof.InstanceAddress != expectedInstanceAddress {
+			return nil, fmt.Errorf(
+				"aggregate proof %d instance address mismatch: got %s expected %s",
+				index+1,
+				proof.InstanceAddress.Hex(),
+				expectedInstanceAddress.Hex(),
+			)
+		}
 	}
 
 	return &ValidatedAggregateRequest{
@@ -82,13 +101,13 @@ func ValidateAggregateRequest(req protocol.ShastaAggregateRequest) (*ValidatedAg
 	}, nil
 }
 
-func validateShastaProofCarryDataVec(carries []rawProofCarryData) bool {
+func validateShastaProofCarryDataVec(carries []CarryView) bool {
 	if len(carries) == 0 {
 		return false
 	}
 	expectedProver := carries[0].TransitionInput.ActualProver
 	for _, item := range carries {
-		if !equalHex(item.TransitionInput.ActualProver, expectedProver) {
+		if item.TransitionInput.ActualProver != expectedProver {
 			return false
 		}
 	}
@@ -98,16 +117,16 @@ func validateShastaProofCarryDataVec(carries []rawProofCarryData) bool {
 		if prev.TransitionInput.ProposalID+1 != next.TransitionInput.ProposalID {
 			return false
 		}
-		if !equalHex(prev.TransitionInput.ProposalHash, next.TransitionInput.ParentProposalHash) {
+		if prev.TransitionInput.ProposalHash != next.TransitionInput.ParentProposalHash {
 			return false
 		}
 		if prev.ChainID != next.ChainID {
 			return false
 		}
-		if !equalHex(prev.Verifier, next.Verifier) {
+		if prev.Verifier != next.Verifier {
 			return false
 		}
-		if !equalHex(prev.TransitionInput.Checkpoint.BlockHash, next.TransitionInput.ParentBlockHash) {
+		if prev.TransitionInput.Checkpoint.BlockHash != next.TransitionInput.ParentBlockHash {
 			return false
 		}
 	}

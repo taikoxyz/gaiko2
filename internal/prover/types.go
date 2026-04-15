@@ -2,6 +2,7 @@ package prover
 
 import (
 	"encoding/json"
+	"math/big"
 
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/core/stateless"
@@ -21,28 +22,47 @@ type ValidatedAggregateRequest struct {
 
 type CarryView struct {
 	ChainID         uint64
-	ParentBlockHash string
-	Checkpoint      CheckpointView
+	Verifier        common.Address
+	TransitionInput TransitionInputView
+}
+
+type TransitionInputView struct {
+	ProposalID         uint64
+	ProposalHash       common.Hash
+	ParentProposalHash common.Hash
+	ParentBlockHash    common.Hash
+	ActualProver       common.Address
+	Transition         TransitionView
+	Checkpoint         CheckpointView
+}
+
+type TransitionView struct {
+	Proposer  common.Address
+	Timestamp uint64
 }
 
 type CheckpointView struct {
 	BlockNumber uint64
-	BlockHash   string
-	StateRoot   string
+	BlockHash   common.Hash
+	StateRoot   common.Hash
 }
 
 type BlockView struct {
 	Number       uint64
-	ParentHash   string
-	StateRoot    string
-	ReceiptsRoot string
+	Hash         common.Hash
+	ParentHash   common.Hash
+	StateRoot    common.Hash
+	ReceiptsRoot common.Hash
 }
 
 type AggregateProofView struct {
-	InputHash    common.Hash
-	ProofBytes   []byte
-	RawCarry     json.RawMessage
-	DecodedCarry rawProofCarryData
+	InputHash       common.Hash
+	ProofBytes      []byte
+	InstanceID      uint32
+	InstanceAddress common.Address
+	Signature       []byte
+	RawCarry        json.RawMessage
+	Carry           CarryView
 }
 
 type ReplayWitness struct {
@@ -55,4 +75,10 @@ type CompactAncestor struct {
 	Hash       common.Hash
 	ParentHash common.Hash
 	Timestamp  uint64
+}
+
+type decodedSignature struct {
+	V *big.Int
+	R *big.Int
+	S *big.Int
 }

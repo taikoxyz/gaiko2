@@ -18,51 +18,47 @@ var verifyProofWord = func() common.Hash {
 }()
 
 func hashShastaSubproofInput(raw json.RawMessage) (common.Hash, error) {
-	var carry rawProofCarryData
-	if err := json.Unmarshal(raw, &carry); err != nil {
-		return common.Hash{}, fmt.Errorf("unmarshal proof_carry_data for hashing: %w", err)
-	}
-
-	transitionHash, err := hashShastaTransitionInput(carry.TransitionInput)
+	carry, err := decodeCarry(raw)
 	if err != nil {
 		return common.Hash{}, err
 	}
+	return hashShastaSubproofCarry(carry), nil
+}
+
+func hashShastaSubproofCarry(carry CarryView) common.Hash {
+	transitionHash := hashShastaTransitionInput(carry.TransitionInput)
 
 	return hashWords(
 		verifyProofWord,
 		u64Word(carry.ChainID),
-		addressWord(common.HexToAddress(carry.Verifier)),
+		addressWord(carry.Verifier),
 		transitionHash,
-	), nil
+	)
 }
 
-func hashShastaTransitionInput(input rawTransitionInput) (common.Hash, error) {
-	checkpointHash, err := hashCheckpoint(input.Checkpoint)
-	if err != nil {
-		return common.Hash{}, err
-	}
-
+func hashShastaTransitionInput(input TransitionInputView) common.Hash {
+	checkpointHash := hashCheckpoint(input.Checkpoint)
 	return hashWords(
 		u64Word(input.ProposalID),
-		common.HexToHash(input.ProposalHash),
-		common.HexToHash(input.ParentProposalHash),
-		common.HexToHash(input.ParentBlockHash),
-		addressWord(common.HexToAddress(input.ActualProver)),
-		addressWord(common.HexToAddress(input.Transition.Proposer)),
+		input.ProposalHash,
+		input.ParentProposalHash,
+		input.ParentBlockHash,
+		addressWord(input.ActualProver),
+		addressWord(input.Transition.Proposer),
 		u48Word(input.Transition.Timestamp),
 		checkpointHash,
 		u48Word(uint64(input.Checkpoint.BlockNumber)),
-		common.HexToHash(input.Checkpoint.BlockHash),
-		common.HexToHash(input.Checkpoint.StateRoot),
-	), nil
+		input.Checkpoint.BlockHash,
+		input.Checkpoint.StateRoot,
+	)
 }
 
-func hashCheckpoint(checkpoint rawCheckpoint) (common.Hash, error) {
+func hashCheckpoint(checkpoint CheckpointView) common.Hash {
 	return hashWords(
 		u48Word(uint64(checkpoint.BlockNumber)),
-		common.HexToHash(checkpoint.BlockHash),
-		common.HexToHash(checkpoint.StateRoot),
-	), nil
+		checkpoint.BlockHash,
+		checkpoint.StateRoot,
+	)
 }
 
 func hashShastaAggregationInput(
@@ -73,11 +69,11 @@ func hashShastaAggregationInput(
 		return common.Hash{}, fmt.Errorf("empty shasta aggregation input")
 	}
 
-	carries := make([]rawProofCarryData, 0, len(rawCarries))
+	carries := make([]CarryView, 0, len(rawCarries))
 	for index, raw := range rawCarries {
-		var carry rawProofCarryData
-		if err := json.Unmarshal(raw, &carry); err != nil {
-			return common.Hash{}, fmt.Errorf("unmarshal aggregation proof_carry_data %d: %w", index, err)
+		carry, err := decodeCarry(raw)
+		if err != nil {
+			return common.Hash{}, fmt.Errorf("decode aggregation proof_carry_data %d: %w", index, err)
 		}
 		carries = append(carries, carry)
 	}
@@ -86,7 +82,7 @@ func hashShastaAggregationInput(
 }
 
 func hashShastaAggregationCarries(
-	carries []rawProofCarryData,
+	carries []CarryView,
 	instance common.Address,
 ) (common.Hash, error) {
 	commitment, ok := buildShastaCommitmentFromProofCarryDataVec(carries)
@@ -99,7 +95,7 @@ func hashShastaAggregationCarries(
 	return hashWords(
 		verifyProofWord,
 		u64Word(first.ChainID),
-		addressWord(common.HexToAddress(first.Verifier)),
+		addressWord(first.Verifier),
 		commitmentHash,
 		addressWord(instance),
 	), nil
@@ -121,7 +117,7 @@ type shastaTransition struct {
 	BlockHash common.Hash
 }
 
-func buildShastaCommitmentFromProofCarryDataVec(carries []rawProofCarryData) (*shastaCommitment, bool) {
+func buildShastaCommitmentFromProofCarryDataVec(carries []CarryView) (*shastaCommitment, bool) {
 	if !validateShastaProofCarryDataVec(carries) {
 		return nil, false
 	}
@@ -130,19 +126,19 @@ func buildShastaCommitmentFromProofCarryDataVec(carries []rawProofCarryData) (*s
 	transitions := make([]shastaTransition, 0, len(carries))
 	for _, item := range carries {
 		transitions = append(transitions, shastaTransition{
-			Proposer:  common.HexToAddress(item.TransitionInput.Transition.Proposer),
+			Proposer:  item.TransitionInput.Transition.Proposer,
 			Timestamp: item.TransitionInput.Transition.Timestamp,
-			BlockHash: common.HexToHash(item.TransitionInput.Checkpoint.BlockHash),
+			BlockHash: item.TransitionInput.Checkpoint.BlockHash,
 		})
 	}
 
 	return &shastaCommitment{
 		FirstProposalID:              carries[0].TransitionInput.ProposalID,
-		FirstProposalParentBlockHash: common.HexToHash(carries[0].TransitionInput.ParentBlockHash),
-		LastProposalHash:             common.HexToHash(last.TransitionInput.ProposalHash),
-		ActualProver:                 common.HexToAddress(carries[0].TransitionInput.ActualProver),
+		FirstProposalParentBlockHash: carries[0].TransitionInput.ParentBlockHash,
+		LastProposalHash:             last.TransitionInput.ProposalHash,
+		ActualProver:                 carries[0].TransitionInput.ActualProver,
 		EndBlockNumber:               uint64(last.TransitionInput.Checkpoint.BlockNumber),
-		EndStateRoot:                 common.HexToHash(last.TransitionInput.Checkpoint.StateRoot),
+		EndStateRoot:                 last.TransitionInput.Checkpoint.StateRoot,
 		Transitions:                  transitions,
 	}, true
 }

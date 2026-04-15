@@ -354,8 +354,11 @@ func decodeLegacyTransaction(
 }
 
 func decodeWithdrawals(raws []json.RawMessage) (types.Withdrawals, error) {
-	if len(raws) == 0 {
+	if raws == nil {
 		return nil, nil
+	}
+	if len(raws) == 0 {
+		return types.Withdrawals{}, nil
 	}
 	withdrawals := make(types.Withdrawals, len(raws))
 	for i, raw := range raws {

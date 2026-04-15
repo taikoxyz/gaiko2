@@ -196,6 +196,20 @@ func encodeOneshotProof(instanceID uint32, instanceAddress common.Address, signa
 	return proofBytes
 }
 
+func decodeOneshotProof(proofBytes []byte) (uint32, common.Address, []byte, error) {
+	if len(proofBytes) != 4+common.AddressLength+65 {
+		return 0, common.Address{}, nil, fmt.Errorf(
+			"proof length mismatch: got %d expected %d",
+			len(proofBytes),
+			4+common.AddressLength+65,
+		)
+	}
+	instanceID := binary.BigEndian.Uint32(proofBytes[:4])
+	instanceAddress := common.BytesToAddress(proofBytes[4 : 4+common.AddressLength])
+	signature := append([]byte(nil), proofBytes[4+common.AddressLength:]...)
+	return instanceID, instanceAddress, signature, nil
+}
+
 func defaultInstanceID(instanceID uint32) uint32 {
 	if instanceID == 0 {
 		return shastaNativeMockInstance

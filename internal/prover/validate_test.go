@@ -11,29 +11,23 @@ import (
 func TestValidateRequestAcceptsContiguousPacket(t *testing.T) {
 	parentHash := testHash("11")
 	lastStateRoot := testHash("bb")
+	firstBlock := sampleReplayBlock(t, "0x2a", parentHash, testHash("aa"), testHash("de"))
+	firstHash := replayBlockHash(t, firstBlock)
+	secondBlock := sampleReplayBlock(t, "0x2b", firstHash, lastStateRoot, testHash("be"))
+	secondHash := replayBlockHash(t, secondBlock)
 	req := protocol.ShastaRequest{
 		Schema: "v1",
 		Payload: protocol.ShastaPayload{
 			ChainID: 167013,
 			Blocks: []protocol.ReplayBlock{
 				{
-					Block: sampleReplayBlock(t, "0x2a", parentHash, testHash("aa"), testHash("de")),
+					Block: firstBlock,
 				},
 				{
-					Block: sampleReplayBlock(t, "0x2b", testHash("22"), lastStateRoot, testHash("be")),
+					Block: secondBlock,
 				},
 			},
-			ProofCarryData: mustRawMessage(t, fmt.Sprintf(`{
-				"chain_id": 167013,
-				"transition_input": {
-					"parent_block_hash": %q,
-					"checkpoint": {
-						"blockNumber": "0x2b",
-						"blockHash": %q,
-						"stateRoot": %q
-					}
-				}
-			}`, parentHash, testHash("33"), lastStateRoot)),
+			ProofCarryData: sampleCarryData(t, 167013, parentHash, "0x2b", secondHash, lastStateRoot),
 		},
 	}
 
@@ -72,22 +66,93 @@ func TestValidateRequestRejectsNonContiguousBlocks(t *testing.T) {
 				{Block: sampleReplayBlock(t, "0x2a", parentHash, testHash("aa"), testHash("bb"))},
 				{Block: sampleReplayBlock(t, "0x2c", testHash("22"), testHash("cc"), testHash("dd"))},
 			},
-			ProofCarryData: mustRawMessage(t, fmt.Sprintf(`{
-				"chain_id": 1,
-				"transition_input": {
-					"parent_block_hash": %q,
-					"checkpoint": {
-						"blockNumber": "0x2c",
-						"blockHash": %q,
-						"stateRoot": %q
-					}
-				}
-			}`, parentHash, testHash("44"), testHash("cc"))),
+			ProofCarryData: sampleCarryData(t, 1, parentHash, "0x2c", testHash("44"), testHash("cc")),
 		},
 	}
 
 	_, err := ValidateRequest(req)
 	if err == nil || err.Error() != "block numbers must be contiguous: got 44 after 42" {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
+func TestValidateRequestRejectsBrokenParentHashPropagation(t *testing.T) {
+	firstBlock := sampleReplayBlock(t, "0x2a", testHash("11"), testHash("aa"), testHash("de"))
+	req := protocol.ShastaRequest{
+		Schema: "v1",
+		Payload: protocol.ShastaPayload{
+			ChainID: 167013,
+			Blocks: []protocol.ReplayBlock{
+				{Block: firstBlock},
+				{Block: sampleReplayBlock(t, "0x2b", testHash("22"), testHash("bb"), testHash("be"))},
+			},
+			ProofCarryData: sampleCarryData(t, 167013, testHash("11"), "0x2b", testHash("33"), testHash("bb")),
+		},
+	}
+
+	_, err := ValidateRequest(req)
+	if err == nil || !strings.Contains(err.Error(), "parent hash") {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
+func TestValidateRequestRejectsCheckpointBlockHashMismatch(t *testing.T) {
+	firstBlock := sampleReplayBlock(t, "0x2a", testHash("11"), testHash("aa"), testHash("de"))
+	firstHash := replayBlockHash(t, firstBlock)
+	secondBlock := sampleReplayBlock(t, "0x2b", firstHash, testHash("bb"), testHash("be"))
+	req := protocol.ShastaRequest{
+		Schema: "v1",
+		Payload: protocol.ShastaPayload{
+			ChainID: 167013,
+			Blocks: []protocol.ReplayBlock{
+				{Block: firstBlock},
+				{Block: secondBlock},
+			},
+			ProofCarryData: sampleCarryData(t, 167013, testHash("11"), "0x2b", testHash("44"), testHash("bb")),
+		},
+	}
+
+	_, err := ValidateRequest(req)
+	if err == nil || !strings.Contains(err.Error(), "checkpoint block hash mismatch") {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
+func TestValidateRequestRejectsMalformedVerifier(t *testing.T) {
+	block := sampleReplayBlock(t, "0x2a", testHash("11"), testHash("aa"), testHash("de"))
+	blockHash := replayBlockHash(t, block)
+	req := protocol.ShastaRequest{
+		Schema: "v1",
+		Payload: protocol.ShastaPayload{
+			ChainID: 167013,
+			Blocks: []protocol.ReplayBlock{
+				{Block: block},
+			},
+			ProofCarryData: mustRawMessage(t, fmt.Sprintf(`{
+				"chain_id": 167013,
+				"verifier": "0x1234",
+				"transition_input": {
+					"proposal_id": 42,
+					"proposal_hash": %q,
+					"parent_proposal_hash": %q,
+					"parent_block_hash": %q,
+					"actual_prover": %q,
+					"transition": {
+						"proposer": %q,
+						"timestamp": 123
+					},
+					"checkpoint": {
+						"blockNumber": "0x2a",
+						"blockHash": %q,
+						"stateRoot": %q
+					}
+				}
+			}`, testHash("aa"), testHash("bb"), testHash("11"), testAddress("77"), testAddress("22"), blockHash, testHash("aa"))),
+		},
+	}
+
+	_, err := ValidateRequest(req)
+	if err == nil || !strings.Contains(err.Error(), "verifier") {
 		t.Fatalf("unexpected error: %v", err)
 	}
 }
@@ -125,6 +190,50 @@ func sampleReplayBlock(
 			"withdrawals": []
 		}
 	}`, parentHash, testHash("1d"), testAddress("00"), stateRoot, testHash("56"), receiptsRoot, testBloom(), number, testHash("00")))
+}
+
+func sampleCarryData(
+	t *testing.T,
+	chainID uint64,
+	parentHash string,
+	checkpointNumber string,
+	checkpointBlockHash string,
+	stateRoot string,
+) []byte {
+	t.Helper()
+	return mustRawMessage(t, fmt.Sprintf(`{
+		"chain_id": %d,
+		"verifier": %q,
+		"transition_input": {
+			"proposal_id": 42,
+			"proposal_hash": %q,
+			"parent_proposal_hash": %q,
+			"parent_block_hash": %q,
+			"actual_prover": %q,
+			"transition": {
+				"proposer": %q,
+				"timestamp": 123
+			},
+			"checkpoint": {
+				"blockNumber": %q,
+				"blockHash": %q,
+				"stateRoot": %q
+			}
+		}
+	}`, chainID, testAddress("f9"), testHash("aa"), testHash("bb"), parentHash, testAddress("77"), testAddress("22"), checkpointNumber, checkpointBlockHash, stateRoot))
+}
+
+func replayBlockHash(t *testing.T, raw []byte) string {
+	t.Helper()
+	decoded, err := decodeBlockEnvelope(raw)
+	if err != nil {
+		t.Fatalf("decode block envelope: %v", err)
+	}
+	header, err := decodeHeader(decoded.Header)
+	if err != nil {
+		t.Fatalf("decode header: %v", err)
+	}
+	return header.Hash().Hex()
 }
 
 func testHash(bytePair string) string {

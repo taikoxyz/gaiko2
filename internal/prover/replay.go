@@ -103,6 +103,12 @@ func (s ReplayService) Prove(
 		if err != nil {
 			return protocol.ProofResult{}, fmt.Errorf("decode replay block %d: %w", index, err)
 		}
+		if err := validateReplayWitness(block, witness); err != nil {
+			return protocol.ProofResult{}, fmt.Errorf("validate replay block %d: %w", index, err)
+		}
+		if err := validateReplayBlockBody(block); err != nil {
+			return protocol.ProofResult{}, fmt.Errorf("validate replay block %d body: %w", index, err)
+		}
 
 		stateRoot, receiptRoot, err := s.runner.Execute(ctx, config, blockForStatelessExecution(block), witness)
 		if err != nil {
@@ -131,6 +137,115 @@ func (s ReplayService) Prove(
 		return protocol.ProofResult{}, err
 	}
 	return buildProofResult(inputHash, s.signer)
+}
+
+func validateReplayWitness(block *types.Block, witness *ReplayWitness) error {
+	if len(witness.Witness.Headers) == 0 {
+		return fmt.Errorf("witness must include a full parent header")
+	}
+	if block.NumberU64() == 0 {
+		return fmt.Errorf("genesis block replay is not supported")
+	}
+
+	parent := witness.Witness.Headers[0]
+	if parent.Number == nil {
+		return fmt.Errorf("parent header is missing number")
+	}
+	if parent.Number.Uint64()+1 != block.NumberU64() {
+		return fmt.Errorf(
+			"parent header number mismatch: got %d expected %d",
+			parent.Number.Uint64(),
+			block.NumberU64()-1,
+		)
+	}
+	if parent.Hash() != block.ParentHash() {
+		return fmt.Errorf(
+			"parent header hash mismatch: got %s expected %s",
+			parent.Hash().Hex(),
+			block.ParentHash().Hex(),
+		)
+	}
+	if witness.Witness.Root() != parent.Root {
+		return fmt.Errorf(
+			"witness root mismatch: got %s expected %s",
+			witness.Witness.Root().Hex(),
+			parent.Root.Hex(),
+		)
+	}
+	for index := 1; index < len(witness.CompactAncestors); index++ {
+		prev := witness.CompactAncestors[index-1]
+		current := witness.CompactAncestors[index]
+		if current.Number != prev.Number+1 {
+			return fmt.Errorf(
+				"compact ancestor %d number mismatch: got %d expected %d",
+				index,
+				current.Number,
+				prev.Number+1,
+			)
+		}
+		if current.ParentHash != prev.Hash {
+			return fmt.Errorf(
+				"compact ancestor %d parent hash mismatch: got %s expected %s",
+				index,
+				current.ParentHash.Hex(),
+				prev.Hash.Hex(),
+			)
+		}
+	}
+	if len(witness.CompactAncestors) > 0 {
+		last := witness.CompactAncestors[len(witness.CompactAncestors)-1]
+		if last.Number+1 != parent.Number.Uint64() {
+			return fmt.Errorf(
+				"compact ancestor tail number mismatch: got %d expected %d",
+				last.Number,
+				parent.Number.Uint64()-1,
+			)
+		}
+		if parent.ParentHash != last.Hash {
+			return fmt.Errorf(
+				"compact ancestor tail hash mismatch: got %s expected %s",
+				parent.ParentHash.Hex(),
+				last.Hash.Hex(),
+			)
+		}
+	}
+	return nil
+}
+
+func validateReplayBlockBody(block *types.Block) error {
+	header := block.Header()
+	if hash := types.CalcUncleHash(block.Uncles()); hash != header.UncleHash {
+		return fmt.Errorf(
+			"ommer hash mismatch: got %s expected %s",
+			hash.Hex(),
+			header.UncleHash.Hex(),
+		)
+	}
+	if hash := types.DeriveSha(block.Transactions(), trie.NewStackTrie(nil)); hash != header.TxHash {
+		return fmt.Errorf(
+			"transaction root mismatch: got %s expected %s",
+			hash.Hex(),
+			header.TxHash.Hex(),
+		)
+	}
+	if header.WithdrawalsHash != nil {
+		if block.Withdrawals() == nil {
+			return fmt.Errorf("missing withdrawals in block body")
+		}
+		if hash := types.DeriveSha(block.Withdrawals(), trie.NewStackTrie(nil)); hash != *header.WithdrawalsHash {
+			return fmt.Errorf(
+				"withdrawals root mismatch: got %s expected %s",
+				hash.Hex(),
+				header.WithdrawalsHash.Hex(),
+			)
+		}
+	} else if block.Withdrawals() != nil {
+		return fmt.Errorf("withdrawals present in block body without header commitment")
+	}
+	if header.RequestsHash != nil {
+		return fmt.Errorf("requests hash validation is not supported in gaiko2 %s", protocol.ShastaSchemaV1)
+	}
+	return nil
 }
 
 func decodeReplayBlock(replay protocol.ReplayBlock) (*types.Block, *ReplayWitness, error) {

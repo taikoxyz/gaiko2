@@ -3,6 +3,8 @@ package prover
 import (
 	"context"
 	"encoding/json"
+	"encoding/hex"
+	"strings"
 	"testing"
 
 	"github.com/ethereum/go-ethereum/common"
@@ -128,4 +130,147 @@ func TestReplayServiceReturnsSignedAggregationProofResult(t *testing.T) {
 	if result.InstanceAddress == nil || *result.InstanceAddress != common.HexToAddress("0x0000777735367b36bC9B61C50022d9D0700dB4Ec").Hex() {
 		t.Fatalf("unexpected instance address: %+v", result.InstanceAddress)
 	}
+}
+
+func TestValidateAggregateRequestRejectsMixedInstanceIDs(t *testing.T) {
+	firstCarry := mustRawMessage(t, `{
+		"chain_id": 167013,
+		"verifier": "0x00f9f60C79e38c08b785eE4F1a849900693C6630",
+		"transition_input": {
+			"proposal_id": 7,
+			"proposal_hash": "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+			"parent_proposal_hash": "0xbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+			"parent_block_hash": "0xcccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+			"actual_prover": "0x0000777735367b36bC9B61C50022d9D0700dB4Ec",
+			"transition": { "proposer": "0x1111111111111111111111111111111111111111", "timestamp": 123 },
+			"checkpoint": {
+				"blockNumber": "0x2a",
+				"blockHash": "0xdddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+				"stateRoot": "0xeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee"
+			}
+		}
+	}`)
+	secondCarry := mustRawMessage(t, `{
+		"chain_id": 167013,
+		"verifier": "0x00f9f60C79e38c08b785eE4F1a849900693C6630",
+		"transition_input": {
+			"proposal_id": 8,
+			"proposal_hash": "0xcccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+			"parent_proposal_hash": "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+			"parent_block_hash": "0xdddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+			"actual_prover": "0x0000777735367b36bC9B61C50022d9D0700dB4Ec",
+			"transition": { "proposer": "0x1111111111111111111111111111111111111111", "timestamp": 124 },
+			"checkpoint": {
+				"blockNumber": "0x2b",
+				"blockHash": "0xffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+				"stateRoot": "0x9999999999999999999999999999999999999999999999999999999999999999"
+			}
+		}
+	}`)
+	firstInputHash, err := hashShastaSubproofInput(firstCarry)
+	if err != nil {
+		t.Fatalf("first subproof input: %v", err)
+	}
+	secondInputHash, err := hashShastaSubproofInput(secondCarry)
+	if err != nil {
+		t.Fatalf("second subproof input: %v", err)
+	}
+	first, err := buildProofResult(firstInputHash, NewNativeProofSigner(1))
+	if err != nil {
+		t.Fatalf("build first proof: %v", err)
+	}
+	second, err := buildProofResult(secondInputHash, NewNativeProofSigner(2))
+	if err != nil {
+		t.Fatalf("build second proof: %v", err)
+	}
+
+	_, err = ValidateAggregateRequest(protocol.ShastaAggregateRequest{
+		Schema: protocol.ShastaSchemaV1,
+		Payload: protocol.ShastaAggregatePayload{
+			Proofs: []protocol.AggregateProof{
+				{Input: first.Input, Proof: *first.Proof, ProofCarryData: firstCarry},
+				{Input: second.Input, Proof: *second.Proof, ProofCarryData: secondCarry},
+			},
+		},
+	})
+	if err == nil || !strings.Contains(err.Error(), "instance") {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
+func TestValidateAggregateRequestRejectsMixedInstanceAddresses(t *testing.T) {
+	firstCarry := mustRawMessage(t, `{
+		"chain_id": 167013,
+		"verifier": "0x00f9f60C79e38c08b785eE4F1a849900693C6630",
+		"transition_input": {
+			"proposal_id": 7,
+			"proposal_hash": "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+			"parent_proposal_hash": "0xbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+			"parent_block_hash": "0xcccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+			"actual_prover": "0x0000777735367b36bC9B61C50022d9D0700dB4Ec",
+			"transition": { "proposer": "0x1111111111111111111111111111111111111111", "timestamp": 123 },
+			"checkpoint": {
+				"blockNumber": "0x2a",
+				"blockHash": "0xdddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+				"stateRoot": "0xeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee"
+			}
+		}
+	}`)
+	secondCarry := mustRawMessage(t, `{
+		"chain_id": 167013,
+		"verifier": "0x00f9f60C79e38c08b785eE4F1a849900693C6630",
+		"transition_input": {
+			"proposal_id": 8,
+			"proposal_hash": "0xcccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+			"parent_proposal_hash": "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+			"parent_block_hash": "0xdddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+			"actual_prover": "0x0000777735367b36bC9B61C50022d9D0700dB4Ec",
+			"transition": { "proposer": "0x1111111111111111111111111111111111111111", "timestamp": 124 },
+			"checkpoint": {
+				"blockNumber": "0x2b",
+				"blockHash": "0xffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+				"stateRoot": "0x9999999999999999999999999999999999999999999999999999999999999999"
+			}
+		}
+	}`)
+	firstInputHash, err := hashShastaSubproofInput(firstCarry)
+	if err != nil {
+		t.Fatalf("first subproof input: %v", err)
+	}
+	secondInputHash, err := hashShastaSubproofInput(secondCarry)
+	if err != nil {
+		t.Fatalf("second subproof input: %v", err)
+	}
+	first, err := buildProofResult(firstInputHash, NewNativeProofSigner(1))
+	if err != nil {
+		t.Fatalf("build first proof: %v", err)
+	}
+	second, err := buildProofResult(secondInputHash, NewNativeProofSigner(1))
+	if err != nil {
+		t.Fatalf("build second proof: %v", err)
+	}
+	mutatedProof := mutateProofAddress(t, *second.Proof, common.HexToAddress("0x1212121212121212121212121212121212121212"))
+
+	_, err = ValidateAggregateRequest(protocol.ShastaAggregateRequest{
+		Schema: protocol.ShastaSchemaV1,
+		Payload: protocol.ShastaAggregatePayload{
+			Proofs: []protocol.AggregateProof{
+				{Input: first.Input, Proof: *first.Proof, ProofCarryData: firstCarry},
+				{Input: second.Input, Proof: mutatedProof, ProofCarryData: secondCarry},
+			},
+		},
+	})
+	if err == nil || !strings.Contains(err.Error(), "instance") {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
+func mutateProofAddress(t *testing.T, proof string, address common.Address) string {
+	t.Helper()
+	bytes := common.FromHex(proof)
+	if len(bytes) != 89 {
+		t.Fatalf("unexpected proof length: %d", len(bytes))
+	}
+	copy(bytes[4:24], address.Bytes())
+	return "0x" + hex.EncodeToString(bytes)
 }

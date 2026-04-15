@@ -23,12 +23,29 @@ func (s ReplayService) Aggregate(
 	for _, proof := range req.Proofs {
 		rawCarries = append(rawCarries, proof.RawCarry)
 	}
+	if len(req.Proofs) > 0 {
+		first := req.Proofs[0]
+		if first.InstanceID != identity.InstanceID {
+			return protocol.ProofResult{}, fmt.Errorf(
+				"aggregate subproof instance id mismatch: got %d expected %d",
+				first.InstanceID,
+				identity.InstanceID,
+			)
+		}
+		if first.InstanceAddress != identity.InstanceAddress {
+			return protocol.ProofResult{}, fmt.Errorf(
+				"aggregate subproof instance address mismatch: got %s expected %s",
+				first.InstanceAddress.Hex(),
+				identity.InstanceAddress.Hex(),
+			)
+		}
+	}
 	aggregationHash, err := hashShastaAggregationInput(rawCarries, identity.InstanceAddress)
 	if err != nil {
 		return protocol.ProofResult{}, err
 	}
 
-	if err := validateAggregateProofSignatures(req.Proofs, identity.InstanceAddress); err != nil {
+	if err := validateAggregateProofSignatures(req.Proofs, identity.InstanceID, identity.InstanceAddress); err != nil {
 		return protocol.ProofResult{}, err
 	}
 
@@ -41,20 +58,28 @@ func (s ReplayService) Aggregate(
 
 func validateAggregateProofSignatures(
 	proofs []AggregateProofView,
+	expectedInstanceID uint32,
 	expectedInstance common.Address,
 ) error {
 	for index, proof := range proofs {
-		instance := common.BytesToAddress(proof.ProofBytes[4:24])
-		if instance != expectedInstance {
+		if proof.InstanceID != expectedInstanceID {
+			return fmt.Errorf(
+				"aggregate proof %d instance id mismatch: got %d expected %d",
+				index,
+				proof.InstanceID,
+				expectedInstanceID,
+			)
+		}
+		if proof.InstanceAddress != expectedInstance {
 			return fmt.Errorf(
 				"aggregate proof %d instance mismatch: got %s expected %s",
 				index,
-				instance.Hex(),
+				proof.InstanceAddress.Hex(),
 				expectedInstance.Hex(),
 			)
 		}
 
-		recovered, err := sigToAddress(proof.InputHash, proof.ProofBytes[24:])
+		recovered, err := sigToAddress(proof.InputHash, proof.Signature)
 		if err != nil {
 			return fmt.Errorf("recover aggregate proof %d signer: %w", index, err)
 		}
