@@ -106,6 +106,11 @@ docker compose --profile tee-init run --rm gaiko2-tee-init
 docker compose --profile tee up --build gaiko2-tee
 ```
 
+For a deployment-oriented SGX runbook, including bootstrap, external
+registration, `docker compose --wait`, and log-based troubleshooting, see:
+
+- [SGX Docker deployment guide](/home/yue/works/taiko/gaiko2/docs/deployment/sgx-docker.md)
+
 The compose file defaults `PCCS_HOST` to `host.docker.internal:8081` and adds the
 host gateway mapping automatically, which works well when your local `pccs`
 container already publishes `8081` on the host. If you run `gaiko2` on the same
@@ -165,4 +170,5 @@ docker run --rm \
 
 - [Shasta V1 design plan](/home/yue/works/taiko/gaiko2/docs/plans/2026-04-12-gaiko2-shasta-v1-design.md)
 - [Shasta V1 implementation plan](/home/yue/works/taiko/gaiko2/docs/plans/2026-04-12-gaiko2-shasta-v1-implementation-plan.md)
+- [SGX Docker deployment guide](/home/yue/works/taiko/gaiko2/docs/deployment/sgx-docker.md)
 - [Current baseline](/home/yue/works/taiko/gaiko2/docs/baselines/2026-04-13-gaiko2-v1-baseline.md)

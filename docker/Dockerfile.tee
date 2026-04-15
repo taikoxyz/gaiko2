@@ -29,6 +29,7 @@ WORKDIR /opt/gaiko2
 RUN apt-get update && \
     apt-get install -y \
     ca-certificates \
+    curl \
     time \
     cracklib-runtime \
     libsgx-dcap-default-qpl \
@@ -52,5 +53,8 @@ COPY docker/entrypoint.sh ./bin/entrypoint.sh
 RUN chmod +x ./bin/entrypoint.sh
 
 EXPOSE 8080
+
+HEALTHCHECK --interval=15s --timeout=5s --start-period=10s --retries=5 \
+    CMD curl -fsS "http://127.0.0.1:${GAIKO2_PORT:-8080}/healthz" || exit 1
 
 ENTRYPOINT ["/opt/gaiko2/bin/entrypoint.sh"]
