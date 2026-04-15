@@ -10,12 +10,25 @@ import (
 )
 
 const (
+	healthzPath              = "/healthz"
 	proveShastaPath          = "/prove/shasta"
 	proveShastaAggregatePath = "/prove/shasta-aggregate"
 )
 
 func NewServer(service prover.Service) http.Handler {
 	mux := http.NewServeMux()
+	mux.HandleFunc(healthzPath, func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodGet {
+			writeError(w, http.StatusMethodNotAllowed, "METHOD_NOT_ALLOWED", "expected GET")
+			return
+		}
+
+		writeJSON(w, http.StatusOK, struct {
+			Status string `json:"status"`
+		}{
+			Status: "ok",
+		})
+	})
 	mux.HandleFunc(proveShastaPath, func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodPost {
 			writeError(w, http.StatusMethodNotAllowed, "METHOD_NOT_ALLOWED", "expected POST")

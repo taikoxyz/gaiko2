@@ -85,6 +85,51 @@ func TestNewServerReturnsSuccessEnvelope(t *testing.T) {
 	}
 }
 
+func TestNewServerReturnsHealthzOK(t *testing.T) {
+	server := NewServer(fakeService{})
+	req := httptest.NewRequest(http.MethodGet, "/healthz", nil)
+	recorder := httptest.NewRecorder()
+
+	server.ServeHTTP(recorder, req)
+
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("unexpected status: %d", recorder.Code)
+	}
+
+	var resp struct {
+		Status string `json:"status"`
+	}
+	if err := json.Unmarshal(recorder.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+	if resp.Status != "ok" {
+		t.Fatalf("unexpected response status: %s", resp.Status)
+	}
+}
+
+func TestNewServerRejectsNonGetHealthz(t *testing.T) {
+	server := NewServer(fakeService{})
+	req := httptest.NewRequest(http.MethodPost, "/healthz", nil)
+	recorder := httptest.NewRecorder()
+
+	server.ServeHTTP(recorder, req)
+
+	if recorder.Code != http.StatusMethodNotAllowed {
+		t.Fatalf("unexpected status: %d", recorder.Code)
+	}
+
+	var resp protocol.ProofResponse
+	if err := json.Unmarshal(recorder.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+	if resp.Status != protocol.ProofStatusError {
+		t.Fatalf("unexpected response status: %s", resp.Status)
+	}
+	if resp.Error == nil || resp.Error.Code != "METHOD_NOT_ALLOWED" {
+		t.Fatalf("unexpected error payload: %+v", resp.Error)
+	}
+}
+
 func loadSharedShastaRequestJSON(t *testing.T) []byte {
 	t.Helper()
 

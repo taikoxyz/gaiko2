@@ -5,6 +5,7 @@ with `taiko-geth` and producing a TEE proof envelope.
 
 ## Baseline
 
+- `GET /healthz` returns a minimal liveness response.
 - `/prove/shasta` is implemented with request `schema: "v1"`.
 - `gaiko2` can decode `raiko2`-adapted execution packets and replay them with
   native `taiko-geth` stateless execution.
@@ -37,6 +38,12 @@ Start the service with:
 ```bash
 cd /home/yue/works/taiko/gaiko2
 go run ./cmd/gaiko2 server
+```
+
+Probe liveness with:
+
+```bash
+curl http://127.0.0.1:8080/healthz
 ```
 
 Optional proving configuration:
