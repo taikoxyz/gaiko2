@@ -21,6 +21,7 @@ Each release lives under:
 deploy/<fork>/<release>/
   .env
   config/
+    attestation.gaiko2.json
     bootstrap.gaiko2.json
     registered.gaiko2.json
   secrets/
@@ -92,11 +93,13 @@ What `init` does:
 - creates `deploy/shasta/v1.0.0/`
 - creates `deploy/shasta/v1.0.0/.env`
 - creates `config/` and `secrets/`
+- copies the embedded tee image attestation metadata into `config/`
 - runs the tee bootstrap container
 
 Expected result:
 
 - `deploy/shasta/v1.0.0/config/bootstrap.gaiko2.json`
+- `deploy/shasta/v1.0.0/config/attestation.gaiko2.json`
 - `deploy/shasta/v1.0.0/secrets/priv.gaiko2.key`
 
 The bootstrap JSON includes:
@@ -104,6 +107,16 @@ The bootstrap JSON includes:
 - `public_key`
 - `new_instance`
 - `quote`
+
+The attestation metadata file includes:
+
+- `unique_id`
+- `signer_id`
+- `product_id`
+- `security_version`
+
+For EGo images, `unique_id` is the image measurement you would typically treat
+as the MRENCLAVE-style identity for proposal and control-plane flows.
 
 If bootstrap fails, the command output is the primary log. Common failures:
 
@@ -165,6 +178,7 @@ The hook receives:
 
 - `GAIKO2_BOOTSTRAP_JSON`
 - `GAIKO2_REGISTERED_JSON`
+- `GAIKO2_ATTESTATION_JSON`
 - `GAIKO2_CONFIG_DIR`
 - `GAIKO2_SECRET_DIR`
 - `GAIKO2_FORK`
@@ -222,6 +236,12 @@ Follow logs:
 ./scripts/deploy-tee.sh --fork shasta --release v1.0.0 logs
 ```
 
+Print the copied release attestation metadata:
+
+```bash
+./scripts/deploy-tee.sh --fork shasta --release v1.0.0 metadata
+```
+
 Check liveness:
 
 ```bash
@@ -262,6 +282,7 @@ This restores the old release's exact:
 
 - image tag
 - `.env`
+- image attestation metadata
 - sealed SGX key
 - bootstrap quote metadata
 - registered instance id mapping
@@ -287,6 +308,7 @@ cd /home/yue/works/taiko/gaiko2
 # or
 # 2. set GAIKO2_INSTANCE_ID in deploy/shasta/local-latest/.env
 
+./scripts/deploy-tee.sh --fork shasta --release local-latest metadata
 ./scripts/deploy-tee.sh --fork shasta --release local-latest up
 ./scripts/deploy-tee.sh --fork shasta --release local-latest status
 ./scripts/deploy-tee.sh --fork shasta --release local-latest health
@@ -301,6 +323,20 @@ Run:
 
 ```bash
 ./scripts/deploy-tee.sh --fork <fork> --release <release> init
+```
+
+### Need the image measurement for registration or proposal tooling
+
+Read:
+
+```bash
+deploy/<fork>/<release>/config/attestation.gaiko2.json
+```
+
+or print it through the helper:
+
+```bash
+./scripts/deploy-tee.sh --fork <fork> --release <release> metadata
 ```
 
 ### `up` fails because instance id is unresolved

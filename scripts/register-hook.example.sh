@@ -11,6 +11,7 @@ register hook example
 
 Inputs:
   bootstrap: ${GAIKO2_BOOTSTRAP_JSON:-}
+  attestation: ${GAIKO2_ATTESTATION_JSON:-}
   registered target: ${GAIKO2_REGISTERED_JSON}
   fork: ${GAIKO2_FORK}
   release: ${GAIKO2_RELEASE:-}

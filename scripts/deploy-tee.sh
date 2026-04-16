@@ -25,6 +25,7 @@ Usage:
 
 Commands:
   init       Create the release directory and bootstrap the tee key
+  metadata   Print the copied release attestation metadata
   register   Run the optional external register hook
   up         Start the tee server for this release
   logs       Follow the tee server logs
@@ -85,6 +86,10 @@ release_bootstrap_json() {
 
 release_registered_json() {
     printf '%s/registered.gaiko2.json' "$(release_config_dir)"
+}
+
+release_attestation_json() {
+    printf '%s/attestation.gaiko2.json' "$(release_config_dir)"
 }
 
 release_private_key() {
@@ -249,6 +254,7 @@ cmd_register() {
     export GAIKO2_SECRET_DIR="$(release_secret_dir)"
     export GAIKO2_BOOTSTRAP_JSON="$(release_bootstrap_json)"
     export GAIKO2_REGISTERED_JSON="$(release_registered_json)"
+    export GAIKO2_ATTESTATION_JSON="$(release_attestation_json)"
     export GAIKO2_FORK="${FORK}"
     export GAIKO2_RELEASE="${RELEASE}"
 
@@ -281,21 +287,24 @@ cmd_logs() {
 }
 
 cmd_status() {
-    local env_status bootstrap_status key_status registered_status
+    local env_status bootstrap_status key_status registered_status attestation_status
     env_status=missing
     bootstrap_status=missing
     key_status=missing
     registered_status=missing
+    attestation_status=missing
 
     [[ -f "$(release_env_file)" ]] && env_status=present
     [[ -f "$(release_bootstrap_json)" ]] && bootstrap_status=present
     [[ -f "$(release_private_key)" ]] && key_status=present
     [[ -f "$(release_registered_json)" ]] && registered_status=present
+    [[ -f "$(release_attestation_json)" ]] && attestation_status=present
 
     log "release dir: $(release_dir)"
     log "compose project: $(compose_project_name)"
     log "env: ${env_status}"
     log "bootstrap: ${bootstrap_status}"
+    log "attestation: ${attestation_status}"
     log "sealed key: ${key_status}"
     log "registered: ${registered_status}"
 
@@ -314,6 +323,13 @@ cmd_health() {
     load_release_env
     local port="${GAIKO2_TEE_PORT:-8080}"
     curl -fsS "http://127.0.0.1:${port}/healthz"
+}
+
+cmd_metadata() {
+    local path
+    path=$(release_attestation_json)
+    [[ -f "${path}" ]] || die "attestation metadata missing: ${path}. Run init first."
+    cat "${path}"
 }
 
 cmd_down() {
@@ -364,7 +380,7 @@ main() {
             usage
             return 0
             ;;
-        init|register|up|logs|status|health|down)
+        init|metadata|register|up|logs|status|health|down)
             if [[ -n "${command}" ]]; then
                 die "unexpected extra command: $1"
             fi
@@ -387,6 +403,9 @@ main() {
     case "${command}" in
     init)
         cmd_init
+        ;;
+    metadata)
+        cmd_metadata
         ;;
     register)
         cmd_register

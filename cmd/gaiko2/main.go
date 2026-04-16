@@ -21,9 +21,13 @@ var (
 	serveFn            = http.Serve
 	bootstrapCommandFn = runBootstrapCommand
 	checkCommandFn     = runCheckCommand
+	metadataCommandFn  = runMetadataCommand
 )
 
-const envPort = "GAIKO2_PORT"
+const (
+	envPort            = "GAIKO2_PORT"
+	envAttestationPath = "GAIKO2_ATTESTATION_PATH"
+)
 
 func main() {
 	if err := run(os.Args[1:], os.Stdout); err != nil {
@@ -46,6 +50,8 @@ func run(args []string, stdout io.Writer) error {
 		return bootstrapCommandFn(args[1:], stdout)
 	case "check":
 		return checkCommandFn(args[1:], stdout)
+	case "metadata":
+		return metadataCommandFn(args[1:], stdout)
 	case "server", "serve", "s":
 		addr := defaultServerAddr()
 		if len(args) > 1 {
@@ -101,6 +107,7 @@ func printUsage(stdout io.Writer) {
 	_, _ = fmt.Fprintln(stdout, "  gaiko2 version")
 	_, _ = fmt.Fprintln(stdout, "  gaiko2 bootstrap")
 	_, _ = fmt.Fprintln(stdout, "  gaiko2 check")
+	_, _ = fmt.Fprintln(stdout, "  gaiko2 metadata")
 	_, _ = fmt.Fprintln(stdout, "  gaiko2 server")
 }
 
@@ -130,6 +137,16 @@ func runBootstrapCommand(args []string, stdout io.Writer) error {
 	if err := tee.SaveBootstrapData(*configDir, data); err != nil {
 		return err
 	}
+	attestationPath := strings.TrimSpace(os.Getenv(envAttestationPath))
+	if attestationPath != "" {
+		metadata, err := tee.ReadAttestationMetadataFile(attestationPath)
+		if err != nil {
+			return err
+		}
+		if err := tee.SaveAttestationMetadata(*configDir, metadata); err != nil {
+			return err
+		}
+	}
 	return json.NewEncoder(stdout).Encode(data)
 }
 
@@ -155,6 +172,25 @@ func runCheckCommand(args []string, stdout io.Writer) error {
 	}
 	_, err = fmt.Fprintln(stdout, "ok")
 	return err
+}
+
+func runMetadataCommand(args []string, stdout io.Writer) error {
+	flags := flag.NewFlagSet("metadata", flag.ContinueOnError)
+	flags.SetOutput(io.Discard)
+
+	path := flags.String("path", strings.TrimSpace(os.Getenv(envAttestationPath)), "path to image attestation metadata")
+	if err := flags.Parse(args); err != nil {
+		return err
+	}
+	if strings.TrimSpace(*path) == "" {
+		return fmt.Errorf("%s is not set", envAttestationPath)
+	}
+
+	metadata, err := tee.ReadAttestationMetadataFile(*path)
+	if err != nil {
+		return err
+	}
+	return json.NewEncoder(stdout).Encode(metadata)
 }
 
 func envOrDefault(key, fallback string) string {

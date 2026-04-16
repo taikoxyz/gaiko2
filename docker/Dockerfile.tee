@@ -6,15 +6,18 @@ RUN go mod download
 
 COPY cmd ./cmd
 COPY internal ./internal
+COPY scripts/write-attestation-metadata.sh ./scripts/write-attestation-metadata.sh
 
 RUN ego-go build -o gaiko2-ego ./cmd/gaiko2
 
 COPY ego/enclave.json .
 COPY docker/enclave-key.pem private.pem
 
-RUN ego sign && ego bundle gaiko2-ego gaiko2
-RUN ego uniqueid gaiko2-ego
-RUN ego signerid gaiko2-ego
+RUN mkdir -p /opt/gaiko2/etc && \
+    chmod +x ./scripts/write-attestation-metadata.sh && \
+    ego sign && \
+    ./scripts/write-attestation-metadata.sh gaiko2-ego enclave.json /opt/gaiko2/etc/attestation.json && \
+    ego bundle gaiko2-ego gaiko2
 
 FROM gramineproject/gramine:1.8-jammy AS runtime
 ENV DEBIAN_FRONTEND=noninteractive \
@@ -22,6 +25,7 @@ ENV DEBIAN_FRONTEND=noninteractive \
     GAIKO2_TEE_TYPE=ego \
     GAIKO2_CONFIG_DIR=/var/lib/gaiko2/config \
     GAIKO2_SECRET_DIR=/var/lib/gaiko2/secrets \
+    GAIKO2_ATTESTATION_PATH=/opt/gaiko2/etc/attestation.json \
     GAIKO2_PORT=8080
 
 WORKDIR /opt/gaiko2
@@ -46,9 +50,10 @@ RUN apt-get update && \
 RUN sed -i 's/#default quoting type = ecdsa_256/default quoting type = ecdsa_256/' /etc/aesmd.conf && \
     sed -i 's/,"use_secure_cert": true/,"use_secure_cert": false/' /etc/sgx_default_qcnl.conf
 
-RUN mkdir -p /opt/gaiko2/bin /var/lib/gaiko2/config /var/lib/gaiko2/secrets
+RUN mkdir -p /opt/gaiko2/bin /opt/gaiko2/etc /var/lib/gaiko2/config /var/lib/gaiko2/secrets
 
 COPY --from=builder /opt/gaiko2/gaiko2 ./bin/
+COPY --from=builder /opt/gaiko2/etc/attestation.json ./etc/attestation.json
 COPY docker/entrypoint.sh ./bin/entrypoint.sh
 RUN chmod +x ./bin/entrypoint.sh
 

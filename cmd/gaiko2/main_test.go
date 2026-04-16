@@ -134,6 +134,34 @@ func TestRunCheckDispatchesLifecycleCommand(t *testing.T) {
 	}
 }
 
+func TestRunMetadataDispatchesLifecycleCommand(t *testing.T) {
+	prev := metadataCommandFn
+	t.Cleanup(func() {
+		metadataCommandFn = prev
+	})
+
+	called := false
+	metadataCommandFn = func(args []string, stdout io.Writer) error {
+		called = true
+		if len(args) != 0 {
+			t.Fatalf("unexpected metadata args: %v", args)
+		}
+		_, err := io.WriteString(stdout, "metadata\n")
+		return err
+	}
+
+	var stdout bytes.Buffer
+	if err := run([]string{"metadata"}, &stdout); err != nil {
+		t.Fatalf("run metadata: %v", err)
+	}
+	if !called {
+		t.Fatalf("expected metadata command to be invoked")
+	}
+	if stdout.String() != "metadata\n" {
+		t.Fatalf("unexpected metadata output: %q", stdout.String())
+	}
+}
+
 type fakeListener struct {
 	addr net.Addr
 }

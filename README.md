@@ -75,11 +75,24 @@ GAIKO2_PROVING_MODE=tee GAIKO2_TEE_TYPE=ego \
 The bootstrap command writes:
 
 - `bootstrap.gaiko2.json` under `GAIKO2_CONFIG_DIR`
+- `attestation.gaiko2.json` under `GAIKO2_CONFIG_DIR` when
+  `GAIKO2_ATTESTATION_PATH` is available in the image
 - `priv.gaiko2.key` under `GAIKO2_SECRET_DIR`
+
+For tee Docker deployments, the container entrypoint copies the embedded
+`attestation.json` into `GAIKO2_CONFIG_DIR/attestation.gaiko2.json` before the
+enclave bootstrap runs.
 
 If an external registration script writes `registered.gaiko2.json` under
 `GAIKO2_CONFIG_DIR`, setting `GAIKO2_FORK=shasta` lets `gaiko2` resolve the tee
 instance id from that file instead of requiring `GAIKO2_INSTANCE_ID` directly.
+
+Inspect the embedded tee image metadata with:
+
+```bash
+GAIKO2_ATTESTATION_PATH=/opt/gaiko2/etc/attestation.json \
+  go run ./cmd/gaiko2 metadata
+```
 
 ## Docker
 

@@ -57,6 +57,7 @@ test_status_reports_missing_bootstrap() {
     local output="${tmpdir}/status.out"
     main --fork shasta --release v1.0.0 --deploy-root "${tmpdir}/deploy" status >"${output}"
     assert_contains "${output}" "bootstrap: missing"
+    assert_contains "${output}" "attestation: missing"
     assert_contains "${output}" "registered: missing"
 }
 
@@ -89,6 +90,7 @@ test_status_reports_generated_release_env() {
     main --fork shasta --release v1.0.0-rc.1 --deploy-root "${tmpdir}/deploy" status >"${output}"
     assert_contains "${output}" "env: present"
     assert_contains "${output}" "bootstrap: missing"
+    assert_contains "${output}" "attestation: missing"
     assert_contains "${output}" "compose project: gaiko2-shasta-v1-0-0-rc-1"
 }
 
@@ -114,10 +116,42 @@ test_down_targets_only_the_release_service() {
     assert_contains "${DOCKER_LOG}" "compose --project-name gaiko2-shasta-v1-0-0-rc-1 --env-file ${tmpdir}/deploy/shasta/v1.0.0-rc.1/.env -f ${REPO_ROOT}/compose.yaml rm -sf gaiko2-tee"
 }
 
+test_register_hook_receives_attestation_path() {
+    local release_dir="${tmpdir}/deploy/shasta/v1.0.0-rc.1"
+    local hook="${tmpdir}/hook.sh"
+    local hook_out="${tmpdir}/hook.out"
+
+    cat >"${hook}" <<'EOF'
+#!/usr/bin/env bash
+set -euo pipefail
+printf 'attestation=%s\n' "${GAIKO2_ATTESTATION_JSON}" >"${HOOK_OUT}"
+cat >"${GAIKO2_REGISTERED_JSON}" <<JSON
+{
+  "${GAIKO2_FORK}": 4567
+}
+JSON
+EOF
+    chmod +x "${hook}"
+
+    printf '{\n  "quote": "0x01"\n}\n' >"${release_dir}/config/bootstrap.gaiko2.json"
+    printf '{\n  "unique_id": "abc",\n  "signer_id": "def",\n  "product_id": 1,\n  "security_version": 1\n}\n' >"${release_dir}/config/attestation.gaiko2.json"
+
+    HOOK_OUT="${hook_out}" main \
+        --fork shasta \
+        --release v1.0.0-rc.1 \
+        --deploy-root "${tmpdir}/deploy" \
+        --register-hook "${hook}" \
+        register >/dev/null
+
+    assert_contains "${hook_out}" "attestation=${release_dir}/config/attestation.gaiko2.json"
+    assert_file_exists "${release_dir}/config/registered.gaiko2.json"
+}
+
 test_status_reports_missing_bootstrap
 test_init_creates_release_state_and_uses_release_project
 test_status_reports_generated_release_env
 test_up_persists_port_override_for_existing_release
 test_down_targets_only_the_release_service
+test_register_hook_receives_attestation_path
 
 echo "ok"
