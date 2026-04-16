@@ -29,7 +29,6 @@ services:
       context: .
       dockerfile: docker/Dockerfile.native
     image: ${GAIKO2_NATIVE_IMAGE:-gaiko2-native:latest}
-    container_name: gaiko2-native
     environment:
       GAIKO2_PROVING_MODE: native
       GAIKO2_PORT: "8080"
@@ -38,7 +37,6 @@ services:
     restart: unless-stopped
   gaiko2-tee-init:
     <<: *gaiko2-tee-common
-    container_name: gaiko2-tee-init
     command:
       - --init
     restart: "no"
@@ -47,7 +45,6 @@ services:
 
   gaiko2-tee:
     <<: *gaiko2-tee-common
-    container_name: gaiko2-tee
     ports:
       - "${GAIKO2_TEE_PORT:-8080}:8080"
     restart: unless-stopped

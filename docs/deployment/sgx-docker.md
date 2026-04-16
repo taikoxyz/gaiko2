@@ -1,22 +1,46 @@
 # gaiko2 SGX Docker Deployment Guide
 
-This guide describes the operational path for running `gaiko2` as a standalone
-SGX proving service in Docker.
+This guide describes the intended production-style deployment flow for `gaiko2`
+as a standalone SGX proving service.
 
-The intended deployment model is:
+The operator entry point is:
 
-1. prepare an SGX host and PCCS
-2. bootstrap the enclave key once
-3. register the resulting quote with an external script/tool
-4. start the `gaiko2` tee server with Docker Compose
+```bash
+./scripts/deploy-tee.sh
+```
 
-`gaiko2` does **not** self-register on chain. Registration stays outside the
-server binary by design. The server only needs:
+The script hides the raw `docker compose` commands and keeps every deployed
+release in its own directory, so bootstrap state and registration metadata are
+not overwritten during upgrades.
 
-- a bootstrapped sealed key under `priv.gaiko2.key`
-- either `GAIKO2_INSTANCE_ID` or a `registered.gaiko2.json` file
+## 1. Model
 
-## 1. Host Prerequisites
+Each release lives under:
+
+```text
+deploy/<fork>/<release>/
+  .env
+  config/
+    bootstrap.gaiko2.json
+    registered.gaiko2.json
+  secrets/
+    priv.gaiko2.key
+```
+
+This is the key safety property of the deployment model:
+
+- new release bootstrap does not overwrite the old release
+- rollback is just starting the previous release again
+- each release keeps its own image tag, port, hook config, and SGX state
+
+`gaiko2` still uses one repo-root [compose.yaml](/home/yue/works/taiko/gaiko2/compose.yaml).
+The deploy script selects a release by passing a release-specific:
+
+- compose project name
+- env file
+- bind-mounted config/secrets directories
+
+## 2. Host Prerequisites
 
 The host must provide:
 
@@ -30,78 +54,78 @@ The longer host-side PCCS instructions remain in:
 - [raiko/docs/README_Docker_and_RA.md](/home/yue/works/taiko/raiko/docs/README_Docker_and_RA.md)
 - [How to deploy SGX Server 2269673143d680798482d2ce9367f7c8.md](/home/yue/works/taiko/How%20to%20deploy%20SGX%20Server%202269673143d680798482d2ce9367f7c8.md)
 
-## 2. Prepare the `gaiko2` Working Directory
+## 3. Build or Select the Image
 
-Use the repo root as the compose working directory:
+If you want a local image:
 
 ```bash
 cd /home/yue/works/taiko/gaiko2
-cp .env.example .env
-mkdir -p var/config var/secrets
+./scripts/build-image.sh tee latest
 ```
 
-Edit `.env` and set at least:
-
-- `GAIKO2_TEE_IMAGE`
-  Use the published image tag you want to deploy. Keep the default only if you
-  already built the image locally.
-- `GAIKO2_FORK=shasta`
-  The server uses this to resolve the registered instance id from
-  `registered.gaiko2.json`.
-- `PCCS_HOST`
-  Use `host.docker.internal:8081` if your PCCS publishes `8081` on the host.
-  Use `pccs:8081` if you deploy `gaiko2` into the same Docker network as a PCCS
-  container named `pccs`.
-
-If you want to bypass `registered.gaiko2.json`, you may set
-`GAIKO2_INSTANCE_ID=<number>` directly.
-
-## 3. Bootstrap the TEE Key
-
-Run the init container once:
+If you want a published image, note the tag and pass it to `init` with
+`--tee-image`, for example:
 
 ```bash
-docker compose --profile tee-init run --rm gaiko2-tee-init
+ghcr.io/taikoxyz/gaiko2-tee:v1.0.0
 ```
+
+## 4. Bootstrap a Release
+
+Choose a fork and a release name. A release name is usually the image tag or an
+operator-friendly alias such as `v1.0.0` or `2026-04-15-hotfix`.
+
+Example:
+
+```bash
+cd /home/yue/works/taiko/gaiko2
+./scripts/deploy-tee.sh \
+  --fork shasta \
+  --release v1.0.0 \
+  --tee-image ghcr.io/taikoxyz/gaiko2-tee:v1.0.0 \
+  --pccs-host host.docker.internal:8081 \
+  init
+```
+
+What `init` does:
+
+- creates `deploy/shasta/v1.0.0/`
+- creates `deploy/shasta/v1.0.0/.env`
+- creates `config/` and `secrets/`
+- runs the tee bootstrap container
 
 Expected result:
 
-- the command exits `0`
-- `var/secrets/priv.gaiko2.key` exists
-- `var/config/bootstrap.gaiko2.json` exists
+- `deploy/shasta/v1.0.0/config/bootstrap.gaiko2.json`
+- `deploy/shasta/v1.0.0/secrets/priv.gaiko2.key`
 
-The bootstrap output JSON includes:
+The bootstrap JSON includes:
 
 - `public_key`
 - `new_instance`
 - `quote`
 
-If bootstrap fails, inspect:
-
-```bash
-docker compose --profile tee-init logs gaiko2-tee-init
-```
-
-Common failures:
+If bootstrap fails, the command output is the primary log. Common failures:
 
 - `Failed to get quote config` or `SGX_QL_NETWORK_ERROR`
-  `PCCS_HOST` is wrong or PCCS is unreachable.
+  PCCS is unreachable or `--pccs-host` is wrong.
 - `open /dev/sgx_enclave`
-  the host SGX devices are missing or not passed through.
+  SGX devices are unavailable on the host.
 
-## 4. Register the Quote Externally
+## 5. Register the Quote
 
-`gaiko2` does not register itself. Use your existing verifier registration flow,
-the same way `raiko` does for SGX services.
+`gaiko2` does not self-register on chain. Registration stays outside the server
+binary.
 
-Input to that external registration step:
+### Option A: manual registration
 
-- the quote from `var/config/bootstrap.gaiko2.json`
-- the verifier address for the target fork
-- the operator wallet / L1 RPC
+Use your existing verifier registration flow with the quote from:
 
-After registration, store the resulting instance id in
-`var/config/registered.gaiko2.json`:
+```bash
+deploy/shasta/v1.0.0/config/bootstrap.gaiko2.json
+```
+
+Then write:
 
 ```json
 {
@@ -109,50 +133,99 @@ After registration, store the resulting instance id in
 }
 ```
 
-If you prefer, set `GAIKO2_INSTANCE_ID=1234` in `.env` instead and skip the
-JSON file.
-
-## 5. One-Command Server Deployment
-
-After bootstrap and registration are done, the steady-state deployment command
-is:
+to:
 
 ```bash
-docker compose --profile tee up -d --wait gaiko2-tee
+deploy/shasta/v1.0.0/config/registered.gaiko2.json
 ```
 
-Why this works:
+### Option B: register hook
 
-- the tee image now includes a container healthcheck against `/healthz`
-- Compose waits until the container becomes healthy
-- the service restarts automatically because the compose service uses
-  `restart: unless-stopped`
-
-If the command does not become healthy, inspect:
+Configure a hook while bootstrapping:
 
 ```bash
-docker compose logs -f --tail=200 gaiko2-tee
+./scripts/deploy-tee.sh \
+  --fork shasta \
+  --release v1.0.0 \
+  --register-hook /abs/path/to/register-hook.sh \
+  init
+```
+
+Then invoke:
+
+```bash
+./scripts/deploy-tee.sh --fork shasta --release v1.0.0 register
+```
+
+An example hook contract is included at:
+
+- [register-hook.example.sh](/home/yue/works/taiko/gaiko2/scripts/register-hook.example.sh)
+
+The hook receives:
+
+- `GAIKO2_BOOTSTRAP_JSON`
+- `GAIKO2_REGISTERED_JSON`
+- `GAIKO2_CONFIG_DIR`
+- `GAIKO2_SECRET_DIR`
+- `GAIKO2_FORK`
+- `GAIKO2_RELEASE`
+
+If no hook is configured, `register` prints the exact bootstrap and registered
+JSON paths and exits without modifying state.
+
+## 6. Start the Service
+
+Once bootstrap and registration are complete:
+
+```bash
+./scripts/deploy-tee.sh --fork shasta --release v1.0.0 up
+```
+
+This runs:
+
+- `docker compose --profile tee up -d --wait`
+
+for that release only. The image healthcheck probes `/healthz`, so the command
+waits until the container is healthy.
+
+If startup fails, the script tells you to inspect logs with:
+
+```bash
+./scripts/deploy-tee.sh --fork shasta --release v1.0.0 logs
 ```
 
 Expected healthy startup logs include:
 
 - `listening on 0.0.0.0:8080`
 
-Typical startup failures are explicit:
+## 7. Operational Commands
 
-- `registered instance id for fork "shasta" not found`
-  `registered.gaiko2.json` is missing or does not contain the configured fork.
-- `no such file or directory` for `priv.gaiko2.key`
-  bootstrap has not been run or the wrong secret volume is mounted.
-- `bind: address already in use`
-  the host port is already occupied.
+Check release status:
 
-## 6. Health and Proof Smoke Checks
+```bash
+./scripts/deploy-tee.sh --fork shasta --release v1.0.0 status
+```
+
+This reports:
+
+- deploy directory
+- compose project name
+- whether `.env` exists
+- whether bootstrap exists
+- whether the sealed key exists
+- whether registered ids exist
+- compose status for that release
+
+Follow logs:
+
+```bash
+./scripts/deploy-tee.sh --fork shasta --release v1.0.0 logs
+```
 
 Check liveness:
 
 ```bash
-curl http://127.0.0.1:${GAIKO2_TEE_PORT:-8080}/healthz
+./scripts/deploy-tee.sh --fork shasta --release v1.0.0 health
 ```
 
 Expected:
@@ -161,115 +234,105 @@ Expected:
 {"status":"ok"}
 ```
 
-Send a proof request:
+Stop and remove the release:
 
 ```bash
-curl -sS -X POST \
-  -H 'Content-Type: application/json' \
-  --data-binary @/home/yue/works/taiko/gaiko2/testdata/shasta_request_taiko_mainnet_proposal_2222_l2_5412225_5412416.json \
-  http://127.0.0.1:${GAIKO2_TEE_PORT:-8080}/prove/shasta
+./scripts/deploy-tee.sh --fork shasta --release v1.0.0 down
 ```
 
-## 7. Operational Commands
+## 8. Rollback
 
-Start:
+Because each release has its own directory, rollback is explicit and safe.
+
+Example:
+
+1. new release fails:
 
 ```bash
-docker compose --profile tee up -d --wait gaiko2-tee
+./scripts/deploy-tee.sh --fork shasta --release v1.0.1 down
 ```
 
-Follow logs:
+2. start the previous release again:
 
 ```bash
-docker compose logs -f --tail=200 gaiko2-tee
+./scripts/deploy-tee.sh --fork shasta --release v1.0.0 up
 ```
 
-Stop:
+This restores the old release's exact:
+
+- image tag
+- `.env`
+- sealed SGX key
+- bootstrap quote metadata
+- registered instance id mapping
+
+No re-bootstrap is needed for rollback.
+
+## 9. Example End-to-End Flow
 
 ```bash
-docker compose --profile tee stop gaiko2-tee
-```
+cd /home/yue/works/taiko/gaiko2
 
-Restart:
-
-```bash
-docker compose --profile tee restart gaiko2-tee
-```
-
-Remove the server container:
-
-```bash
-docker compose --profile tee rm -sf gaiko2-tee
-```
-
-Re-bootstrap:
-
-```bash
-docker compose --profile tee-init run --rm gaiko2-tee-init
-```
-
-Do **not** re-bootstrap an existing production instance unless you intend to
-replace the enclave key and re-register a new on-chain instance id.
-
-## 8. Using a Published Image Instead of Local Build
-
-Set the image name in `.env`, for example:
-
-```bash
-GAIKO2_TEE_IMAGE=ghcr.io/taikoxyz/gaiko2-tee:v1.0.0
-```
-
-Then pull and start:
-
-```bash
-docker compose pull gaiko2-tee
-docker compose --profile tee up -d --wait gaiko2-tee
-```
-
-For local development or local release testing, build first:
-
-```bash
 ./scripts/build-image.sh tee latest
-docker compose --profile tee up -d --wait gaiko2-tee
+
+./scripts/deploy-tee.sh \
+  --fork shasta \
+  --release local-latest \
+  --tee-image gaiko2-tee:latest \
+  --pccs-host host.docker.internal:8081 \
+  init
+
+# register externally, then either:
+# 1. write deploy/shasta/local-latest/config/registered.gaiko2.json
+# or
+# 2. set GAIKO2_INSTANCE_ID in deploy/shasta/local-latest/.env
+
+./scripts/deploy-tee.sh --fork shasta --release local-latest up
+./scripts/deploy-tee.sh --fork shasta --release local-latest status
+./scripts/deploy-tee.sh --fork shasta --release local-latest health
+./scripts/deploy-tee.sh --fork shasta --release local-latest logs
 ```
 
-## 9. Troubleshooting Checklist
+## 10. Troubleshooting
 
-### Container never becomes healthy
-
-Check:
-
-```bash
-docker compose ps
-docker compose logs -f --tail=200 gaiko2-tee
-```
-
-### Bootstrap succeeded, but server exits immediately
-
-Check:
-
-- `GAIKO2_FORK`
-- `GAIKO2_INSTANCE_ID`
-- `var/config/registered.gaiko2.json`
-
-The server must be able to resolve an instance id before serving tee proofs.
-
-### PCCS resolution errors
-
-If you see hostname or quote collateral errors:
-
-- use `PCCS_HOST=host.docker.internal:8081` when PCCS publishes to the host
-- use `PCCS_HOST=pccs:8081` when both services share the same Docker network
-- make sure compose includes the `host-gateway` mapping when using
-  `host.docker.internal`
-
-### Want native instead of tee
+### `status` says `bootstrap: missing`
 
 Run:
 
 ```bash
-docker compose up -d --wait gaiko2-native
+./scripts/deploy-tee.sh --fork <fork> --release <release> init
 ```
 
-The native service uses the same `/healthz` and `/prove/shasta` routes, but it
-signs with the GoldenTouch development key instead of an enclave-managed key.
+### `up` fails because instance id is unresolved
+
+Either:
+
+- set `GAIKO2_INSTANCE_ID` in the release `.env`
+- or write `registered.gaiko2.json`
+- or configure and run `register`
+
+### Healthcheck never becomes healthy
+
+Inspect:
+
+```bash
+./scripts/deploy-tee.sh --fork <fork> --release <release> logs
+```
+
+Typical causes:
+
+- wrong fork mapping in `registered.gaiko2.json`
+- missing sealed key
+- port already in use
+- PCCS problems that prevented a valid bootstrap
+
+### Need to inspect the generated release env
+
+Open:
+
+```bash
+deploy/<fork>/<release>/.env
+```
+
+This file is the exact compose input for that release and should be preserved
+for rollback and auditing.

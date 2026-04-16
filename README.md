@@ -106,8 +106,15 @@ docker compose --profile tee-init run --rm gaiko2-tee-init
 docker compose --profile tee up --build gaiko2-tee
 ```
 
-For a deployment-oriented SGX runbook, including bootstrap, external
-registration, `docker compose --wait`, and log-based troubleshooting, see:
+For release-based SGX deployment, the operator entry point is:
+
+```bash
+./scripts/deploy-tee.sh --fork shasta --release v1.0.0 init
+./scripts/deploy-tee.sh --fork shasta --release v1.0.0 up
+```
+
+For the full runbook, including bootstrap, external registration, rollback, and
+log-based troubleshooting, see:
 
 - [SGX Docker deployment guide](/home/yue/works/taiko/gaiko2/docs/deployment/sgx-docker.md)
 
