@@ -1,6 +1,7 @@
 package prover
 
 import (
+	"encoding/json"
 	"fmt"
 	"strings"
 	"testing"
@@ -155,6 +156,45 @@ func TestValidateRequestRejectsMalformedVerifier(t *testing.T) {
 	if err == nil || !strings.Contains(err.Error(), "verifier") {
 		t.Fatalf("unexpected error: %v", err)
 	}
+}
+
+func TestDecodeHeaderPreservesSlotNumber(t *testing.T) {
+	headerRaw := sampleHeaderWithField(t, "slotNumber", `"0x3039"`)
+
+	header, err := decodeHeader(headerRaw)
+	if err != nil {
+		t.Fatalf("decode header: %v", err)
+	}
+	if header.SlotNumber == nil || *header.SlotNumber != 12345 {
+		t.Fatalf("unexpected slot number: %v", header.SlotNumber)
+	}
+}
+
+func TestDecodeHeaderRejectsNonNullBlockAccessListHash(t *testing.T) {
+	headerRaw := sampleHeaderWithField(t, "block_access_list_hash", fmt.Sprintf("%q", testHash("44")))
+
+	_, err := decodeHeader(headerRaw)
+	if err == nil || err.Error() != "field block_access_list_hash is not supported by taiko-geth replay" {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
+func sampleHeaderWithField(t *testing.T, field string, value string) []byte {
+	t.Helper()
+	decoded, err := decodeBlockEnvelope(sampleReplayBlock(t, "0x2a", testHash("11"), testHash("aa"), testHash("bb")))
+	if err != nil {
+		t.Fatalf("decode block envelope: %v", err)
+	}
+	fields, err := decodeJSONObject(decoded.Header)
+	if err != nil {
+		t.Fatalf("decode header object: %v", err)
+	}
+	fields[field] = mustRawMessage(t, value)
+	raw, err := json.Marshal(fields)
+	if err != nil {
+		t.Fatalf("marshal header: %v", err)
+	}
+	return raw
 }
 
 func sampleReplayBlock(

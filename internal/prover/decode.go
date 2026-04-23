@@ -202,6 +202,16 @@ func decodeHeader(raw json.RawMessage) (*types.Header, error) {
 	} else {
 		header.RequestsHash = requestsHash
 	}
+	if slotNumber, err := optionalUint64Ptr(fields, "slot_number", "slotNumber"); err != nil {
+		return nil, err
+	} else {
+		header.SlotNumber = slotNumber
+	}
+	if blockAccessListHash, err := optionalHash(fields, "block_access_list_hash", "blockAccessListHash"); err != nil {
+		return nil, err
+	} else if blockAccessListHash != nil {
+		return nil, fmt.Errorf("field block_access_list_hash is not supported by taiko-geth replay")
+	}
 
 	return header, nil
 }
