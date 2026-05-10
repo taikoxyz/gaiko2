@@ -2,6 +2,7 @@ package prover
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"math/big"
 
@@ -9,6 +10,7 @@ import (
 	"github.com/ethereum/go-ethereum/consensus"
 	"github.com/ethereum/go-ethereum/consensus/beacon"
 	"github.com/ethereum/go-ethereum/consensus/ethash"
+	"github.com/ethereum/go-ethereum/consensus/misc"
 	"github.com/ethereum/go-ethereum/core"
 	"github.com/ethereum/go-ethereum/core/state"
 	"github.com/ethereum/go-ethereum/core/types"
@@ -22,6 +24,11 @@ import (
 const (
 	nativeProofPrivateKey    = "92954368afd3caa1f3ce3ead0069c1af414054aefe1ef9aeacc1bf426222ce38"
 	shastaNativeMockInstance = 0xDEADC0DE
+)
+
+const (
+	internalDevnetUnzenTime uint64 = 0
+	masayaDevnetUnzenTime   uint64 = 1778158800
 )
 
 type Runner interface {
@@ -50,21 +57,184 @@ func (GethRunner) Execute(
 		return common.Hash{}, common.Hash{}, err
 	}
 
-	chain := newReplayChainContext(config, block, witness)
-	processor := core.NewStateProcessor(chain)
+	executionBlock, expectedDifficulty := replayExecutionBlock(config, block)
+	chain := newReplayChainContext(config, executionBlock, witness)
 	validator := core.NewBlockValidator(config, nil)
 
-	res, err := processor.Process(ctx, block, db, vm.Config{})
+	res, err := processReplayBlock(ctx, chain, config, executionBlock, expectedDifficulty, db, vm.Config{})
 	if err != nil {
 		return common.Hash{}, common.Hash{}, err
 	}
-	if err := validator.ValidateState(block, db, res, true); err != nil {
+	if err := validator.ValidateState(executionBlock, db, res, true); err != nil {
+		return common.Hash{}, common.Hash{}, err
+	}
+	if err := validateReplayRequestsHash(executionBlock.Header(), res.Requests); err != nil {
 		return common.Hash{}, common.Hash{}, err
 	}
 
 	receiptRoot := types.DeriveSha(res.Receipts, trie.NewStackTrie(nil))
-	stateRoot := db.IntermediateRoot(config.IsEIP158(block.Number()))
+	stateRoot := db.IntermediateRoot(config.IsEIP158(executionBlock.Number()))
 	return stateRoot, receiptRoot, nil
+}
+
+func processReplayBlock(
+	ctx context.Context,
+	chain *replayChainContext,
+	config *params.ChainConfig,
+	block *types.Block,
+	expectedDifficulty *big.Int,
+	statedb *state.StateDB,
+	cfg vm.Config,
+) (*core.ProcessResult, error) {
+	if config == nil || !config.IsUnzen(block.Time()) {
+		return core.NewStateProcessor(chain).Process(ctx, block, statedb, cfg)
+	}
+	return processUnzenReplayBlock(ctx, chain, config, block, expectedDifficulty, statedb, cfg)
+}
+
+func processUnzenReplayBlock(
+	_ context.Context,
+	chain *replayChainContext,
+	config *params.ChainConfig,
+	block *types.Block,
+	expectedDifficulty *big.Int,
+	statedb *state.StateDB,
+	cfg vm.Config,
+) (*core.ProcessResult, error) {
+	var (
+		receipts    types.Receipts
+		header      = block.Header()
+		blockHash   = block.Hash()
+		blockNumber = block.Number()
+		allLogs     []*types.Log
+		gp          = core.NewGasPool(block.GasLimit())
+	)
+	var tracingStateDB = vm.StateDB(statedb)
+	if hooks := cfg.Tracer; hooks != nil {
+		tracingStateDB = state.NewHookedState(statedb, hooks)
+	}
+
+	if config.DAOForkSupport && config.DAOForkBlock != nil && config.DAOForkBlock.Cmp(block.Number()) == 0 {
+		misc.ApplyDAOHardFork(tracingStateDB)
+	}
+
+	signer := types.MakeSigner(config, header.Number, header.Time)
+	cfg.ZkGasMeter = vm.NewZkGasMeter(vm.UnzenZkGasScheduleFor(config.ChainID))
+	for i, tx := range block.Transactions() {
+		if tx.Type() == types.BlobTxType {
+			return nil, fmt.Errorf("blob transaction at index %d not allowed in Unzen block", i)
+		}
+	}
+
+	blockContext := core.NewEVMBlockContext(header, chain, nil)
+	evm := vm.NewEVM(blockContext, tracingStateDB, config, cfg)
+
+	if beaconRoot := block.BeaconRoot(); beaconRoot != nil {
+		core.ProcessBeaconBlockRoot(*beaconRoot, evm)
+	}
+	if config.IsPrague(block.Number(), block.Time()) || config.IsVerkle(block.Number(), block.Time()) {
+		core.ProcessParentBlockHash(block.ParentHash(), evm)
+	}
+
+	for i, tx := range block.Transactions() {
+		if i == 0 && config.Taiko {
+			if err := tx.MarkAsAnchor(); err != nil {
+				return nil, err
+			}
+		}
+		msg, err := core.TransactionToMessage(tx, signer, header.BaseFee)
+		if err != nil {
+			return nil, fmt.Errorf("could not apply tx %d [%v]: %w", i, tx.Hash().Hex(), err)
+		}
+		if config.IsShasta(header.Time) {
+			msg.BasefeeSharingPctg = core.DecodeShastaBasefeeSharingPctg(header.Extra)
+		} else if config.IsOntake(block.Number()) {
+			msg.BasefeeSharingPctg = core.DecodeOntakeExtraData(header.Extra)
+		}
+		statedb.SetTxContext(tx.Hash(), i)
+
+		cfg.ZkGasMeter.ResetTransaction()
+		evm.ResetZkGasErr()
+		receipt, err := core.ApplyTransactionWithEVM(msg, gp, statedb, blockNumber, blockHash, blockContext.Time, tx, evm)
+		if err != nil {
+			if errors.Is(err, vm.ErrZkGasLimitExceeded) && i > 0 {
+				cfg.ZkGasMeter.ResetTransaction()
+				evm.ResetZkGasErr()
+				break
+			}
+			return nil, fmt.Errorf("could not apply tx %d [%v]: %w", i, tx.Hash().Hex(), err)
+		}
+
+		if commitErr := cfg.ZkGasMeter.CommitTransaction(); commitErr != nil && i > 0 {
+			cfg.ZkGasMeter.ResetTransaction()
+			break
+		}
+
+		receipts = append(receipts, receipt)
+		allLogs = append(allLogs, receipt.Logs...)
+	}
+
+	requests, err := replayPostExecution(config, block, allLogs, evm)
+	if err != nil {
+		return nil, err
+	}
+	if len(block.Transactions()) != len(receipts) {
+		return nil, fmt.Errorf(
+			"Unzen block body extends past zk gas truncation point: body has %d transactions but execution committed %d",
+			len(block.Transactions()),
+			len(receipts),
+		)
+	}
+
+	recomputed := new(big.Int).SetUint64(cfg.ZkGasMeter.BlockZkGasUsed())
+	if expectedDifficulty == nil || expectedDifficulty.Cmp(recomputed) != 0 {
+		return nil, fmt.Errorf("zk gas difficulty mismatch: header has %v, recomputed %v", expectedDifficulty, recomputed)
+	}
+
+	chain.Engine().Finalize(chain, header, tracingStateDB, block.Body())
+
+	return &core.ProcessResult{
+		Receipts: receipts,
+		Requests: requests,
+		Logs:     allLogs,
+		GasUsed:  gp.Used(),
+	}, nil
+}
+
+func replayPostExecution(
+	config *params.ChainConfig,
+	block *types.Block,
+	allLogs []*types.Log,
+	evm *vm.EVM,
+) ([][]byte, error) {
+	if !config.IsPrague(block.Number(), block.Time()) {
+		return nil, nil
+	}
+
+	requests := [][]byte{}
+	if err := core.ParseDepositLogs(&requests, allLogs, config); err != nil {
+		return requests, fmt.Errorf("failed to parse deposit logs: %w", err)
+	}
+	if err := core.ProcessWithdrawalQueue(&requests, evm); err != nil {
+		return requests, fmt.Errorf("failed to process withdrawal queue: %w", err)
+	}
+	if err := core.ProcessConsolidationQueue(&requests, evm); err != nil {
+		return requests, fmt.Errorf("failed to process consolidation queue: %w", err)
+	}
+	return requests, nil
+}
+
+func replayExecutionBlock(config *params.ChainConfig, block *types.Block) (*types.Block, *big.Int) {
+	if config == nil || !config.IsUnzen(block.Time()) {
+		return block, nil
+	}
+	header := types.CopyHeader(block.Header())
+	expectedDifficulty := new(big.Int)
+	if header.Difficulty != nil {
+		expectedDifficulty.Set(header.Difficulty)
+	}
+	header.Difficulty = common.Big0
+	return types.NewBlockWithHeader(header).WithBody(*block.Body()), expectedDifficulty
 }
 
 type ReplayService struct {
@@ -242,8 +412,24 @@ func validateReplayBlockBody(block *types.Block) error {
 	} else if block.Withdrawals() != nil {
 		return fmt.Errorf("withdrawals present in block body without header commitment")
 	}
-	if header.RequestsHash != nil {
-		return fmt.Errorf("requests hash validation is not supported in gaiko2 %s", protocol.ShastaSchemaV1)
+	return nil
+}
+
+func validateReplayRequestsHash(header *types.Header, requests [][]byte) error {
+	if header.RequestsHash == nil {
+		if requests != nil {
+			return fmt.Errorf("requests present in block body without header commitment")
+		}
+		return nil
+	}
+
+	hash := types.CalcRequestsHash(requests)
+	if hash != *header.RequestsHash {
+		return fmt.Errorf(
+			"requests hash mismatch: got %s expected %s",
+			hash.Hex(),
+			header.RequestsHash.Hex(),
+		)
 	}
 	return nil
 }
@@ -391,6 +577,7 @@ func chainConfigFor(chainID uint64) (*params.ChainConfig, error) {
 		cfg.OntakeBlock = cloneBigInt(core.InternalDevnetOntakeBlock)
 		cfg.PacayaBlock = cloneBigInt(core.InternalDevnetPacayaBlock)
 		cfg.ShastaTime = cloneUint64(core.InternalShastaTime)
+		enableUnzenForksFrom(cfg, internalDevnetUnzenTime)
 		return cfg, nil
 	case params.MasayaDevnetNetworkID.Uint64():
 		cfg := cloneChainConfig(params.TaikoChainConfig)
@@ -398,6 +585,7 @@ func chainConfigFor(chainID uint64) (*params.ChainConfig, error) {
 		cfg.OntakeBlock = cloneBigInt(core.MasayaDevnetOntakeBlock)
 		cfg.PacayaBlock = cloneBigInt(core.MasayaDevnetPacayaBlock)
 		cfg.ShastaTime = cloneUint64(core.MasayaShastaTime)
+		enableUnzenForksFrom(cfg, masayaDevnetUnzenTime)
 		return cfg, nil
 	case params.TaikoHoodiNetworkID.Uint64():
 		cfg := cloneChainConfig(params.TaikoChainConfig)
@@ -408,6 +596,27 @@ func chainConfigFor(chainID uint64) (*params.ChainConfig, error) {
 		return cfg, nil
 	default:
 		return nil, fmt.Errorf("unsupported chain ID: %d", chainID)
+	}
+}
+
+func enableUnzenForksFrom(cfg *params.ChainConfig, timestamp uint64) {
+	if cfg == nil {
+		return
+	}
+	if cfg.UnzenTime == nil {
+		cfg.UnzenTime = cloneUint64(timestamp)
+	}
+	if cfg.CancunTime == nil {
+		cfg.CancunTime = cloneUint64(timestamp)
+	}
+	if cfg.PragueTime == nil {
+		cfg.PragueTime = cloneUint64(timestamp)
+	}
+	if cfg.OsakaTime == nil {
+		cfg.OsakaTime = cloneUint64(timestamp)
+	}
+	if cfg.BlobScheduleConfig == nil {
+		cfg.BlobScheduleConfig = cloneBlobSchedule(params.DefaultBlobSchedule)
 	}
 }
 
@@ -450,6 +659,7 @@ func cloneChainConfig(cfg *params.ChainConfig) *params.ChainConfig {
 	cloned.OntakeBlock = cloneBigInt(cfg.OntakeBlock)
 	cloned.PacayaBlock = cloneBigInt(cfg.PacayaBlock)
 	cloned.ShastaTime = cloneUint64Ptr(cfg.ShastaTime)
+	cloned.UnzenTime = cloneUint64Ptr(cfg.UnzenTime)
 	return &cloned
 }
 
