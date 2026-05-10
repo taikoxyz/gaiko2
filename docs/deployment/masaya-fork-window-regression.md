@@ -16,8 +16,9 @@ confirm that:
 
 ## What Does And Does Not Need To Change
 
-No `gaiko2` protocol or prover code changes are required for this interval.
-Current `main` already provides:
+Once `gaiko2` includes the Unzen replay fix described in the retrospective
+below, no further protocol or prover changes are required for this interval.
+The replay surface already provides:
 
 - `GET /healthz`
 - `POST /prove/shasta`
@@ -268,3 +269,74 @@ For the first delegated pass:
 
 That gives the narrowest reproduction if anything regresses around the Masaya
 fork boundary.
+
+## Retrospective
+
+The first real failure was proposal `25127`, which contains Masaya block
+`4140811`, the first `UNZEN` block. The observed prover error was:
+
+```text
+block 4140811 state root mismatch:
+got      0x02bf96585c4c2e244626539ee33e638f0358fee7ddadba2bd2aa3ddcec41bd0e
+expected 0x0458e5b9bcb4a1a05660201e0db18d38110352fde9ff2c0f72cac72b0d1d379f
+```
+
+### Actual Root Cause
+
+The root cause was not a bad proposal tuple, a bad block selection, or a bad
+transaction list. It was `gaiko2` replay semantics for `UNZEN` blocks.
+
+`UNZEN` repurposes imported header `difficulty` to carry the finalized zk-gas
+value. That imported `difficulty` must be preserved for post-execution
+validation, but it must not be used as the execution-time block difficulty.
+
+The correct `taiko-geth` model is:
+
+1. prepare the execution header with `difficulty = 0`,
+2. execute the block and accumulate zk-gas,
+3. compare the recomputed zk-gas against the imported header `difficulty`.
+
+The broken replay path used the imported non-zero `difficulty` directly during
+execution. On block `4140811` that changed the execution-visible block context
+and produced the wrong `treasury` storage root even though `gasUsed`,
+`receiptsRoot`, and `requestsHash` still matched.
+
+### Why The Witness False Lead Was Not The Fix
+
+There was an early false lead around witness completeness. During debugging a
+local mutant `GuestInput` was created with:
+
+- 5 extra `proposal_state_nodes`, and
+- 10 extra `state_indices` per replay block across the whole 192-block packet.
+
+That mutant was useful only as an isolation experiment. It was not the final
+fix and it did not ship.
+
+The important evidence was:
+
+- the checked-in `proposal_25127.json` fixture and a fresh
+  `preflight --validate` build produced the same effective replay witness for
+  `gaiko2`,
+- `witness-check` against live RPC stateless-validated block `4140811`
+  successfully, and
+- witness reachability analysis showed that the expanded mutant only increased
+  supplied nodes; it did not change the per-block unused-node pattern.
+
+That means there is no evidence that the canonical `25127` witness was missing
+required trie nodes for the real regression path. The witness hypothesis was a
+reasonable debugging branch, but it was not the product bug.
+
+### Verified Outcome
+
+After fixing `UNZEN` replay difficulty semantics in `gaiko2`, the full Masaya
+window `25027..25227` was rerun with the real
+`preflight --validate -> dump_gaiko2_shasta_fixture -> /prove/shasta` flow.
+
+Results:
+
+- 201 / 201 proposals returned `status == "ok"`,
+- the `SHASTA -> UNZEN` transition proposals `25125`, `25126`, and `25127`
+  all passed inside the full-window run,
+- the same `instance_address`
+  `0x0000777735367b36bC9B61C50022d9D0700dB4Ec` was returned across the entire
+  window.
