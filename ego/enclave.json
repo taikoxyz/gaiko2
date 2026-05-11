@@ -48,8 +48,20 @@
       "value": "ego"
     },
     {
+      "name": "GAIKO2_CONFIG_DIR",
+      "value": "/var/lib/gaiko2/config"
+    },
+    {
       "name": "GAIKO2_SECRET_DIR",
       "value": "/var/lib/gaiko2/secrets"
+    },
+    {
+      "name": "GAIKO2_FORK",
+      "fromHost": true
+    },
+    {
+      "name": "GAIKO2_INSTANCE_ID",
+      "fromHost": true
     },
     {
       "name": "GAIKO2_PORT",
