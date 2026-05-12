@@ -23,8 +23,8 @@ The replay surface already provides:
 - `GET /healthz`
 - `POST /prove/shasta`
 - `POST /prove/shasta-aggregate`
-- `schema: "v1"` request decoding
-- `gaiko2-proof-v1` response encoding
+- `schema: "raiko2-shasta-request-v1"` request decoding
+- `schema: "raiko2-proof-v1"` response encoding
 
 What *is* required is the request-generation side from `raiko2`.
 
@@ -160,7 +160,7 @@ done
 
 Success criteria for each request:
 
-- `schema == "gaiko2-proof-v1"`
+- `schema == "raiko2-proof-v1"`
 - `status == "ok"`
 - `result.input` is present
 - `result.instance_address` is present
@@ -224,7 +224,7 @@ The current healthy response looks like:
 
 ```json
 {
-  "schema": "gaiko2-proof-v1",
+  "schema": "raiko2-proof-v1",
   "status": "ok",
   "result": {
     "proof": "0x...",
