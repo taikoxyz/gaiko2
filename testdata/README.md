@@ -1,7 +1,7 @@
 # Shared Shasta Replay Fixture
 
 `shasta_request_taiko_mainnet_proposal_2222_l2_5412225_5412416.json` is a checked-in
-Shasta execution packet with request `schema: "v1"`, derived from the tracked
+Shasta execution packet with request `schema: "raiko2-shasta-request-v1"`, derived from the tracked
 `raiko2` shared GuestInput fixture:
 
 - source:

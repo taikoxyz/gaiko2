@@ -80,6 +80,9 @@ func TestNewServerReturnsSuccessEnvelope(t *testing.T) {
 	if resp.Status != protocol.ProofStatusOK {
 		t.Fatalf("unexpected response status: %s", resp.Status)
 	}
+	if resp.Schema != protocol.ProofSchemaV1 {
+		t.Fatalf("unexpected response schema: %s", resp.Schema)
+	}
 	if resp.Result == nil || resp.Result.Input != "0xinput" {
 		t.Fatalf("unexpected result payload: %+v", resp.Result)
 	}
