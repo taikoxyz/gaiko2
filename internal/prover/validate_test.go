@@ -17,7 +17,7 @@ func TestValidateRequestAcceptsContiguousPacket(t *testing.T) {
 	secondBlock := sampleReplayBlock(t, "0x2b", firstHash, lastStateRoot, testHash("be"))
 	secondHash := replayBlockHash(t, secondBlock)
 	req := protocol.ShastaRequest{
-		Schema: "v1",
+		Schema: protocol.ShastaRequestSchemaV1,
 		Payload: protocol.ShastaPayload{
 			ChainID: 167013,
 			Blocks: []protocol.ReplayBlock{
@@ -60,7 +60,7 @@ func TestValidateRequestRejectsUnsupportedSchema(t *testing.T) {
 func TestValidateRequestRejectsNonContiguousBlocks(t *testing.T) {
 	parentHash := testHash("11")
 	req := protocol.ShastaRequest{
-		Schema: "v1",
+		Schema: protocol.ShastaRequestSchemaV1,
 		Payload: protocol.ShastaPayload{
 			ChainID: 1,
 			Blocks: []protocol.ReplayBlock{
@@ -80,7 +80,7 @@ func TestValidateRequestRejectsNonContiguousBlocks(t *testing.T) {
 func TestValidateRequestRejectsBrokenParentHashPropagation(t *testing.T) {
 	firstBlock := sampleReplayBlock(t, "0x2a", testHash("11"), testHash("aa"), testHash("de"))
 	req := protocol.ShastaRequest{
-		Schema: "v1",
+		Schema: protocol.ShastaRequestSchemaV1,
 		Payload: protocol.ShastaPayload{
 			ChainID: 167013,
 			Blocks: []protocol.ReplayBlock{
@@ -102,7 +102,7 @@ func TestValidateRequestRejectsCheckpointBlockHashMismatch(t *testing.T) {
 	firstHash := replayBlockHash(t, firstBlock)
 	secondBlock := sampleReplayBlock(t, "0x2b", firstHash, testHash("bb"), testHash("be"))
 	req := protocol.ShastaRequest{
-		Schema: "v1",
+		Schema: protocol.ShastaRequestSchemaV1,
 		Payload: protocol.ShastaPayload{
 			ChainID: 167013,
 			Blocks: []protocol.ReplayBlock{
@@ -123,7 +123,7 @@ func TestValidateRequestRejectsMalformedVerifier(t *testing.T) {
 	block := sampleReplayBlock(t, "0x2a", testHash("11"), testHash("aa"), testHash("de"))
 	blockHash := replayBlockHash(t, block)
 	req := protocol.ShastaRequest{
-		Schema: "v1",
+		Schema: protocol.ShastaRequestSchemaV1,
 		Payload: protocol.ShastaPayload{
 			ChainID: 167013,
 			Blocks: []protocol.ReplayBlock{

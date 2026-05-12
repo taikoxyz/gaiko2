@@ -35,7 +35,7 @@ type rawCheckpoint struct {
 }
 
 func ValidateRequest(req protocol.ShastaRequest) (*ValidatedRequest, error) {
-	if req.Schema != protocol.ShastaSchemaV1 {
+	if req.Schema != protocol.ShastaRequestSchemaV1 {
 		return nil, fmt.Errorf("unsupported schema %q", req.Schema)
 	}
 	if len(req.Payload.Blocks) == 0 {

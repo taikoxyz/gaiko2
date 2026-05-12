@@ -204,7 +204,7 @@ func TestReplayServiceReturnsSignedProofResult(t *testing.T) {
 	}
 	blockHash := replayBlockHash(t, replay.Block)
 	req := protocol.ShastaRequest{
-		Schema: protocol.ShastaSchemaV1,
+		Schema: protocol.ShastaRequestSchemaV1,
 		Payload: protocol.ShastaPayload{
 			ChainID: 167013,
 			Blocks:  []protocol.ReplayBlock{replay},
@@ -315,7 +315,7 @@ func TestReplayServiceAllowsEmptyRequestsHash(t *testing.T) {
 	}
 	blockHash := replayBlockHash(t, replay.Block)
 	req := protocol.ShastaRequest{
-		Schema: protocol.ShastaSchemaV1,
+		Schema: protocol.ShastaRequestSchemaV1,
 		Payload: protocol.ShastaPayload{
 			ChainID: 167013,
 			Blocks:  []protocol.ReplayBlock{replay},
@@ -432,7 +432,7 @@ func TestReplayServiceRejectsWitnessParentMismatch(t *testing.T) {
 	}
 	blockHash := replayBlockHash(t, replay.Block)
 	req := protocol.ShastaRequest{
-		Schema: protocol.ShastaSchemaV1,
+		Schema: protocol.ShastaRequestSchemaV1,
 		Payload: protocol.ShastaPayload{
 			ChainID: 167013,
 			Blocks:  []protocol.ReplayBlock{replay},
@@ -526,7 +526,7 @@ func TestReplayServiceRejectsTransactionRootMismatch(t *testing.T) {
 	}
 	blockHash := replayBlockHash(t, replay.Block)
 	req := protocol.ShastaRequest{
-		Schema: protocol.ShastaSchemaV1,
+		Schema: protocol.ShastaRequestSchemaV1,
 		Payload: protocol.ShastaPayload{
 			ChainID: 167013,
 			Blocks:  []protocol.ReplayBlock{replay},
