@@ -3,8 +3,9 @@ package protocol
 import "encoding/json"
 
 const (
-	ShastaSchemaV1 = "v1"
-	ProofSchemaV1  = "gaiko2-proof-v1"
+	ShastaRequestSchemaV1          = "raiko2-shasta-request-v1"
+	ShastaAggregateRequestSchemaV1 = "raiko2-shasta-aggregate-request-v1"
+	ProofSchemaV1                  = "raiko2-proof-v1"
 )
 
 type ShastaRequest struct {

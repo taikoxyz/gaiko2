@@ -7,7 +7,7 @@ import (
 
 func TestShastaV1RoundTrip(t *testing.T) {
 	req := ShastaRequest{
-		Schema: "v1",
+		Schema: ShastaRequestSchemaV1,
 		Payload: ShastaPayload{
 			ChainID: 167013,
 			Blocks: []ReplayBlock{
@@ -32,8 +32,11 @@ func TestShastaV1RoundTrip(t *testing.T) {
 		t.Fatalf("unmarshal request: %v", err)
 	}
 
-	if decoded.Schema != "v1" {
+	if decoded.Schema != ShastaRequestSchemaV1 {
 		t.Fatalf("unexpected schema: %s", decoded.Schema)
+	}
+	if ShastaRequestSchemaV1 != "raiko2-shasta-request-v1" {
+		t.Fatalf("unexpected request schema constant: %s", ShastaRequestSchemaV1)
 	}
 	if decoded.Payload.ChainID != 167013 {
 		t.Fatalf("unexpected chain id: %d", decoded.Payload.ChainID)
@@ -45,7 +48,7 @@ func TestShastaV1RoundTrip(t *testing.T) {
 
 func TestShastaAggregateV1RoundTrip(t *testing.T) {
 	req := ShastaAggregateRequest{
-		Schema: "v1",
+		Schema: ShastaAggregateRequestSchemaV1,
 		Payload: ShastaAggregatePayload{
 			Proofs: []AggregateProof{
 				{
@@ -67,8 +70,11 @@ func TestShastaAggregateV1RoundTrip(t *testing.T) {
 		t.Fatalf("unmarshal request: %v", err)
 	}
 
-	if decoded.Schema != "v1" {
+	if decoded.Schema != ShastaAggregateRequestSchemaV1 {
 		t.Fatalf("unexpected schema: %s", decoded.Schema)
+	}
+	if ShastaAggregateRequestSchemaV1 != "raiko2-shasta-aggregate-request-v1" {
+		t.Fatalf("unexpected aggregate schema constant: %s", ShastaAggregateRequestSchemaV1)
 	}
 	if len(decoded.Payload.Proofs) != 1 {
 		t.Fatalf("unexpected proof count: %d", len(decoded.Payload.Proofs))
@@ -98,6 +104,9 @@ func TestProofResponseHelpers(t *testing.T) {
 
 	if decodedOK.Schema != ProofSchemaV1 {
 		t.Fatalf("unexpected proof schema: %s", decodedOK.Schema)
+	}
+	if ProofSchemaV1 != "raiko2-proof-v1" {
+		t.Fatalf("unexpected proof schema constant: %s", ProofSchemaV1)
 	}
 	if decodedOK.Status != ProofStatusOK {
 		t.Fatalf("unexpected proof status: %s", decodedOK.Status)
