@@ -92,7 +92,7 @@ func TestReplayServiceReturnsSignedAggregationProofResult(t *testing.T) {
 		t.Fatalf("build subproof result: %v", err)
 	}
 	req := protocol.ShastaAggregateRequest{
-		Schema: protocol.ShastaSchemaV1,
+		Schema: protocol.ShastaAggregateRequestSchemaV1,
 		Payload: protocol.ShastaAggregatePayload{
 			Proofs: []protocol.AggregateProof{
 				{
@@ -185,7 +185,7 @@ func TestValidateAggregateRequestRejectsMixedInstanceIDs(t *testing.T) {
 	}
 
 	_, err = ValidateAggregateRequest(protocol.ShastaAggregateRequest{
-		Schema: protocol.ShastaSchemaV1,
+		Schema: protocol.ShastaAggregateRequestSchemaV1,
 		Payload: protocol.ShastaAggregatePayload{
 			Proofs: []protocol.AggregateProof{
 				{Input: first.Input, Proof: *first.Proof, ProofCarryData: firstCarry},
@@ -252,7 +252,7 @@ func TestValidateAggregateRequestRejectsMixedInstanceAddresses(t *testing.T) {
 	mutatedProof := mutateProofAddress(t, *second.Proof, common.HexToAddress("0x1212121212121212121212121212121212121212"))
 
 	_, err = ValidateAggregateRequest(protocol.ShastaAggregateRequest{
-		Schema: protocol.ShastaSchemaV1,
+		Schema: protocol.ShastaAggregateRequestSchemaV1,
 		Payload: protocol.ShastaAggregatePayload{
 			Proofs: []protocol.AggregateProof{
 				{Input: first.Input, Proof: *first.Proof, ProofCarryData: firstCarry},

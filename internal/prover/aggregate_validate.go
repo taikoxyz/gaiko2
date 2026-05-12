@@ -10,7 +10,7 @@ import (
 )
 
 func ValidateAggregateRequest(req protocol.ShastaAggregateRequest) (*ValidatedAggregateRequest, error) {
-	if req.Schema != protocol.ShastaSchemaV1 {
+	if req.Schema != protocol.ShastaAggregateRequestSchemaV1 {
 		return nil, fmt.Errorf("unsupported schema %q", req.Schema)
 	}
 	if len(req.Payload.Proofs) == 0 {
