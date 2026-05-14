@@ -1,6 +1,8 @@
 package tee
 
 import (
+	"os"
+	"path/filepath"
 	"reflect"
 	"testing"
 
@@ -26,6 +28,14 @@ func TestBootstrapDataRoundTrip(t *testing.T) {
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("bootstrap data mismatch:\n got: %#v\nwant: %#v", got, want)
 	}
+
+	info, err := os.Stat(filepath.Join(dir, bootstrapInfoFilename))
+	if err != nil {
+		t.Fatalf("stat bootstrap data: %v", err)
+	}
+	if got, want := info.Mode().Perm(), os.FileMode(0o644); got != want {
+		t.Fatalf("bootstrap data permissions: got %#o want %#o", got, want)
+	}
 }
 
 func TestRegisteredForksRoundTrip(t *testing.T) {
@@ -45,5 +55,13 @@ func TestRegisteredForksRoundTrip(t *testing.T) {
 	}
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("registered forks mismatch:\n got: %#v\nwant: %#v", got, want)
+	}
+
+	info, err := os.Stat(filepath.Join(dir, registeredInfoFilename))
+	if err != nil {
+		t.Fatalf("stat registered forks: %v", err)
+	}
+	if got, want := info.Mode().Perm(), os.FileMode(0o644); got != want {
+		t.Fatalf("registered forks permissions: got %#o want %#o", got, want)
 	}
 }

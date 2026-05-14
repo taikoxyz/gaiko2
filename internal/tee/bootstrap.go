@@ -106,7 +106,7 @@ func writeJSON(path string, value any) error {
 		return err
 	}
 	encoded = append(encoded, '\n')
-	return os.WriteFile(path, encoded, 0o600)
+	return os.WriteFile(path, encoded, 0o644)
 }
 
 func readJSON(path string, value any) error {

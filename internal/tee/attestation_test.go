@@ -1,6 +1,10 @@
 package tee
 
-import "testing"
+import (
+	"os"
+	"path/filepath"
+	"testing"
+)
 
 func TestSaveAndLoadAttestationMetadata(t *testing.T) {
 	t.Parallel()
@@ -24,5 +28,13 @@ func TestSaveAndLoadAttestationMetadata(t *testing.T) {
 
 	if got != want {
 		t.Fatalf("attestation metadata mismatch:\n got: %#v\nwant: %#v", got, want)
+	}
+
+	info, err := os.Stat(filepath.Join(dir, attestationInfoFilename))
+	if err != nil {
+		t.Fatalf("stat attestation metadata: %v", err)
+	}
+	if got, want := info.Mode().Perm(), os.FileMode(0o644); got != want {
+		t.Fatalf("attestation metadata permissions: got %#o want %#o", got, want)
 	}
 }
