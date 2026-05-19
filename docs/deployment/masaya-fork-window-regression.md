@@ -44,8 +44,8 @@ go test ./internal/api ./internal/prover ./internal/protocol ./cmd/gaiko2
 
 Use the same live RPCs that the current `raiko2` regression used:
 
-- L2 Masaya RPC: `http://34.41.203.88:8545`
-- L1 Hoodi RPC: `https://ethereum-hoodi-rpc.publicnode.com`
+- L2 Masaya RPC: `<masaya-l2-rpc-url>`
+- L1 Hoodi RPC: `<hoodi-l1-rpc-url>`
 
 The checked-in fixed fork-transition case lives in the `raiko2`
 `enable-gaiko2` branch:
@@ -177,8 +177,8 @@ git checkout enable-gaiko2
 python scripts/regression/stress_shasta_proposal.py \
   --network taiko_masaya \
   --l1-network hoodi \
-  --l2-rpc http://34.41.203.88:8545 \
-  --l1-rpc https://ethereum-hoodi-rpc.publicnode.com \
+  --l2-rpc <masaya-l2-rpc-url> \
+  --l1-rpc <hoodi-l1-rpc-url> \
   --proposal-ids "$(seq -s, 25027 25227)" \
   --discover-only \
   --proposal-out /tmp/masaya-25027-25227.discovery.json
@@ -196,8 +196,8 @@ The command shape for one proposal is:
 cargo run -r -p preflight -- \
   --network taiko_masaya \
   --l1-network hoodi \
-  --rpc-url http://34.41.203.88:8545 \
-  --l1-rpc-url https://ethereum-hoodi-rpc.publicnode.com \
+  --rpc-url <masaya-l2-rpc-url> \
+  --l1-rpc-url <hoodi-l1-rpc-url> \
   --proposal-id <proposal-id> \
   --l1-inclusion-block-number <l1-inclusion-block-number> \
   --last-anchor-block-number <last-anchor-block-number> \
