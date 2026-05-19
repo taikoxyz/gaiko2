@@ -22,6 +22,8 @@ import (
 )
 
 const (
+	// nativeProofPrivateKey is the fixed GoldenTouch mock key used only by
+	// native-mode signing for deterministic local/dev regression output.
 	nativeProofPrivateKey    = "92954368afd3caa1f3ce3ead0069c1af414054aefe1ef9aeacc1bf426222ce38"
 	shastaNativeMockInstance = 0xDEADC0DE
 )
