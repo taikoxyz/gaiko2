@@ -78,11 +78,11 @@ func NewServer(service prover.Service) http.Handler {
 		}
 
 		log.Printf(
-			"completed prove/shasta request schema=%s chain_id=%d block_count=%d input=%s",
+			"completed prove/shasta request schema=%s chain_id=%d block_count=%d input_prefix=%q",
 			req.Schema,
 			req.Payload.ChainID,
 			len(req.Payload.Blocks),
-			result.Input,
+			shortInputPrefix(result.Input),
 		)
 		writeJSON(w, http.StatusOK, protocol.Success(result))
 	})
@@ -132,14 +132,22 @@ func NewServer(service prover.Service) http.Handler {
 		}
 
 		log.Printf(
-			"completed prove/shasta-aggregate request schema=%s proof_count=%d input=%s",
+			"completed prove/shasta-aggregate request schema=%s proof_count=%d input_prefix=%q",
 			req.Schema,
 			len(req.Payload.Proofs),
-			result.Input,
+			shortInputPrefix(result.Input),
 		)
 		writeJSON(w, http.StatusOK, protocol.Success(result))
 	})
 	return mux
+}
+
+func shortInputPrefix(input string) string {
+	const prefixLen = 12
+	if len(input) <= prefixLen {
+		return input
+	}
+	return input[:prefixLen] + "..."
 }
 
 func writeError(w http.ResponseWriter, statusCode int, code, message string) {

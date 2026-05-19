@@ -103,7 +103,7 @@ func TestNewServerLogsProveSuccess(t *testing.T) {
 
 	server := NewServer(fakeService{
 		result: protocol.ProofResult{
-			Input: "0xinput",
+			Input: "0x1234567890abcdef1234567890abcdef1234567890abcdef1234567890abcdef",
 		},
 	})
 	req := httptest.NewRequest(
@@ -120,6 +120,12 @@ func TestNewServerLogsProveSuccess(t *testing.T) {
 	}
 	if !strings.Contains(logs.String(), "completed prove/shasta request") {
 		t.Fatalf("expected success log, got %q", logs.String())
+	}
+	if !strings.Contains(logs.String(), `input_prefix="0x1234567890...`) {
+		t.Fatalf("expected shortened input prefix, got %q", logs.String())
+	}
+	if strings.Contains(logs.String(), "0x1234567890abcdef1234567890abcdef1234567890abcdef1234567890abcdef") {
+		t.Fatalf("expected full input to be omitted, got %q", logs.String())
 	}
 }
 
