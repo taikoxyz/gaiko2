@@ -121,11 +121,11 @@ func TestNewServerLogsProveSuccess(t *testing.T) {
 	if !strings.Contains(logs.String(), "completed prove/shasta request") {
 		t.Fatalf("expected success log, got %q", logs.String())
 	}
-	if !strings.Contains(logs.String(), `input_prefix="0x1234567890...`) {
-		t.Fatalf("expected shortened input prefix, got %q", logs.String())
+	if !strings.Contains(logs.String(), "proposal_id=2222") {
+		t.Fatalf("expected proposal id in success log, got %q", logs.String())
 	}
-	if strings.Contains(logs.String(), "0x1234567890abcdef1234567890abcdef1234567890abcdef1234567890abcdef") {
-		t.Fatalf("expected full input to be omitted, got %q", logs.String())
+	if strings.Contains(logs.String(), "input_prefix=") || strings.Contains(logs.String(), "input=") {
+		t.Fatalf("expected input to be omitted from success log, got %q", logs.String())
 	}
 }
 
@@ -154,6 +154,17 @@ func TestNewServerLogsAggregateFailure(t *testing.T) {
 	}
 	if !strings.Contains(logs.String(), "failed prove/shasta-aggregate request") {
 		t.Fatalf("expected failure log, got %q", logs.String())
+	}
+}
+
+func TestAggregateProposalIDSummary(t *testing.T) {
+	proofs := []prover.AggregateProofView{
+		{Carry: prover.CarryView{TransitionInput: prover.TransitionInputView{ProposalID: 7}}},
+		{Carry: prover.CarryView{TransitionInput: prover.TransitionInputView{ProposalID: 8}}},
+		{Carry: prover.CarryView{TransitionInput: prover.TransitionInputView{ProposalID: 9}}},
+	}
+	if got := aggregateProposalIDSummary(proofs); got != "7..9" {
+		t.Fatalf("unexpected proposal id summary: %s", got)
 	}
 }
 

@@ -3,6 +3,7 @@ package api
 import (
 	"encoding/json"
 	"errors"
+	"fmt"
 	"log"
 	"net/http"
 
@@ -78,11 +79,11 @@ func NewServer(service prover.Service) http.Handler {
 		}
 
 		log.Printf(
-			"completed prove/shasta request schema=%s chain_id=%d block_count=%d input_prefix=%q",
+			"completed prove/shasta request schema=%s proposal_id=%d chain_id=%d block_count=%d",
 			req.Schema,
+			validated.Carry.TransitionInput.ProposalID,
 			req.Payload.ChainID,
 			len(req.Payload.Blocks),
-			shortInputPrefix(result.Input),
 		)
 		writeJSON(w, http.StatusOK, protocol.Success(result))
 	})
@@ -132,22 +133,26 @@ func NewServer(service prover.Service) http.Handler {
 		}
 
 		log.Printf(
-			"completed prove/shasta-aggregate request schema=%s proof_count=%d input_prefix=%q",
+			"completed prove/shasta-aggregate request schema=%s proposal_ids=%s proof_count=%d",
 			req.Schema,
+			aggregateProposalIDSummary(validated.Proofs),
 			len(req.Payload.Proofs),
-			shortInputPrefix(result.Input),
 		)
 		writeJSON(w, http.StatusOK, protocol.Success(result))
 	})
 	return mux
 }
 
-func shortInputPrefix(input string) string {
-	const prefixLen = 12
-	if len(input) <= prefixLen {
-		return input
+func aggregateProposalIDSummary(proofs []prover.AggregateProofView) string {
+	if len(proofs) == 0 {
+		return "none"
 	}
-	return input[:prefixLen] + "..."
+	first := proofs[0].Carry.TransitionInput.ProposalID
+	last := proofs[len(proofs)-1].Carry.TransitionInput.ProposalID
+	if first == last {
+		return fmt.Sprintf("%d", first)
+	}
+	return fmt.Sprintf("%d..%d", first, last)
 }
 
 func writeError(w http.ResponseWriter, statusCode int, code, message string) {
