@@ -177,8 +177,8 @@ git checkout enable-gaiko2
 python scripts/regression/stress_shasta_proposal.py \
   --network taiko_masaya \
   --l1-network hoodi \
-  --l2-rpc <masaya-l2-rpc-url> \
-  --l1-rpc <hoodi-l1-rpc-url> \
+  --l2-rpc "${MASAYA_L2_RPC_URL}" \
+  --l1-rpc "${HOODI_L1_RPC_URL}" \
   --proposal-ids "$(seq -s, 25027 25227)" \
   --discover-only \
   --proposal-out /tmp/masaya-25027-25227.discovery.json
