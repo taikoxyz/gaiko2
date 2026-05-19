@@ -4,11 +4,13 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"log"
 	"net/http"
 	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"runtime"
+	"strings"
 	"testing"
 
 	"github.com/taikoxyz/gaiko2/internal/protocol"
@@ -85,6 +87,67 @@ func TestNewServerReturnsSuccessEnvelope(t *testing.T) {
 	}
 	if resp.Result == nil || resp.Result.Input != "0xinput" {
 		t.Fatalf("unexpected result payload: %+v", resp.Result)
+	}
+}
+
+func TestNewServerLogsProveSuccess(t *testing.T) {
+	var logs bytes.Buffer
+	prevWriter := log.Writer()
+	prevFlags := log.Flags()
+	log.SetOutput(&logs)
+	log.SetFlags(0)
+	t.Cleanup(func() {
+		log.SetOutput(prevWriter)
+		log.SetFlags(prevFlags)
+	})
+
+	server := NewServer(fakeService{
+		result: protocol.ProofResult{
+			Input: "0xinput",
+		},
+	})
+	req := httptest.NewRequest(
+		http.MethodPost,
+		"/prove/shasta",
+		bytes.NewReader(loadSharedShastaRequestJSON(t)),
+	)
+	recorder := httptest.NewRecorder()
+
+	server.ServeHTTP(recorder, req)
+
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("unexpected status: %d", recorder.Code)
+	}
+	if !strings.Contains(logs.String(), "completed prove/shasta request") {
+		t.Fatalf("expected success log, got %q", logs.String())
+	}
+}
+
+func TestNewServerLogsAggregateFailure(t *testing.T) {
+	var logs bytes.Buffer
+	prevWriter := log.Writer()
+	prevFlags := log.Flags()
+	log.SetOutput(&logs)
+	log.SetFlags(0)
+	t.Cleanup(func() {
+		log.SetOutput(prevWriter)
+		log.SetFlags(prevFlags)
+	})
+
+	server := NewServer(fakeService{})
+	req := httptest.NewRequest(http.MethodPost, "/prove/shasta-aggregate", bytes.NewBufferString(`{
+		"schema":"raiko2-shasta-aggregate-request-v1",
+		"payload":{"proofs":[]}
+	}`))
+	recorder := httptest.NewRecorder()
+
+	server.ServeHTTP(recorder, req)
+
+	if recorder.Code != http.StatusBadRequest {
+		t.Fatalf("unexpected status: %d", recorder.Code)
+	}
+	if !strings.Contains(logs.String(), "failed prove/shasta-aggregate request") {
+		t.Fatalf("expected failure log, got %q", logs.String())
 	}
 }
 

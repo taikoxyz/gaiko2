@@ -3,6 +3,7 @@ package api
 import (
 	"encoding/json"
 	"errors"
+	"log"
 	"net/http"
 
 	"github.com/taikoxyz/gaiko2/internal/protocol"
@@ -37,12 +38,21 @@ func NewServer(service prover.Service) http.Handler {
 
 		var req protocol.ShastaRequest
 		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			log.Printf("failed prove/shasta request code=%s message=%q", "INVALID_JSON", err.Error())
 			writeError(w, http.StatusBadRequest, "INVALID_JSON", err.Error())
 			return
 		}
 
 		validated, err := prover.ValidateRequest(req)
 		if err != nil {
+			log.Printf(
+				"failed prove/shasta request schema=%s chain_id=%d block_count=%d code=%s message=%q",
+				req.Schema,
+				req.Payload.ChainID,
+				len(req.Payload.Blocks),
+				"INVALID_REQUEST",
+				err.Error(),
+			)
 			writeError(w, http.StatusBadRequest, "INVALID_REQUEST", err.Error())
 			return
 		}
@@ -55,10 +65,25 @@ func NewServer(service prover.Service) http.Handler {
 				statusCode = http.StatusNotImplemented
 				code = "NOT_IMPLEMENTED"
 			}
+			log.Printf(
+				"failed prove/shasta request schema=%s chain_id=%d block_count=%d code=%s message=%q",
+				req.Schema,
+				req.Payload.ChainID,
+				len(req.Payload.Blocks),
+				code,
+				err.Error(),
+			)
 			writeError(w, statusCode, code, err.Error())
 			return
 		}
 
+		log.Printf(
+			"completed prove/shasta request schema=%s chain_id=%d block_count=%d input=%s",
+			req.Schema,
+			req.Payload.ChainID,
+			len(req.Payload.Blocks),
+			result.Input,
+		)
 		writeJSON(w, http.StatusOK, protocol.Success(result))
 	})
 	mux.HandleFunc(proveShastaAggregatePath, func(w http.ResponseWriter, r *http.Request) {
@@ -69,12 +94,20 @@ func NewServer(service prover.Service) http.Handler {
 
 		var req protocol.ShastaAggregateRequest
 		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			log.Printf("failed prove/shasta-aggregate request code=%s message=%q", "INVALID_JSON", err.Error())
 			writeError(w, http.StatusBadRequest, "INVALID_JSON", err.Error())
 			return
 		}
 
 		validated, err := prover.ValidateAggregateRequest(req)
 		if err != nil {
+			log.Printf(
+				"failed prove/shasta-aggregate request schema=%s proof_count=%d code=%s message=%q",
+				req.Schema,
+				len(req.Payload.Proofs),
+				"INVALID_REQUEST",
+				err.Error(),
+			)
 			writeError(w, http.StatusBadRequest, "INVALID_REQUEST", err.Error())
 			return
 		}
@@ -87,10 +120,23 @@ func NewServer(service prover.Service) http.Handler {
 				statusCode = http.StatusNotImplemented
 				code = "NOT_IMPLEMENTED"
 			}
+			log.Printf(
+				"failed prove/shasta-aggregate request schema=%s proof_count=%d code=%s message=%q",
+				req.Schema,
+				len(req.Payload.Proofs),
+				code,
+				err.Error(),
+			)
 			writeError(w, statusCode, code, err.Error())
 			return
 		}
 
+		log.Printf(
+			"completed prove/shasta-aggregate request schema=%s proof_count=%d input=%s",
+			req.Schema,
+			len(req.Payload.Proofs),
+			result.Input,
+		)
 		writeJSON(w, http.StatusOK, protocol.Success(result))
 	})
 	return mux

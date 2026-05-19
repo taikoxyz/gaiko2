@@ -61,6 +61,17 @@ func run(args []string, stdout io.Writer) error {
 		if err != nil {
 			return err
 		}
+		_, _ = fmt.Fprintf(
+			stdout,
+			"starting gaiko2 provider mode=%s tee_type=%s fork=%s instance_id=%d config_dir=%s secret_dir=%s listen=%s\n",
+			normalizedProvingMode(cfg.Mode),
+			strings.TrimSpace(cfg.TeeType),
+			strings.TrimSpace(cfg.Fork),
+			cfg.InstanceID,
+			cfg.ConfigDir,
+			cfg.SecretDir,
+			addr,
+		)
 		service, err := prover.NewConfiguredReplayService(cfg, nil)
 		if err != nil {
 			return err
@@ -74,6 +85,14 @@ func run(args []string, stdout io.Writer) error {
 	default:
 		return fmt.Errorf("unknown command %q", args[0])
 	}
+}
+
+func normalizedProvingMode(mode string) string {
+	mode = strings.ToLower(strings.TrimSpace(mode))
+	if mode == "" {
+		return prover.ProvingModeNative
+	}
+	return mode
 }
 
 func formatListeningAddr(addr net.Addr) string {
