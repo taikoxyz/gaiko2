@@ -11,6 +11,44 @@ import (
 	"testing"
 )
 
+func TestRunServerPrintsStartupSummary(t *testing.T) {
+	prevListen := listenFn
+	prevServe := serveFn
+	t.Cleanup(func() {
+		listenFn = prevListen
+		serveFn = prevServe
+	})
+
+	setEnv(t, "GAIKO2_PROVING_MODE", "native")
+	setEnv(t, "GAIKO2_FORK", "shasta")
+	setEnv(t, "GAIKO2_INSTANCE_ID", "11")
+	setEnv(t, "GAIKO2_CONFIG_DIR", "/var/lib/gaiko2/config")
+	setEnv(t, "GAIKO2_SECRET_DIR", "/var/lib/gaiko2/secrets")
+
+	listenFn = func(network, addr string) (net.Listener, error) {
+		return fakeListener{addr: fakeAddr("127.0.0.1:18080")}, nil
+	}
+	serveFn = func(net.Listener, http.Handler) error {
+		return errors.New("stop server")
+	}
+
+	var stdout bytes.Buffer
+	err := run([]string{"server", ":18080"}, &stdout)
+	if err == nil || err.Error() != "stop server" {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	output := stdout.String()
+	if !strings.Contains(output, "starting gaiko2 provider") {
+		t.Fatalf("expected startup summary, got %q", output)
+	}
+	if !strings.Contains(output, "mode=native") ||
+		!strings.Contains(output, "fork=shasta") ||
+		!strings.Contains(output, "instance_id=11") {
+		t.Fatalf("expected startup fields, got %q", output)
+	}
+}
+
 func TestRunServerPrintsListeningAddress(t *testing.T) {
 	prevListen := listenFn
 	prevServe := serveFn
@@ -174,3 +212,13 @@ type fakeAddr string
 
 func (a fakeAddr) Network() string { return "tcp" }
 func (a fakeAddr) String() string  { return string(a) }
+
+func setEnv(t *testing.T, key, value string) {
+	t.Helper()
+	if err := os.Setenv(key, value); err != nil {
+		t.Fatalf("set env %s: %v", key, err)
+	}
+	t.Cleanup(func() {
+		_ = os.Unsetenv(key)
+	})
+}
