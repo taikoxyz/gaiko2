@@ -87,7 +87,7 @@ Use this when the goal is real quote-bearing proofs.
 
 The canonical deployment flow is already documented in:
 
-- [docs/deployment/sgx-docker.md](https://github.com/taikoxyz/gaiko2/blob/main/docs/deployment/sgx-docker.md)
+- [docs/deployment/sgx-docker.md](sgx-docker.md)
 
 At minimum, the delegated agent needs to:
 
