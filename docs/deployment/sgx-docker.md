@@ -36,7 +36,7 @@ This is the key safety property of the deployment model:
 - rollback is just starting the previous release again
 - each release keeps its own image tag, port, hook config, and SGX state
 
-`gaiko2` still uses one repo-root [compose.yaml](https://github.com/taikoxyz/gaiko2/blob/main/compose.yaml).
+`gaiko2` still uses one repo-root [compose.yaml](../../compose.yaml).
 The deploy script selects a release by passing a release-specific:
 
 - compose project name
