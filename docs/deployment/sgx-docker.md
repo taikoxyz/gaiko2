@@ -3,6 +3,8 @@
 This guide describes the intended production-style deployment flow for `gaiko2`
 as a standalone SGX proving service.
 
+Run commands from the `gaiko2` checkout root unless a step says otherwise.
+
 The operator entry point is:
 
 ```bash
@@ -34,7 +36,7 @@ This is the key safety property of the deployment model:
 - rollback is just starting the previous release again
 - each release keeps its own image tag, port, hook config, and SGX state
 
-`gaiko2` still uses one repo-root [compose.yaml](/home/yue/works/taiko/gaiko2/compose.yaml).
+`gaiko2` still uses one repo-root [compose.yaml](https://github.com/taikoxyz/gaiko2/blob/main/compose.yaml).
 The deploy script selects a release by passing a release-specific:
 
 - compose project name
@@ -52,15 +54,13 @@ The host must provide:
 If you already operate `raiko` SGX infrastructure, reuse the same PCCS setup.
 The longer host-side PCCS instructions remain in:
 
-- [raiko/docs/README_Docker_and_RA.md](/home/yue/works/taiko/raiko/docs/README_Docker_and_RA.md)
-- [How to deploy SGX Server 2269673143d680798482d2ce9367f7c8.md](/home/yue/works/taiko/How%20to%20deploy%20SGX%20Server%202269673143d680798482d2ce9367f7c8.md)
+- [raiko/docs/README_Docker_and_RA.md](https://github.com/taikoxyz/raiko/blob/main/docs/README_Docker_and_RA.md)
 
 ## 3. Build or Select the Image
 
 If you want a local image:
 
 ```bash
-cd /home/yue/works/taiko/gaiko2
 ./scripts/build-image.sh tee latest
 ```
 
@@ -79,7 +79,6 @@ operator-friendly alias such as `v1.0.0` or `2026-04-15-hotfix`.
 Example:
 
 ```bash
-cd /home/yue/works/taiko/gaiko2
 ./scripts/deploy-tee.sh \
   --fork shasta \
   --release v1.0.0 \
@@ -172,7 +171,7 @@ Then invoke:
 
 An example hook contract is included at:
 
-- [register-hook.example.sh](/home/yue/works/taiko/gaiko2/scripts/register-hook.example.sh)
+- [register-hook.example.sh](https://github.com/taikoxyz/gaiko2/blob/main/scripts/register-hook.example.sh)
 
 The hook receives:
 
@@ -292,8 +291,6 @@ No re-bootstrap is needed for rollback.
 ## 9. Example End-to-End Flow
 
 ```bash
-cd /home/yue/works/taiko/gaiko2
-
 ./scripts/build-image.sh tee latest
 
 ./scripts/deploy-tee.sh \

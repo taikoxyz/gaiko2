@@ -5,12 +5,12 @@ Shasta execution packet with request `schema: "raiko2-shasta-request-v1"`, deriv
 `raiko2` shared GuestInput fixture:
 
 - source:
-  `/home/yue/works/taiko/raiko2/tests/fixtures/shasta_guest_input_taiko_mainnet_proposal_2222_l2_5412225_5412416.json`
+  [raiko2/tests/fixtures/shasta_guest_input_taiko_mainnet_proposal_2222_l2_5412225_5412416.json](https://github.com/taikoxyz/raiko2/blob/main/tests/fixtures/shasta_guest_input_taiko_mainnet_proposal_2222_l2_5412225_5412416.json)
 
 Regenerate it from the canonical `raiko2` adapter with:
 
 ```bash
-cd /home/yue/works/taiko/raiko2
+cd <raiko2-checkout>
 cargo run -p raiko2-prover --no-default-features --example dump_gaiko2_shasta_fixture -- \
   tests/fixtures/shasta_guest_input_taiko_mainnet_proposal_2222_l2_5412225_5412416.json \
   ../gaiko2/testdata/shasta_request_taiko_mainnet_proposal_2222_l2_5412225_5412416.json

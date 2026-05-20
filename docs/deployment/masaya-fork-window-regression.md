@@ -4,6 +4,9 @@ This runbook explains how to validate `gaiko2` against the Masaya proposal
 window `25027..25227`, including the `SHASTA -> UNZEN` transition around
 proposal `25127`.
 
+Unless a step explicitly switches to `raiko2`, run commands from the `gaiko2`
+checkout root.
+
 ## Goal
 
 Run the real `gaiko2` `/prove/shasta` path over a known Masaya interval and
@@ -36,24 +39,25 @@ It consumes already-adapted `raiko2` Shasta request JSON and replays it.
 Before touching the interval, verify the local Go surface:
 
 ```bash
-cd /home/yue/works/taiko/gaiko2
 go test ./internal/api ./internal/prover ./internal/protocol ./cmd/gaiko2
 ```
 
 ## Required External Inputs
 
-Use the same live RPCs that the current `raiko2` regression used:
+Set RPC endpoints explicitly before running discovery or preflight:
 
-- L2 Masaya RPC: `<masaya-l2-rpc-url>`
-- L1 Hoodi RPC: `<hoodi-l1-rpc-url>`
+```bash
+export MASAYA_L2_RPC_URL=<your-masaya-l2-rpc-url>
+export HOODI_L1_RPC_URL=<your-hoodi-l1-rpc-url>
+```
 
 The checked-in fixed fork-transition case lives in the `raiko2`
 `enable-gaiko2` branch:
 
-- `test/guest_inputs/shasta/taiko_masaya/proposals/proposal_25125.json`
-- `test/guest_inputs/shasta/taiko_masaya/proposals/proposal_25126.json`
-- `test/guest_inputs/shasta/taiko_masaya/proposals/proposal_25127.json`
-- `test/guest_inputs/shasta/taiko_masaya/suites/shasta_unzen_transition.json`
+- [proposal_25125.json](https://github.com/taikoxyz/raiko2/blob/enable-gaiko2/test/guest_inputs/shasta/taiko_masaya/proposals/proposal_25125.json)
+- [proposal_25126.json](https://github.com/taikoxyz/raiko2/blob/enable-gaiko2/test/guest_inputs/shasta/taiko_masaya/proposals/proposal_25126.json)
+- [proposal_25127.json](https://github.com/taikoxyz/raiko2/blob/enable-gaiko2/test/guest_inputs/shasta/taiko_masaya/proposals/proposal_25127.json)
+- [shasta_unzen_transition.json](https://github.com/taikoxyz/raiko2/blob/enable-gaiko2/test/guest_inputs/shasta/taiko_masaya/suites/shasta_unzen_transition.json)
 
 Use those three proposals first as the fixed sanity check before the wider
 `25027..25227` interval.
@@ -65,7 +69,6 @@ Use those three proposals first as the fixed sanity check before the wider
 Use this when you only need replay correctness and envelope shape:
 
 ```bash
-cd /home/yue/works/taiko/gaiko2
 GAIKO2_PROVING_MODE=native \
 GAIKO2_FORK=shasta \
 GAIKO2_INSTANCE_ID=0xDEADC0DE \
@@ -84,7 +87,7 @@ Use this when the goal is real quote-bearing proofs.
 
 The canonical deployment flow is already documented in:
 
-- `docs/deployment/sgx-docker.md`
+- [docs/deployment/sgx-docker.md](https://github.com/taikoxyz/gaiko2/blob/main/docs/deployment/sgx-docker.md)
 
 At minimum, the delegated agent needs to:
 
@@ -99,7 +102,6 @@ At minimum, the delegated agent needs to:
 If using the local tee Docker image:
 
 ```bash
-cd /home/yue/works/taiko/gaiko2
 ./scripts/build-image.sh tee local
 ```
 
@@ -143,7 +145,7 @@ All proposal discovery and packet adaptation currently comes from `raiko2`.
 Use the three checked-in Masaya fixtures from `raiko2` `enable-gaiko2`:
 
 ```bash
-cd /home/yue/works/taiko/raiko2
+cd <raiko2-checkout>
 git checkout enable-gaiko2
 
 for id in 25125 25126 25127; do
@@ -171,7 +173,7 @@ Success criteria for each request:
 First discover proposal tuples from `raiko2`:
 
 ```bash
-cd /home/yue/works/taiko/raiko2
+cd <raiko2-checkout>
 git checkout enable-gaiko2
 
 python scripts/regression/stress_shasta_proposal.py \
@@ -196,8 +198,8 @@ The command shape for one proposal is:
 cargo run -r -p preflight -- \
   --network taiko_masaya \
   --l1-network hoodi \
-  --rpc-url <masaya-l2-rpc-url> \
-  --l1-rpc-url <hoodi-l1-rpc-url> \
+  --rpc-url "${MASAYA_L2_RPC_URL}" \
+  --l1-rpc-url "${HOODI_L1_RPC_URL}" \
   --proposal-id <proposal-id> \
   --l1-inclusion-block-number <l1-inclusion-block-number> \
   --last-anchor-block-number <last-anchor-block-number> \

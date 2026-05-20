@@ -70,7 +70,7 @@ Expected: PASS
 **Step 5: Commit**
 
 ```bash
-cd /home/yue/works/taiko/raiko2
+cd <raiko2-checkout>
 git add crates/prover/src/lib.rs crates/prover/src/gaiko2/protocol.rs crates/prover/tests/gaiko2_protocol_roundtrip.rs
 git commit -m "feat(prover): define gaiko2 shasta protocol envelope"
 ```
@@ -138,7 +138,7 @@ Expected: PASS
 **Step 5: Commit**
 
 ```bash
-cd /home/yue/works/taiko/raiko2
+cd <raiko2-checkout>
 git add crates/prover/src/gaiko2/adapter.rs crates/prover/src/gaiko2/protocol.rs crates/prover/tests/gaiko2_adapter.rs
 git commit -m "feat(prover): adapt shasta guest input to gaiko2 packet"
 ```
@@ -174,7 +174,7 @@ func TestShastaV1RoundTrip(t *testing.T) {
 
 **Step 2: Run test to verify it fails**
 
-Run: `cd /home/yue/works/taiko/gaiko2 && go test ./internal/protocol/...`
+Run: `cd <gaiko2-checkout> && go test ./internal/protocol/...`
 
 Expected: FAIL because the module and protocol package do not exist yet.
 
@@ -194,14 +194,14 @@ type ShastaPayload struct {
 
 **Step 4: Run test to verify it passes**
 
-Run: `cd /home/yue/works/taiko/gaiko2 && go test ./internal/protocol/...`
+Run: `cd <gaiko2-checkout> && go test ./internal/protocol/...`
 
 Expected: PASS
 
 **Step 5: Commit**
 
 ```bash
-cd /home/yue/works/taiko/gaiko2
+cd <gaiko2-checkout>
 git init
 git add go.mod README.md cmd/gaiko2/main.go internal/protocol/shasta_v1.go internal/protocol/shasta_v1_test.go
 git commit -m "feat: scaffold gaiko2 protocol module"
@@ -230,7 +230,7 @@ func TestValidateRequestRejectsCheckpointMismatch(t *testing.T) {
 
 **Step 2: Run test to verify it fails**
 
-Run: `cd /home/yue/works/taiko/gaiko2 && go test ./internal/prover -run TestValidateRequestRejectsCheckpointMismatch -v`
+Run: `cd <gaiko2-checkout> && go test ./internal/prover -run TestValidateRequestRejectsCheckpointMismatch -v`
 
 Expected: FAIL because validation logic does not exist.
 
@@ -255,14 +255,14 @@ func ReplayBlocks(ctx context.Context, req protocol.ShastaRequest) (*ReplayResul
 
 **Step 4: Run test to verify it passes**
 
-Run: `cd /home/yue/works/taiko/gaiko2 && go test ./internal/prover -run TestValidateRequestRejectsCheckpointMismatch -v`
+Run: `cd <gaiko2-checkout> && go test ./internal/prover -run TestValidateRequestRejectsCheckpointMismatch -v`
 
 Expected: PASS
 
 **Step 5: Commit**
 
 ```bash
-cd /home/yue/works/taiko/gaiko2
+cd <gaiko2-checkout>
 git add internal/prover/validate.go internal/prover/replay.go internal/prover/types.go internal/prover/replay_test.go
 git commit -m "feat: add gaiko2 packet validation and replay core"
 ```
@@ -291,7 +291,7 @@ func TestProveHandlerReturnsProofEnvelope(t *testing.T) {
 
 **Step 2: Run test to verify it fails**
 
-Run: `cd /home/yue/works/taiko/gaiko2 && go test ./internal/api -run TestProveHandlerReturnsProofEnvelope -v`
+Run: `cd <gaiko2-checkout> && go test ./internal/api -run TestProveHandlerReturnsProofEnvelope -v`
 
 Expected: FAIL because the HTTP route does not exist.
 
@@ -315,14 +315,14 @@ func (h *Handler) ProveShastaProposal(w http.ResponseWriter, r *http.Request) {
 
 **Step 4: Run test to verify it passes**
 
-Run: `cd /home/yue/works/taiko/gaiko2 && go test ./internal/api -run TestProveHandlerReturnsProofEnvelope -v`
+Run: `cd <gaiko2-checkout> && go test ./internal/api -run TestProveHandlerReturnsProofEnvelope -v`
 
 Expected: PASS
 
 **Step 5: Commit**
 
 ```bash
-cd /home/yue/works/taiko/gaiko2
+cd <gaiko2-checkout>
 git add internal/api/server.go internal/api/handler.go internal/prover/prove.go internal/tee/provider.go internal/api/handler_test.go
 git commit -m "feat: expose gaiko2 shasta prove endpoint"
 ```
@@ -378,7 +378,7 @@ Expected: PASS
 **Step 5: Commit**
 
 ```bash
-cd /home/yue/works/taiko/raiko2
+cd <raiko2-checkout>
 git add crates/prover/src/lib.rs crates/prover/src/gaiko2/mod.rs crates/prover/src/gaiko2/client.rs crates/prover/tests/gaiko2_client.rs
 git commit -m "feat(prover): add gaiko2 remote prover client"
 ```
@@ -434,7 +434,7 @@ Expected: PASS
 **Step 5: Commit**
 
 ```bash
-cd /home/yue/works/taiko/raiko2
+cd <raiko2-checkout>
 git add bin/raiko2/src/config/prover.rs bin/raiko2/src/server/state/mod.rs bin/raiko2/src/server/handlers/proof.rs config.example.toml bin/raiko2/src/server/e2e.rs
 git commit -m "feat(server): route sgx proofs to gaiko2"
 ```
@@ -486,7 +486,7 @@ Expected: PASS
 **Step 5: Commit**
 
 ```bash
-cd /home/yue/works/taiko/raiko2
+cd <raiko2-checkout>
 git add crates/prover/tests/fixtures/gaiko2_shasta_v1_request.json crates/prover/tests/fixtures/gaiko2_proof_v1_response.json README.md docs/API.md
 git commit -m "docs: add gaiko2 protocol fixtures and wiring docs"
 ```
@@ -499,36 +499,36 @@ git commit -m "docs: add gaiko2 protocol fixtures and wiring docs"
 
 **Step 1: Run focused Rust tests**
 
-Run: `cd /home/yue/works/taiko/raiko2 && cargo test -p raiko2-prover gaiko2_protocol_roundtrip gaiko2_adapter gaiko2_client -- --nocapture`
+Run: `cd <raiko2-checkout> && cargo test -p raiko2-prover gaiko2_protocol_roundtrip gaiko2_adapter gaiko2_client -- --nocapture`
 
 Expected: PASS
 
 **Step 2: Run focused Go tests**
 
-Run: `cd /home/yue/works/taiko/gaiko2 && go test ./internal/protocol/... ./internal/prover ./internal/api`
+Run: `cd <gaiko2-checkout> && go test ./internal/protocol/... ./internal/prover ./internal/api`
 
 Expected: PASS
 
 **Step 3: Run the `raiko2` server route tests**
 
-Run: `cd /home/yue/works/taiko/raiko2 && cargo test -p raiko2 sgx_requests_route_to_shasta_sgx_remote_pipeline -- --nocapture`
+Run: `cd <raiko2-checkout> && cargo test -p raiko2 sgx_requests_route_to_shasta_sgx_remote_pipeline -- --nocapture`
 
 Expected: PASS
 
 **Step 4: Run formatting**
 
-Run: `cd /home/yue/works/taiko/raiko2 && cargo fmt --all`
+Run: `cd <raiko2-checkout> && cargo fmt --all`
 
 Expected: PASS
 
-Run: `cd /home/yue/works/taiko/gaiko2 && gofmt -w ./cmd ./internal`
+Run: `cd <gaiko2-checkout> && gofmt -w ./cmd ./internal`
 
 Expected: PASS
 
 **Step 5: Commit**
 
 ```bash
-cd /home/yue/works/taiko/raiko2
+cd <raiko2-checkout>
 git add .
 git commit -m "test: verify gaiko2 shasta v1 integration"
 ```
