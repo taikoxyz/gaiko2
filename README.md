@@ -28,8 +28,8 @@ go test ./...
 
 The main replay regression uses:
 
-- [testdata/shasta_request_taiko_mainnet_proposal_2222_l2_5412225_5412416.json](https://github.com/taikoxyz/gaiko2/blob/main/testdata/shasta_request_taiko_mainnet_proposal_2222_l2_5412225_5412416.json)
-- [internal/prover/replay_fixture_test.go](https://github.com/taikoxyz/gaiko2/blob/main/internal/prover/replay_fixture_test.go)
+- [testdata/shasta_request_taiko_mainnet_proposal_2222_l2_5412225_5412416.json](testdata/shasta_request_taiko_mainnet_proposal_2222_l2_5412225_5412416.json)
+- [internal/prover/replay_fixture_test.go](internal/prover/replay_fixture_test.go)
 
 ## Server
 
