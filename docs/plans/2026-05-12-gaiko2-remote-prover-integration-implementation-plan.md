@@ -222,7 +222,7 @@ Expected: local server listens on `127.0.0.1:8080` or `0.0.0.0:8080`.
 Run:
 
 ```bash
-cd /home/yue/works/taiko/raiko2
+cd <raiko2-checkout>
 RAIKO2_REMOTE_PROVER_BASE_URL=http://127.0.0.1:8080 \
 cargo test -p raiko2-prover --no-default-features \
   --test remote_prover_conformance -- --ignored --nocapture

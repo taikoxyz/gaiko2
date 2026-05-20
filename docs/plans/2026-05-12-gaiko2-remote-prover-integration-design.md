@@ -112,24 +112,24 @@ The aggregate flow remains:
 
 Implementation will touch these code paths:
 
-- [internal/protocol/shasta_v1.go](/home/yue/works/taiko/gaiko2/internal/protocol/shasta_v1.go)
-- [internal/prover/validate.go](/home/yue/works/taiko/gaiko2/internal/prover/validate.go)
-- [internal/prover/aggregate_validate.go](/home/yue/works/taiko/gaiko2/internal/prover/aggregate_validate.go)
+- [internal/protocol/shasta_v1.go](https://github.com/taikoxyz/gaiko2/blob/main/internal/protocol/shasta_v1.go)
+- [internal/prover/validate.go](https://github.com/taikoxyz/gaiko2/blob/main/internal/prover/validate.go)
+- [internal/prover/aggregate_validate.go](https://github.com/taikoxyz/gaiko2/blob/main/internal/prover/aggregate_validate.go)
 
 Tests and fixtures that must be updated:
 
-- [internal/protocol/shasta_v1_test.go](/home/yue/works/taiko/gaiko2/internal/protocol/shasta_v1_test.go)
-- [internal/prover/validate_test.go](/home/yue/works/taiko/gaiko2/internal/prover/validate_test.go)
-- [internal/prover/aggregate_test.go](/home/yue/works/taiko/gaiko2/internal/prover/aggregate_test.go)
-- [internal/api/server_test.go](/home/yue/works/taiko/gaiko2/internal/api/server_test.go)
-- [internal/prover/replay_fixture_test.go](/home/yue/works/taiko/gaiko2/internal/prover/replay_fixture_test.go)
-- [testdata/shasta_request_taiko_mainnet_proposal_2222_l2_5412225_5412416.json](/home/yue/works/taiko/gaiko2/testdata/shasta_request_taiko_mainnet_proposal_2222_l2_5412225_5412416.json)
-- [testdata/README.md](/home/yue/works/taiko/gaiko2/testdata/README.md)
+- [internal/protocol/shasta_v1_test.go](https://github.com/taikoxyz/gaiko2/blob/main/internal/protocol/shasta_v1_test.go)
+- [internal/prover/validate_test.go](https://github.com/taikoxyz/gaiko2/blob/main/internal/prover/validate_test.go)
+- [internal/prover/aggregate_test.go](https://github.com/taikoxyz/gaiko2/blob/main/internal/prover/aggregate_test.go)
+- [internal/api/server_test.go](https://github.com/taikoxyz/gaiko2/blob/main/internal/api/server_test.go)
+- [internal/prover/replay_fixture_test.go](https://github.com/taikoxyz/gaiko2/blob/main/internal/prover/replay_fixture_test.go)
+- [testdata/shasta_request_taiko_mainnet_proposal_2222_l2_5412225_5412416.json](https://github.com/taikoxyz/gaiko2/blob/main/testdata/shasta_request_taiko_mainnet_proposal_2222_l2_5412225_5412416.json)
+- [testdata/README.md](https://github.com/taikoxyz/gaiko2/blob/main/testdata/README.md)
 
 Documentation that should be synchronized:
 
-- [README.md](/home/yue/works/taiko/gaiko2/README.md)
-- [docs/deployment/masaya-fork-window-regression.md](/home/yue/works/taiko/gaiko2/docs/deployment/masaya-fork-window-regression.md)
+- [README.md](https://github.com/taikoxyz/gaiko2/blob/main/README.md)
+- [docs/deployment/masaya-fork-window-regression.md](https://github.com/taikoxyz/gaiko2/blob/main/docs/deployment/masaya-fork-window-regression.md)
 
 ## Testing Strategy
 
@@ -141,7 +141,7 @@ Black-box conformance against `raiko2` must be run from a `raiko2` checkout, not
 repository root:
 
 ```bash
-cd /home/yue/works/taiko/raiko2
+cd <raiko2-checkout>
 RAIKO2_REMOTE_PROVER_BASE_URL=http://127.0.0.1:8080 \
 cargo test -p raiko2-prover --no-default-features \
   --test remote_prover_conformance -- --ignored --nocapture

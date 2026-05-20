@@ -128,7 +128,6 @@ current packet shape can really replay on `taiko-geth`.
 The current verification command is:
 
 ```bash
-cd /home/yue/works/taiko/gaiko2
 go test ./...
 ```
 

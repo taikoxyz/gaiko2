@@ -22,21 +22,21 @@ with `taiko-geth` and producing a TEE proof envelope.
 Run the current native test suite with:
 
 ```bash
-cd /home/yue/works/taiko/gaiko2
+cd gaiko2
 go test ./...
 ```
 
 The main replay regression uses:
 
-- [testdata/shasta_request_taiko_mainnet_proposal_2222_l2_5412225_5412416.json](/home/yue/works/taiko/gaiko2/testdata/shasta_request_taiko_mainnet_proposal_2222_l2_5412225_5412416.json)
-- [internal/prover/replay_fixture_test.go](/home/yue/works/taiko/gaiko2/internal/prover/replay_fixture_test.go)
+- [testdata/shasta_request_taiko_mainnet_proposal_2222_l2_5412225_5412416.json](testdata/shasta_request_taiko_mainnet_proposal_2222_l2_5412225_5412416.json)
+- [internal/prover/replay_fixture_test.go](internal/prover/replay_fixture_test.go)
 
 ## Server
 
 Start the service with:
 
 ```bash
-cd /home/yue/works/taiko/gaiko2
+cd gaiko2
 go run ./cmd/gaiko2 server
 ```
 
@@ -65,7 +65,7 @@ later signing.
 Bootstrap the local tee state with:
 
 ```bash
-cd /home/yue/works/taiko/gaiko2
+cd gaiko2
 GAIKO2_PROVING_MODE=tee GAIKO2_TEE_TYPE=ego \
   GAIKO2_CONFIG_DIR=/tmp/gaiko2-config \
   GAIKO2_SECRET_DIR=/tmp/gaiko2-secrets \
@@ -99,7 +99,7 @@ GAIKO2_ATTESTATION_PATH=/opt/gaiko2/etc/attestation.json \
 Build an image with:
 
 ```bash
-cd /home/yue/works/taiko/gaiko2
+cd gaiko2
 ./scripts/build-image.sh native latest
 ./scripts/build-image.sh tee latest
 ```
@@ -129,7 +129,7 @@ For release-based SGX deployment, the operator entry point is:
 For the full runbook, including bootstrap, external registration, rollback, and
 log-based troubleshooting, see:
 
-- [SGX Docker deployment guide](/home/yue/works/taiko/gaiko2/docs/deployment/sgx-docker.md)
+- [SGX Docker deployment guide](https://github.com/taikoxyz/gaiko2/blob/main/docs/deployment/sgx-docker.md)
 
 The compose file defaults `PCCS_HOST` to `host.docker.internal:8081` and adds the
 host gateway mapping automatically, which works well when your local `pccs`
@@ -188,7 +188,7 @@ docker run --rm \
 
 ## Docs
 
-- [Shasta V1 design plan](/home/yue/works/taiko/gaiko2/docs/plans/2026-04-12-gaiko2-shasta-v1-design.md)
-- [Shasta V1 implementation plan](/home/yue/works/taiko/gaiko2/docs/plans/2026-04-12-gaiko2-shasta-v1-implementation-plan.md)
-- [SGX Docker deployment guide](/home/yue/works/taiko/gaiko2/docs/deployment/sgx-docker.md)
-- [Current baseline](/home/yue/works/taiko/gaiko2/docs/baselines/2026-04-13-gaiko2-v1-baseline.md)
+- [Shasta V1 design plan](https://github.com/taikoxyz/gaiko2/blob/main/docs/plans/2026-04-12-gaiko2-shasta-v1-design.md)
+- [Shasta V1 implementation plan](https://github.com/taikoxyz/gaiko2/blob/main/docs/plans/2026-04-12-gaiko2-shasta-v1-implementation-plan.md)
+- [SGX Docker deployment guide](https://github.com/taikoxyz/gaiko2/blob/main/docs/deployment/sgx-docker.md)
+- [Current baseline](https://github.com/taikoxyz/gaiko2/blob/main/docs/baselines/2026-04-13-gaiko2-v1-baseline.md)
