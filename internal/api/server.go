@@ -18,7 +18,6 @@ const (
 	healthzPath              = "/healthz"
 	proveShastaPath          = "/prove/shasta"
 	proveShastaAggregatePath = "/prove/shasta-aggregate"
-	DefaultMaxBodyBytes      = 64 << 20
 )
 
 func NewServer(service prover.Service) http.Handler {
@@ -177,9 +176,6 @@ var errRequestTooLarge = errors.New("request body exceeds configured limit")
 
 func normalizeServerConfig(cfg ServerConfig) ServerConfig {
 	cfg.APIKey = strings.TrimSpace(cfg.APIKey)
-	if cfg.MaxBodyBytes <= 0 {
-		cfg.MaxBodyBytes = DefaultMaxBodyBytes
-	}
 	return cfg
 }
 
@@ -206,7 +202,9 @@ func requestAPIKey(r *http.Request) string {
 }
 
 func decodeRequestJSON(w http.ResponseWriter, r *http.Request, maxBodyBytes int64, value any) error {
-	r.Body = http.MaxBytesReader(w, r.Body, maxBodyBytes)
+	if maxBodyBytes > 0 {
+		r.Body = http.MaxBytesReader(w, r.Body, maxBodyBytes)
+	}
 	decoder := json.NewDecoder(r.Body)
 	if err := decoder.Decode(value); err != nil {
 		var maxBytesErr *http.MaxBytesError

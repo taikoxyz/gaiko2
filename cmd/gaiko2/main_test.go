@@ -9,6 +9,7 @@ import (
 	"os"
 	"strings"
 	"testing"
+	"time"
 )
 
 func TestRunServerPrintsStartupSummary(t *testing.T) {
@@ -71,6 +72,39 @@ func TestRunServerPrintsListeningAddress(t *testing.T) {
 	}
 	if !strings.Contains(stdout.String(), "listening on 127.0.0.1:18080") {
 		t.Fatalf("expected startup log, got %q", stdout.String())
+	}
+}
+
+func TestRunServerDoesNotLimitProvingDurationAtHTTPServer(t *testing.T) {
+	prevListen := listenFn
+	prevServe := serveFn
+	t.Cleanup(func() {
+		listenFn = prevListen
+		serveFn = prevServe
+	})
+
+	listenFn = func(network, addr string) (net.Listener, error) {
+		return fakeListener{addr: fakeAddr("127.0.0.1:18080")}, nil
+	}
+	serveFn = func(_ net.Listener, server *http.Server) error {
+		if server.ReadHeaderTimeout != 10*time.Second {
+			t.Fatalf("unexpected read header timeout: %s", server.ReadHeaderTimeout)
+		}
+		if server.ReadTimeout != 0 || server.WriteTimeout != 0 || server.IdleTimeout != 0 {
+			t.Fatalf(
+				"unexpected body/proving timeouts: read=%s write=%s idle=%s",
+				server.ReadTimeout,
+				server.WriteTimeout,
+				server.IdleTimeout,
+			)
+		}
+		return errors.New("stop server")
+	}
+
+	var stdout bytes.Buffer
+	err := run([]string{"server", ":18080"}, &stdout)
+	if err == nil || err.Error() != "stop server" {
+		t.Fatalf("unexpected error: %v", err)
 	}
 }
 
@@ -143,6 +177,23 @@ func TestRunServerTEERequiresAPIKey(t *testing.T) {
 	err := run([]string{"server"}, &stdout)
 	if err == nil || err.Error() != "GAIKO2_API_KEY is required in tee mode" {
 		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
+func TestAPIServerConfigLeavesBodyLimitDisabledByDefault(t *testing.T) {
+	t.Cleanup(func() {
+		_ = os.Unsetenv("GAIKO2_API_KEY")
+		_ = os.Unsetenv("GAIKO2_MAX_BODY_BYTES")
+	})
+	_ = os.Unsetenv("GAIKO2_API_KEY")
+	_ = os.Unsetenv("GAIKO2_MAX_BODY_BYTES")
+
+	cfg, err := apiServerConfigFromEnv("native")
+	if err != nil {
+		t.Fatalf("api config: %v", err)
+	}
+	if cfg.MaxBodyBytes != 0 {
+		t.Fatalf("expected default body limit disabled, got %d", cfg.MaxBodyBytes)
 	}
 }
 

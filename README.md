@@ -61,7 +61,7 @@ Optional proving configuration:
 
 - `GAIKO2_PROVING_MODE=native|tee`
 - `GAIKO2_API_KEY=<secret>`; required in `tee` mode
-- `GAIKO2_MAX_BODY_BYTES=67108864`
+- `GAIKO2_MAX_BODY_BYTES=<bytes>`; optional opt-in request body cap, disabled by default
 - `GAIKO2_TEE_TYPE=ego`
 - `GAIKO2_CONFIG_DIR=/path/to/config`
 - `GAIKO2_SECRET_DIR=/path/to/secrets`

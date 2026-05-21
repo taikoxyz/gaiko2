@@ -133,6 +133,13 @@ func TestNewServerAcceptsBearerAPIKey(t *testing.T) {
 	}
 }
 
+func TestNormalizeServerConfigLeavesBodyLimitDisabledByDefault(t *testing.T) {
+	cfg := normalizeServerConfig(ServerConfig{})
+	if cfg.MaxBodyBytes != 0 {
+		t.Fatalf("expected default body limit disabled, got %d", cfg.MaxBodyBytes)
+	}
+}
+
 func TestNewServerRejectsOversizedProvingRequest(t *testing.T) {
 	server := NewServerWithConfig(fakeService{}, ServerConfig{MaxBodyBytes: 8})
 	req := httptest.NewRequest(http.MethodPost, "/prove/shasta", bytes.NewBufferString(`{"schema":"x"}`))

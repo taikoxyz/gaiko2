@@ -32,9 +32,6 @@ const (
 	envMaxBodyBytes    = "GAIKO2_MAX_BODY_BYTES"
 
 	serverReadHeaderTimeout = 10 * time.Second
-	serverReadTimeout       = 5 * time.Minute
-	serverWriteTimeout      = 10 * time.Minute
-	serverIdleTimeout       = 2 * time.Minute
 )
 
 func main() {
@@ -97,9 +94,6 @@ func run(args []string, stdout io.Writer) error {
 		return serveFn(listener, &http.Server{
 			Handler:           api.NewServerWithConfig(service, apiCfg),
 			ReadHeaderTimeout: serverReadHeaderTimeout,
-			ReadTimeout:       serverReadTimeout,
-			WriteTimeout:      serverWriteTimeout,
-			IdleTimeout:       serverIdleTimeout,
 		})
 	default:
 		return fmt.Errorf("unknown command %q", args[0])
@@ -116,7 +110,7 @@ func apiServerConfigFromEnv(mode string) (api.ServerConfig, error) {
 		return api.ServerConfig{}, fmt.Errorf("%s is required in tee mode", envAPIKey)
 	}
 
-	maxBodyBytes := int64(api.DefaultMaxBodyBytes)
+	maxBodyBytes := int64(0)
 	if value := strings.TrimSpace(os.Getenv(envMaxBodyBytes)); value != "" {
 		parsed, err := strconv.ParseInt(value, 10, 64)
 		if err != nil || parsed <= 0 {
