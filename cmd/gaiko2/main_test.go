@@ -9,7 +9,6 @@ import (
 	"os"
 	"strings"
 	"testing"
-	"time"
 )
 
 func TestRunServerPrintsStartupSummary(t *testing.T) {
@@ -75,7 +74,7 @@ func TestRunServerPrintsListeningAddress(t *testing.T) {
 	}
 }
 
-func TestRunServerDoesNotLimitProvingDurationAtHTTPServer(t *testing.T) {
+func TestRunServerDoesNotSetHTTPServerTimeouts(t *testing.T) {
 	prevListen := listenFn
 	prevServe := serveFn
 	t.Cleanup(func() {
@@ -87,12 +86,13 @@ func TestRunServerDoesNotLimitProvingDurationAtHTTPServer(t *testing.T) {
 		return fakeListener{addr: fakeAddr("127.0.0.1:18080")}, nil
 	}
 	serveFn = func(_ net.Listener, server *http.Server) error {
-		if server.ReadHeaderTimeout != 10*time.Second {
-			t.Fatalf("unexpected read header timeout: %s", server.ReadHeaderTimeout)
-		}
-		if server.ReadTimeout != 0 || server.WriteTimeout != 0 || server.IdleTimeout != 0 {
+		if server.ReadHeaderTimeout != 0 ||
+			server.ReadTimeout != 0 ||
+			server.WriteTimeout != 0 ||
+			server.IdleTimeout != 0 {
 			t.Fatalf(
-				"unexpected body/proving timeouts: read=%s write=%s idle=%s",
+				"unexpected server timeouts: read_header=%s read=%s write=%s idle=%s",
+				server.ReadHeaderTimeout,
 				server.ReadTimeout,
 				server.WriteTimeout,
 				server.IdleTimeout,

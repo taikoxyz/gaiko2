@@ -10,7 +10,6 @@ import (
 	"os"
 	"strconv"
 	"strings"
-	"time"
 
 	"github.com/taikoxyz/gaiko2/internal/api"
 	"github.com/taikoxyz/gaiko2/internal/prover"
@@ -30,8 +29,6 @@ const (
 	envAttestationPath = "GAIKO2_ATTESTATION_PATH"
 	envAPIKey          = "GAIKO2_API_KEY"
 	envMaxBodyBytes    = "GAIKO2_MAX_BODY_BYTES"
-
-	serverReadHeaderTimeout = 10 * time.Second
 )
 
 func main() {
@@ -92,8 +89,7 @@ func run(args []string, stdout io.Writer) error {
 		}
 		_, _ = fmt.Fprintf(stdout, "listening on %s\n", formatListeningAddr(listener.Addr()))
 		return serveFn(listener, &http.Server{
-			Handler:           api.NewServerWithConfig(service, apiCfg),
-			ReadHeaderTimeout: serverReadHeaderTimeout,
+			Handler: api.NewServerWithConfig(service, apiCfg),
 		})
 	default:
 		return fmt.Errorf("unknown command %q", args[0])
