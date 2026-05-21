@@ -9,3 +9,4 @@ docs
 testdata
 *.log
 *.out
+docker/enclave-key.pem

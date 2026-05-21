@@ -62,6 +62,16 @@ slugify() {
 ensure_release_args() {
     [[ -n "${FORK}" ]] || die "--fork is required"
     [[ -n "${RELEASE}" ]] || die "--release is required"
+    validate_path_component "fork" "${FORK}"
+    validate_path_component "release" "${RELEASE}"
+}
+
+validate_path_component() {
+    local label="$1"
+    local value="$2"
+    if [[ ! "${value}" =~ ^[A-Za-z0-9][A-Za-z0-9._-]*$ ]]; then
+        die "${label} must match ^[A-Za-z0-9][A-Za-z0-9._-]*$: ${value}"
+    fi
 }
 
 release_dir() {
@@ -117,6 +127,9 @@ upsert_env() {
     local key="$2"
     local value="$3"
     local escaped
+    if [[ "${value}" == *$'\n'* || "${value}" == *$'\r'* ]]; then
+        die "env value for ${key} must not contain newlines"
+    fi
     escaped=$(escape_sed_replacement "${value}")
     if grep -q "^${key}=" "${file}"; then
         sed -i "s|^${key}=.*$|${key}=${escaped}|" "${file}"
@@ -186,10 +199,22 @@ load_release_env() {
     local file
     file=$(release_env_file)
     [[ -f "${file}" ]] || die "release env missing: ${file}"
-    set -a
-    # shellcheck disable=SC1090
-    source "${file}"
-    set +a
+    while IFS= read -r line || [[ -n "${line}" ]]; do
+        line="${line#"${line%%[![:space:]]*}"}"
+        line="${line%"${line##*[![:space:]]}"}"
+        [[ -z "${line}" || "${line}" == \#* ]] && continue
+        [[ "${line}" == *=* ]] || die "invalid env line in ${file}: ${line}"
+        local key="${line%%=*}"
+        local value="${line#*=}"
+        [[ "${key}" =~ ^[A-Za-z_][A-Za-z0-9_]*$ ]] || die "invalid env key in ${file}: ${key}"
+        case "${key}" in
+        GAIKO2_TEE_IMAGE|GAIKO2_NATIVE_IMAGE|GAIKO2_EGO_SIGNING_KEY|GAIKO2_TEE_PORT|GAIKO2_NATIVE_PORT|GAIKO2_CONFIG_DIR_HOST|GAIKO2_SECRET_DIR_HOST|GAIKO2_TEE_TYPE|GAIKO2_FORK|GAIKO2_INSTANCE_ID|GAIKO2_REGISTER_HOOK|GAIKO2_API_KEY|GAIKO2_MAX_BODY_BYTES|GAIKO2_ALLOW_INSECURE_PCCS|PCCS_HOST)
+            export "${key}=${value}"
+            ;;
+        *)
+            ;;
+        esac
+    done <"${file}"
 }
 
 resolve_hook() {
@@ -219,6 +244,7 @@ require_release_identity() {
     key_path=$(release_private_key)
     registered_path=$(release_registered_json)
     [[ -f "${key_path}" ]] || die "sealed key missing: ${key_path}. Run init first."
+    [[ -n "${GAIKO2_API_KEY:-}" ]] || die "api key is unresolved. Set GAIKO2_API_KEY in $(release_env_file)."
     if [[ -z "${GAIKO2_INSTANCE_ID:-}" && ! -f "${registered_path}" ]]; then
         die "instance id is unresolved. Set GAIKO2_INSTANCE_ID or write ${registered_path}."
     fi

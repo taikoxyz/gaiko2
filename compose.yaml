@@ -4,6 +4,8 @@ x-gaiko2-tee-common: &gaiko2-tee-common
   build:
     context: .
     dockerfile: docker/Dockerfile.tee
+    secrets:
+      - ego_signing_key
   image: ${GAIKO2_TEE_IMAGE:-gaiko2-tee:latest}
   environment:
     GAIKO2_PROVING_MODE: tee
@@ -13,6 +15,9 @@ x-gaiko2-tee-common: &gaiko2-tee-common
     GAIKO2_PORT: "8080"
     GAIKO2_FORK: ${GAIKO2_FORK:-}
     GAIKO2_INSTANCE_ID: ${GAIKO2_INSTANCE_ID:-}
+    GAIKO2_API_KEY: ${GAIKO2_API_KEY:-}
+    GAIKO2_MAX_BODY_BYTES: ${GAIKO2_MAX_BODY_BYTES:-67108864}
+    GAIKO2_ALLOW_INSECURE_PCCS: ${GAIKO2_ALLOW_INSECURE_PCCS:-0}
     PCCS_HOST: ${PCCS_HOST:-host.docker.internal:8081}
   devices:
     - /dev/sgx_enclave:/dev/sgx_enclave
@@ -32,6 +37,8 @@ services:
     environment:
       GAIKO2_PROVING_MODE: native
       GAIKO2_PORT: "8080"
+      GAIKO2_API_KEY: ${GAIKO2_API_KEY:-}
+      GAIKO2_MAX_BODY_BYTES: ${GAIKO2_MAX_BODY_BYTES:-67108864}
     ports:
       - "${GAIKO2_NATIVE_PORT:-8080}:8080"
     restart: unless-stopped
@@ -50,3 +57,7 @@ services:
     restart: unless-stopped
     profiles:
       - tee
+
+secrets:
+  ego_signing_key:
+    file: ${GAIKO2_EGO_SIGNING_KEY:-/dev/null}

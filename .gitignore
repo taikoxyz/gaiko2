@@ -13,3 +13,4 @@
 *.out
 *.log
 secrets/
+/docker/enclave-key.pem

@@ -8,6 +8,7 @@ GAIKO2_TEE_TYPE=${GAIKO2_TEE_TYPE:-ego}
 GAIKO2_CONFIG_DIR=${GAIKO2_CONFIG_DIR:-/var/lib/gaiko2/config}
 GAIKO2_SECRET_DIR=${GAIKO2_SECRET_DIR:-/var/lib/gaiko2/secrets}
 GAIKO2_ATTESTATION_PATH=${GAIKO2_ATTESTATION_PATH:-/opt/gaiko2/etc/attestation.json}
+GAIKO2_ALLOW_INSECURE_PCCS=${GAIKO2_ALLOW_INSECURE_PCCS:-0}
 SGX_QCNL_CONF=${SGX_QCNL_CONF:-/etc/sgx_default_qcnl.conf}
 
 mkdir -p "$GAIKO2_CONFIG_DIR" "$GAIKO2_SECRET_DIR"
@@ -19,6 +20,9 @@ fi
 if [[ -f "${SGX_QCNL_CONF}" ]]; then
     MY_PCCS_HOST=${PCCS_HOST:-pccs:8081}
     sed -i "s#https://localhost:8081#https://${MY_PCCS_HOST}#g" "${SGX_QCNL_CONF}" || true
+    if [[ "${GAIKO2_ALLOW_INSECURE_PCCS}" == "1" ]]; then
+        sed -i 's/,"use_secure_cert": true/,"use_secure_cert": false/' "${SGX_QCNL_CONF}" || true
+    fi
 fi
 
 if [[ -x /restart_aesm.sh ]]; then

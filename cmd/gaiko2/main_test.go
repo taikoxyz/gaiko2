@@ -28,7 +28,7 @@ func TestRunServerPrintsStartupSummary(t *testing.T) {
 	listenFn = func(network, addr string) (net.Listener, error) {
 		return fakeListener{addr: fakeAddr("127.0.0.1:18080")}, nil
 	}
-	serveFn = func(net.Listener, http.Handler) error {
+	serveFn = func(net.Listener, *http.Server) error {
 		return errors.New("stop server")
 	}
 
@@ -60,7 +60,7 @@ func TestRunServerPrintsListeningAddress(t *testing.T) {
 	listenFn = func(network, addr string) (net.Listener, error) {
 		return fakeListener{addr: fakeAddr("127.0.0.1:18080")}, nil
 	}
-	serveFn = func(net.Listener, http.Handler) error {
+	serveFn = func(net.Listener, *http.Server) error {
 		return errors.New("stop server")
 	}
 
@@ -102,7 +102,7 @@ func TestRunServerUsesPortFromEnv(t *testing.T) {
 		}
 		return fakeListener{addr: fakeAddr("127.0.0.1:19090")}, nil
 	}
-	serveFn = func(net.Listener, http.Handler) error {
+	serveFn = func(net.Listener, *http.Server) error {
 		return errors.New("stop server")
 	}
 
@@ -113,6 +113,36 @@ func TestRunServerUsesPortFromEnv(t *testing.T) {
 	}
 	if !strings.Contains(stdout.String(), "listening on 127.0.0.1:19090") {
 		t.Fatalf("expected startup log, got %q", stdout.String())
+	}
+}
+
+func TestRunServerTEERequiresAPIKey(t *testing.T) {
+	prevListen := listenFn
+	prevServe := serveFn
+	t.Cleanup(func() {
+		listenFn = prevListen
+		serveFn = prevServe
+	})
+
+	setEnv(t, "GAIKO2_PROVING_MODE", "tee")
+	t.Cleanup(func() {
+		_ = os.Unsetenv("GAIKO2_API_KEY")
+	})
+	_ = os.Unsetenv("GAIKO2_API_KEY")
+
+	listenFn = func(string, string) (net.Listener, error) {
+		t.Fatalf("server must fail before listening")
+		return nil, nil
+	}
+	serveFn = func(net.Listener, *http.Server) error {
+		t.Fatalf("server must fail before serving")
+		return nil
+	}
+
+	var stdout bytes.Buffer
+	err := run([]string{"server"}, &stdout)
+	if err == nil || err.Error() != "GAIKO2_API_KEY is required in tee mode" {
+		t.Fatalf("unexpected error: %v", err)
 	}
 }
 

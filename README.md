@@ -46,9 +46,22 @@ Probe liveness with:
 curl http://127.0.0.1:8080/healthz
 ```
 
+Proving endpoints can be protected with an API key:
+
+```bash
+GAIKO2_API_KEY=replace-with-secret go run ./cmd/gaiko2 server
+curl -X POST \
+  -H "Authorization: Bearer replace-with-secret" \
+  -H "Content-Type: application/json" \
+  --data @request.json \
+  http://127.0.0.1:8080/prove/shasta
+```
+
 Optional proving configuration:
 
 - `GAIKO2_PROVING_MODE=native|tee`
+- `GAIKO2_API_KEY=<secret>`; required in `tee` mode
+- `GAIKO2_MAX_BODY_BYTES=67108864`
 - `GAIKO2_TEE_TYPE=ego`
 - `GAIKO2_CONFIG_DIR=/path/to/config`
 - `GAIKO2_SECRET_DIR=/path/to/secrets`
@@ -101,22 +114,27 @@ Build an image with:
 ```bash
 cd gaiko2
 ./scripts/build-image.sh native latest
-./scripts/build-image.sh tee latest
+GAIKO2_EGO_SIGNING_KEY=/secure/path/private.pem ./scripts/build-image.sh tee latest
 ```
 
 Or directly:
 
 ```bash
 docker build -f docker/Dockerfile.native -t gaiko2-native:latest .
-docker build -f docker/Dockerfile.tee -t gaiko2-tee:latest .
+docker buildx build -f docker/Dockerfile.tee \
+  --secret id=ego_signing_key,src=/secure/path/private.pem \
+  --load -t gaiko2-tee:latest .
 ```
 
 Or use Compose profiles:
 
 ```bash
 docker compose up --build
-docker compose --profile tee-init run --rm gaiko2-tee-init
-docker compose --profile tee up --build gaiko2-tee
+GAIKO2_EGO_SIGNING_KEY=/secure/path/private.pem \
+  docker compose --profile tee-init run --rm gaiko2-tee-init
+GAIKO2_API_KEY=replace-with-secret \
+  GAIKO2_EGO_SIGNING_KEY=/secure/path/private.pem \
+  docker compose --profile tee up --build gaiko2-tee
 ```
 
 For release-based SGX deployment, the operator entry point is:
@@ -166,6 +184,7 @@ docker run --rm \
   --device /dev/sgx_provision \
   -p 8080:8080 \
   -e GAIKO2_PROVING_MODE=tee \
+  -e GAIKO2_API_KEY=replace-with-secret \
   -v /path/to/config:/var/lib/gaiko2/config \
   -v /path/to/secrets:/var/lib/gaiko2/secrets \
   gaiko2-tee:latest

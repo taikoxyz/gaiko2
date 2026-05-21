@@ -10,6 +10,7 @@ import (
 	"os"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/taikoxyz/gaiko2/internal/api"
 	"github.com/taikoxyz/gaiko2/internal/prover"
@@ -18,7 +19,7 @@ import (
 
 var (
 	listenFn           = net.Listen
-	serveFn            = http.Serve
+	serveFn            = serveHTTP
 	bootstrapCommandFn = runBootstrapCommand
 	checkCommandFn     = runCheckCommand
 	metadataCommandFn  = runMetadataCommand
@@ -27,6 +28,13 @@ var (
 const (
 	envPort            = "GAIKO2_PORT"
 	envAttestationPath = "GAIKO2_ATTESTATION_PATH"
+	envAPIKey          = "GAIKO2_API_KEY"
+	envMaxBodyBytes    = "GAIKO2_MAX_BODY_BYTES"
+
+	serverReadHeaderTimeout = 10 * time.Second
+	serverReadTimeout       = 5 * time.Minute
+	serverWriteTimeout      = 10 * time.Minute
+	serverIdleTimeout       = 2 * time.Minute
 )
 
 func main() {
@@ -61,10 +69,15 @@ func run(args []string, stdout io.Writer) error {
 		if err != nil {
 			return err
 		}
+		mode := normalizedProvingMode(cfg.Mode)
+		apiCfg, err := apiServerConfigFromEnv(mode)
+		if err != nil {
+			return err
+		}
 		_, _ = fmt.Fprintf(
 			stdout,
 			"starting gaiko2 provider mode=%s tee_type=%s fork=%s instance_id=%d config_dir=%s secret_dir=%s listen=%s\n",
-			normalizedProvingMode(cfg.Mode),
+			mode,
 			strings.TrimSpace(cfg.TeeType),
 			strings.TrimSpace(cfg.Fork),
 			cfg.InstanceID,
@@ -81,10 +94,41 @@ func run(args []string, stdout io.Writer) error {
 			return err
 		}
 		_, _ = fmt.Fprintf(stdout, "listening on %s\n", formatListeningAddr(listener.Addr()))
-		return serveFn(listener, api.NewServer(service))
+		return serveFn(listener, &http.Server{
+			Handler:           api.NewServerWithConfig(service, apiCfg),
+			ReadHeaderTimeout: serverReadHeaderTimeout,
+			ReadTimeout:       serverReadTimeout,
+			WriteTimeout:      serverWriteTimeout,
+			IdleTimeout:       serverIdleTimeout,
+		})
 	default:
 		return fmt.Errorf("unknown command %q", args[0])
 	}
+}
+
+func serveHTTP(listener net.Listener, server *http.Server) error {
+	return server.Serve(listener)
+}
+
+func apiServerConfigFromEnv(mode string) (api.ServerConfig, error) {
+	apiKey := strings.TrimSpace(os.Getenv(envAPIKey))
+	if mode == prover.ProvingModeTEE && apiKey == "" {
+		return api.ServerConfig{}, fmt.Errorf("%s is required in tee mode", envAPIKey)
+	}
+
+	maxBodyBytes := int64(api.DefaultMaxBodyBytes)
+	if value := strings.TrimSpace(os.Getenv(envMaxBodyBytes)); value != "" {
+		parsed, err := strconv.ParseInt(value, 10, 64)
+		if err != nil || parsed <= 0 {
+			return api.ServerConfig{}, fmt.Errorf("parse %s: expected positive integer", envMaxBodyBytes)
+		}
+		maxBodyBytes = parsed
+	}
+
+	return api.ServerConfig{
+		APIKey:       apiKey,
+		MaxBodyBytes: maxBodyBytes,
+	}, nil
 }
 
 func normalizedProvingMode(mode string) string {

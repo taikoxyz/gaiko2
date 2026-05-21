@@ -102,7 +102,7 @@ At minimum, the delegated agent needs to:
 If using the local tee Docker image:
 
 ```bash
-./scripts/build-image.sh tee local
+GAIKO2_EGO_SIGNING_KEY=/secure/path/private.pem ./scripts/build-image.sh tee local
 ```
 
 Then bootstrap:
@@ -114,6 +114,7 @@ docker run --rm \
   --device /dev/sgx_provision \
   -e GAIKO2_PROVING_MODE=tee \
   -e GAIKO2_FORK=shasta \
+  -e GAIKO2_API_KEY=replace-with-secret \
   -e PCCS_HOST=host.docker.internal:8081 \
   -v /path/to/config:/var/lib/gaiko2/config \
   -v /path/to/secrets:/var/lib/gaiko2/secrets \
@@ -154,6 +155,7 @@ for id in 25125 25126 25127; do
     /tmp/proposal_${id}.gaiko2-request.json
 
   curl -sS \
+    -H 'Authorization: Bearer replace-with-secret' \
     -H 'content-type: application/json' \
     --data-binary @/tmp/proposal_${id}.gaiko2-request.json \
     http://127.0.0.1:8080/prove/shasta
@@ -166,7 +168,8 @@ Success criteria for each request:
 - `status == "ok"`
 - `result.input` is present
 - `result.instance_address` is present
-- in tee mode, `result.quote` and `result.public_key` are present
+- `result.public_key` is present
+- in tee mode, the bootstrap JSON contains the quote used for registration
 
 ### Full `25027..25227` Interval
 
@@ -215,6 +218,7 @@ cargo run -r -p raiko2-prover --example dump_gaiko2_shasta_fixture -- \
   /tmp/proposal-<proposal-id>.gaiko2-request.json
 
 curl -sS \
+  -H 'Authorization: Bearer replace-with-secret' \
   -H 'content-type: application/json' \
   --data-binary @/tmp/proposal-<proposal-id>.gaiko2-request.json \
   http://127.0.0.1:8080/prove/shasta
@@ -230,7 +234,6 @@ The current healthy response looks like:
   "status": "ok",
   "result": {
     "proof": "0x...",
-    "quote": "0x...",
     "public_key": "0x...",
     "instance_address": "0x...",
     "input": "0x..."
@@ -238,8 +241,8 @@ The current healthy response looks like:
 }
 ```
 
-In `native` mode, `quote` may be omitted. In tee mode, `quote` and
-`public_key` should be present.
+`quote` is emitted by tee bootstrap metadata for registration, not by the
+regular proving response.
 
 ## Recommended Division Of Work
 

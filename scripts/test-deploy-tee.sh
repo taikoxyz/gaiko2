@@ -94,10 +94,20 @@ test_status_reports_generated_release_env() {
     assert_contains "${output}" "compose project: gaiko2-shasta-v1-0-0-rc-1"
 }
 
+test_rejects_path_traversal_release() {
+    local output="${tmpdir}/bad-release.out"
+    if ( main --fork shasta --release ../bad --deploy-root "${tmpdir}/deploy" status ) >"${output}" 2>&1; then
+        echo "expected path traversal release to fail" >&2
+        exit 1
+    fi
+    assert_contains "${output}" "release must match"
+}
+
 test_up_persists_port_override_for_existing_release() {
     local release_dir="${tmpdir}/deploy/shasta/v1.0.0-rc.1"
     : >"${release_dir}/secrets/priv.gaiko2.key"
     printf '{\n  "shasta": 1234\n}\n' >"${release_dir}/config/registered.gaiko2.json"
+    printf '\nGAIKO2_API_KEY=secret\n' >>"${release_dir}/.env"
 
     main \
         --fork shasta \
@@ -150,6 +160,7 @@ EOF
 test_status_reports_missing_bootstrap
 test_init_creates_release_state_and_uses_release_project
 test_status_reports_generated_release_env
+test_rejects_path_traversal_release
 test_up_persists_port_override_for_existing_release
 test_down_targets_only_the_release_service
 test_register_hook_receives_attestation_path

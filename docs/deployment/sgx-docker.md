@@ -51,6 +51,10 @@ The host must provide:
 - Docker and Docker Compose
 - a reachable PCCS endpoint
 
+The tee image keeps PCCS certificate verification enabled by default. For local
+lab PCCS endpoints with non-production certificates, set
+`GAIKO2_ALLOW_INSECURE_PCCS=1` explicitly in the release `.env`.
+
 If you already operate `raiko` SGX infrastructure, reuse the same PCCS setup.
 The longer host-side PCCS instructions remain in:
 
@@ -61,8 +65,11 @@ The longer host-side PCCS instructions remain in:
 If you want a local image:
 
 ```bash
-./scripts/build-image.sh tee latest
+GAIKO2_EGO_SIGNING_KEY=/secure/path/private.pem ./scripts/build-image.sh tee latest
 ```
+
+TEE image builds require a BuildKit secret for the EGo enclave signing key. Do
+not commit that key to this repository or bake it into the Dockerfile.
 
 If you want a published image, note the tag and pass it to `init` with
 `--tee-image`, for example:
@@ -100,6 +107,16 @@ Expected result:
 - `deploy/shasta/v1.0.0/config/bootstrap.gaiko2.json`
 - `deploy/shasta/v1.0.0/config/attestation.gaiko2.json`
 - `deploy/shasta/v1.0.0/secrets/priv.gaiko2.key`
+
+Before starting the server, set a non-empty API key in the release environment:
+
+```bash
+printf '\nGAIKO2_API_KEY=%s\n' '<replace-with-secret>' >> deploy/shasta/v1.0.0/.env
+```
+
+TEE server startup fails closed when `GAIKO2_API_KEY` is empty. `/healthz`
+remains unauthenticated; proving endpoints require `Authorization: Bearer
+<key>` or `X-API-Key: <key>`.
 
 The bootstrap JSON includes:
 
@@ -291,7 +308,7 @@ No re-bootstrap is needed for rollback.
 ## 9. Example End-to-End Flow
 
 ```bash
-./scripts/build-image.sh tee latest
+GAIKO2_EGO_SIGNING_KEY=/secure/path/private.pem ./scripts/build-image.sh tee latest
 
 ./scripts/deploy-tee.sh \
   --fork shasta \
@@ -304,6 +321,8 @@ No re-bootstrap is needed for rollback.
 # 1. write deploy/shasta/local-latest/config/registered.gaiko2.json
 # or
 # 2. set GAIKO2_INSTANCE_ID in deploy/shasta/local-latest/.env
+
+printf '\nGAIKO2_API_KEY=%s\n' '<replace-with-secret>' >> deploy/shasta/local-latest/.env
 
 ./scripts/deploy-tee.sh --fork shasta --release local-latest metadata
 ./scripts/deploy-tee.sh --fork shasta --release local-latest up
@@ -356,6 +375,7 @@ Typical causes:
 
 - wrong fork mapping in `registered.gaiko2.json`
 - missing sealed key
+- missing `GAIKO2_API_KEY`
 - port already in use
 - PCCS problems that prevented a valid bootstrap
 

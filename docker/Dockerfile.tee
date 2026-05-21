@@ -1,3 +1,5 @@
+# syntax=docker/dockerfile:1.7
+
 FROM ghcr.io/edgelesssys/ego-dev:v1.9.0 AS builder
 WORKDIR /opt/gaiko2
 
@@ -11,11 +13,13 @@ COPY scripts/write-attestation-metadata.sh ./scripts/write-attestation-metadata.
 RUN ego-go build -o gaiko2-ego ./cmd/gaiko2
 
 COPY ego/enclave.json .
-COPY docker/enclave-key.pem private.pem
 
-RUN mkdir -p /opt/gaiko2/etc && \
+RUN --mount=type=secret,id=ego_signing_key,target=/run/secrets/ego-signing-key.pem,required=true \
+    cp /run/secrets/ego-signing-key.pem private.pem && \
+    mkdir -p /opt/gaiko2/etc && \
     chmod +x ./scripts/write-attestation-metadata.sh && \
     ego sign && \
+    rm -f private.pem && \
     ./scripts/write-attestation-metadata.sh gaiko2-ego enclave.json /opt/gaiko2/etc/attestation.json && \
     ego bundle gaiko2-ego gaiko2
 
@@ -47,8 +51,7 @@ RUN apt-get update && \
     apt-get clean all && \
     rm -rf /var/lib/apt/lists/*
 
-RUN sed -i 's/#default quoting type = ecdsa_256/default quoting type = ecdsa_256/' /etc/aesmd.conf && \
-    sed -i 's/,"use_secure_cert": true/,"use_secure_cert": false/' /etc/sgx_default_qcnl.conf
+RUN sed -i 's/#default quoting type = ecdsa_256/default quoting type = ecdsa_256/' /etc/aesmd.conf
 
 RUN mkdir -p /opt/gaiko2/bin /opt/gaiko2/etc /var/lib/gaiko2/config /var/lib/gaiko2/secrets
 

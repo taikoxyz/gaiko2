@@ -90,6 +90,69 @@ func TestNewServerReturnsSuccessEnvelope(t *testing.T) {
 	}
 }
 
+func TestNewServerRequiresAPIKeyForProving(t *testing.T) {
+	server := NewServerWithConfig(fakeService{}, ServerConfig{APIKey: "secret"})
+	req := httptest.NewRequest(
+		http.MethodPost,
+		"/prove/shasta",
+		bytes.NewReader(loadSharedShastaRequestJSON(t)),
+	)
+	recorder := httptest.NewRecorder()
+
+	server.ServeHTTP(recorder, req)
+
+	if recorder.Code != http.StatusUnauthorized {
+		t.Fatalf("unexpected status: %d", recorder.Code)
+	}
+
+	var resp protocol.ProofResponse
+	if err := json.Unmarshal(recorder.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+	if resp.Error == nil || resp.Error.Code != "UNAUTHORIZED" {
+		t.Fatalf("unexpected error payload: %+v", resp.Error)
+	}
+}
+
+func TestNewServerAcceptsBearerAPIKey(t *testing.T) {
+	server := NewServerWithConfig(fakeService{
+		result: protocol.ProofResult{Input: "0xinput"},
+	}, ServerConfig{APIKey: "secret"})
+	req := httptest.NewRequest(
+		http.MethodPost,
+		"/prove/shasta",
+		bytes.NewReader(loadSharedShastaRequestJSON(t)),
+	)
+	req.Header.Set("Authorization", "Bearer secret")
+	recorder := httptest.NewRecorder()
+
+	server.ServeHTTP(recorder, req)
+
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("unexpected status: %d body=%s", recorder.Code, recorder.Body.String())
+	}
+}
+
+func TestNewServerRejectsOversizedProvingRequest(t *testing.T) {
+	server := NewServerWithConfig(fakeService{}, ServerConfig{MaxBodyBytes: 8})
+	req := httptest.NewRequest(http.MethodPost, "/prove/shasta", bytes.NewBufferString(`{"schema":"x"}`))
+	recorder := httptest.NewRecorder()
+
+	server.ServeHTTP(recorder, req)
+
+	if recorder.Code != http.StatusRequestEntityTooLarge {
+		t.Fatalf("unexpected status: %d body=%s", recorder.Code, recorder.Body.String())
+	}
+
+	var resp protocol.ProofResponse
+	if err := json.Unmarshal(recorder.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+	if resp.Error == nil || resp.Error.Code != "REQUEST_TOO_LARGE" {
+		t.Fatalf("unexpected error payload: %+v", resp.Error)
+	}
+}
+
 func TestNewServerLogsProveSuccess(t *testing.T) {
 	var logs bytes.Buffer
 	prevWriter := log.Writer()
