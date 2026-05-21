@@ -30,10 +30,11 @@ tee|ego)
     ;;
 esac
 
-docker buildx build . \
+docker buildx build \
     -f "$target_dockerfile" \
     --load \
     --platform linux/amd64 \
     -t "${image_name}:${tag}" \
     "${secret_args[@]}" \
-    --progress=plain
+    --progress=plain \
+    .
