@@ -6,6 +6,10 @@
     "proof_type": "tdxgeth",
     "protocol": "raiko2-remote-prover"
   },
+  "image": {
+    "format": "uki",
+    "kernel_cmdline": "console=tty0 console=ttyS0,115200n8 mitigations=auto,nosmt spec_store_bypass_disable=on"
+  },
   "components": [
     {
       "name": "gaiko2",
@@ -55,6 +59,14 @@
     "rtmr3": "0x..."
   },
   "statement_affecting_files": [
+    {
+      "path": "tdx/mkosi.build",
+      "sha256": "sha256"
+    },
+    {
+      "path": "tdx/mkosi.postinst",
+      "sha256": "sha256"
+    },
     {
       "path": "tdx/mkosi.extra/etc/systemd/system/gaiko2-tdxgeth.service",
       "sha256": "sha256"

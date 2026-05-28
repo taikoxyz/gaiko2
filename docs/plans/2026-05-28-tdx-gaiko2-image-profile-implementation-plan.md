@@ -2,9 +2,9 @@
 
 > **For Claude:** REQUIRED SUB-SKILL: Use superpowers:executing-plans to implement this plan task-by-task.
 
-**Goal:** Add a first-pass `tdx/` image profile skeleton for `tdxgeth` deployments.
+**Goal:** Add a first-pass buildable `tdx/` image profile for `tdxgeth` deployments.
 
-**Architecture:** Keep the profile in the gaiko2 repository. Bake service files and startup scripts into the measured VM image, and export a manifest that hashes binaries plus statement-affecting profile files. Do not introduce an independent image repository.
+**Architecture:** Keep the profile in the gaiko2 repository. Bake binaries, service files, and startup scripts into the measured VM image, and export a manifest that hashes binaries plus statement-affecting profile files. Do not introduce an independent image repository.
 
 **Tech Stack:** Bash, systemd, mkosi profile skeleton, JSON manifest
 
@@ -70,3 +70,25 @@
 
 **Commit:**
 - `git commit -m "feat: add tdx image profile"`
+
+### Task 5: Promote the skeleton to a buildable image profile
+
+**Files:**
+- Create: `tdx/mkosi.build`
+- Create: `tdx/mkosi.postinst`
+- Create: `tdx/mkosi.extra/etc/systemd/system/runtime-init.service`
+- Create: `tdx/mkosi.extra/usr/local/bin/runtime-init`
+- Create: `tdx/scripts/build-image.sh`
+- Create: `tdx/scripts/test-image-profile.sh`
+- Modify: `tdx/mkosi.conf`
+- Modify: `tdx/scripts/export-manifest.sh`
+
+**Steps:**
+- Install the four required binaries into the image.
+- Create service users/groups and enable all fixed services.
+- Initialize `/persistent`, JWT secret, and TDX device permissions before node/prover services.
+- Include mkosi build inputs and kernel cmdline in the release manifest.
+
+**Verification:**
+- `tdx/scripts/test-image-profile.sh`
+- `tdx/scripts/test-export-manifest.sh`

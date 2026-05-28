@@ -37,14 +37,27 @@ gaiko2 HTTP server.
 
 ## Build Shape
 
-`mkosi.conf` is a profile skeleton. A production image build pipeline still
-needs to provide:
+`mkosi.conf` now defines the first buildable image profile. The build expects
+prebuilt `taiko-geth`, `taiko-client`, and `tdxs` binaries, and builds `gaiko2`
+from this repository unless `GAIKO2_BIN` is provided.
 
-- pinned binary build steps or prebuilt binary inputs
-- user/group creation for `tdx`, `tdxs`, `taiko-geth`, `taiko-client`, and
-  `gaiko2`
-- a TDX-compatible kernel, initramfs, firmware, and platform profile
-- persistent disk setup mounted at `/persistent`
+```bash
+TAIKO_GETH_BIN=/path/to/taiko-geth \
+TAIKO_CLIENT_BIN=/path/to/taiko-client \
+TDXS_BIN=/path/to/tdxs \
+tdx/scripts/build-image.sh
+```
+
+The profile creates users/groups, enables the fixed systemd services, installs
+the four binaries, and runs `runtime-init` before the prover/node services.
+
+This is still not the final production-hardening layer. Before production, add:
+
+- verified TDX-compatible kernel/initramfs/firmware selection for the target
+  cloud or bare-metal host
+- rootfs immutability or dm-verity
+- RTMR[3] extension from the manifest/event log before `gaiko2 bootstrap`
+- cloud-specific custom image import/start automation
 
 ## Manifest
 
@@ -67,3 +80,20 @@ measurement field is missing.
 Generated manifests are written under `tdx/manifests/` and ignored by default.
 Upload the generated manifest with the VM image artifact and use its measurement
 fields in provider registration.
+
+## Functional SSH Test
+
+Before the clean image flow is ready, use an existing TDX-capable GCE VM only for
+functional validation:
+
+1. Install or copy the same four binaries into the VM.
+2. Copy the files under `tdx/mkosi.extra` into the matching absolute paths.
+3. Copy `tdx/mkosi.extra/etc/gaiko2/tdxgeth.env.example` to
+   `/etc/gaiko2/tdxgeth.env` and fill only operator-specific values.
+4. Run `systemctl daemon-reload`.
+5. Run `/usr/local/bin/runtime-init`.
+6. Start `tdxs`, `taiko-geth`, `taiko-client`, and `gaiko2-tdxgeth`.
+7. Run `tdx/scripts/smoke.sh` from outside or equivalent curl checks.
+
+This SSH path proves service compatibility only. It is not a production trust
+boundary because an operator can mutate the runtime after boot.

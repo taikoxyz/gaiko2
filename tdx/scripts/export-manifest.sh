@@ -48,6 +48,8 @@ profile_files_json() {
         cd "${REPO_ROOT}"
         find \
             tdx/mkosi.conf \
+            tdx/mkosi.build \
+            tdx/mkosi.postinst \
             tdx/mkosi.extra/etc/gaiko2 \
             tdx/mkosi.extra/etc/systemd/system \
             tdx/mkosi.extra/etc/tdxs \
@@ -75,6 +77,8 @@ GAIKO2_BIN=${GAIKO2_BIN:-/usr/bin/gaiko2}
 TAIKO_GETH_BIN=${TAIKO_GETH_BIN:-/usr/bin/taiko-geth}
 TAIKO_CLIENT_BIN=${TAIKO_CLIENT_BIN:-/usr/bin/taiko-client}
 TDXS_BIN=${TDXS_BIN:-/usr/bin/tdxs}
+KERNEL_CMDLINE=${KERNEL_CMDLINE:-$(awk -F= '/^KernelCommandLine=/ {print substr($0, index($0, "=") + 1)}' "${REPO_ROOT}/tdx/mkosi.conf")}
+export KERNEL_CMDLINE
 
 if [ "${STRICT}" = "1" ]; then
     : "${TDX_IMAGE_ID:?TDX_IMAGE_ID is required when STRICT=1}"
@@ -117,6 +121,10 @@ manifest = {
         "name": "tdx-gaiko2",
         "proof_type": "tdxgeth",
         "protocol": "raiko2-remote-prover",
+    },
+    "image": {
+        "format": "uki",
+        "kernel_cmdline": os.environ.get("KERNEL_CMDLINE"),
     },
     "components": components,
     "runtime": {

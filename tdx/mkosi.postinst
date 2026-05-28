@@ -1,0 +1,52 @@
+#!/usr/bin/env bash
+
+set -euo pipefail
+
+create_group() {
+    local group="$1"
+    mkosi-chroot getent group "${group}" >/dev/null || mkosi-chroot groupadd -r "${group}"
+}
+
+create_user() {
+    local user="$1"
+    local group="$2"
+    local extra_groups="${3:-}"
+
+    if ! mkosi-chroot id "${user}" >/dev/null 2>&1; then
+        mkosi-chroot useradd -r -m -s /usr/sbin/nologin -g "${group}" "${user}"
+    fi
+    if [ -n "${extra_groups}" ]; then
+        mkosi-chroot usermod -a -G "${extra_groups}" "${user}"
+    fi
+}
+
+create_group tdx
+create_group tdxs
+create_group taiko-geth
+create_group taiko-client
+create_group gaiko2
+
+create_user tdxs tdxs tdx
+create_user taiko-geth taiko-geth
+create_user taiko-client taiko-client
+create_user gaiko2 gaiko2 tdx
+
+install -d -m 0755 "${BUILDROOT}/persistent"
+install -d -m 0755 "${BUILDROOT}/var/lib/tdxs"
+install -d -m 0755 "${BUILDROOT}/var/lib/gaiko2"
+
+mkosi-chroot chown tdxs:tdxs /var/lib/tdxs
+mkosi-chroot chown gaiko2:gaiko2 /var/lib/gaiko2
+
+services=(
+    runtime-init.service
+    tdxs.socket
+    tdxs.service
+    taiko-geth.service
+    taiko-client.service
+    gaiko2-tdxgeth.service
+)
+
+for service in "${services[@]}"; do
+    mkosi-chroot systemctl enable "${service}"
+done

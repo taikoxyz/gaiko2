@@ -1,7 +1,7 @@
 [Unit]
 Description=TDX-local taiko-client driver
-After=network-online.target taiko-geth.service
-Requires=taiko-geth.service
+After=runtime-init.service network-online.target taiko-geth.service
+Requires=runtime-init.service taiko-geth.service
 
 [Service]
 User=taiko-client

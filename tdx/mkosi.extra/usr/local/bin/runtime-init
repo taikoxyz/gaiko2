@@ -1,0 +1,39 @@
+#!/usr/bin/env bash
+
+set -euo pipefail
+
+own_if_exists() {
+    local path="$1"
+    local owner="$2"
+    local mode="$3"
+
+    if [ -e "${path}" ]; then
+        chown "${owner}" "${path}" || true
+        chmod "${mode}" "${path}" || true
+    fi
+}
+
+mkdir -p \
+    /persistent/taiko-geth/geth \
+    /persistent/taiko-client \
+    /persistent/gaiko2/config \
+    /persistent/gaiko2/secrets \
+    /var/lib/tdxs
+
+if [ ! -f /persistent/taiko-geth/geth/jwtsecret ]; then
+    openssl rand -hex 32 > /persistent/taiko-geth/geth/jwtsecret
+fi
+chmod 0640 /persistent/taiko-geth/geth/jwtsecret
+
+chown -R taiko-geth:taiko-geth /persistent/taiko-geth
+chown -R taiko-client:taiko-client /persistent/taiko-client
+chown -R gaiko2:gaiko2 /persistent/gaiko2
+chgrp tdx /persistent/taiko-geth/geth/jwtsecret
+
+own_if_exists /dev/tdx_guest root:tdx 0660
+own_if_exists /dev/tdx-guest root:tdx 0660
+own_if_exists /dev/tpm0 root:tdx 0660
+own_if_exists /dev/tpmrm0 root:tdx 0660
+own_if_exists /sys/kernel/security/tpm0/binary_bios_measurements root:tdx 0440
+
+echo "tdx-gaiko2 runtime initialized"

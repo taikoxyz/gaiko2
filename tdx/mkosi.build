@@ -1,0 +1,24 @@
+#!/usr/bin/env bash
+
+set -euo pipefail
+
+install_binary() {
+    local name="$1"
+    local source_path="$2"
+    local target_path="$3"
+
+    if [ -z "${source_path}" ]; then
+        echo "${name} binary path is required" >&2
+        exit 1
+    fi
+    if [ ! -f "${source_path}" ]; then
+        echo "${name} binary not found: ${source_path}" >&2
+        exit 1
+    fi
+    install -D -m 0755 "${source_path}" "${DESTDIR}${target_path}"
+}
+
+install_binary gaiko2 "${GAIKO2_BIN:-}" /usr/bin/gaiko2
+install_binary taiko-geth "${TAIKO_GETH_BIN:-}" /usr/bin/taiko-geth
+install_binary taiko-client "${TAIKO_CLIENT_BIN:-}" /usr/bin/taiko-client
+install_binary tdxs "${TDXS_BIN:-}" /usr/bin/tdxs

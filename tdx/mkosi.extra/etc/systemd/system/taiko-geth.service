@@ -1,6 +1,7 @@
 [Unit]
 Description=TDX-local taiko-geth
-After=network-online.target
+After=runtime-init.service network-online.target
+Requires=runtime-init.service
 Wants=network-online.target
 
 [Service]

@@ -1,7 +1,7 @@
 [Unit]
 Description=TDX-Gaiko2 remote prover
-After=network-online.target tdxs.service taiko-geth.service taiko-client.service
-Requires=tdxs.service taiko-geth.service
+After=runtime-init.service network-online.target tdxs.service taiko-geth.service taiko-client.service
+Requires=runtime-init.service tdxs.service taiko-geth.service
 Wants=taiko-client.service
 
 [Service]

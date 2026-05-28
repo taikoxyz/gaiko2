@@ -1,0 +1,13 @@
+[Unit]
+Description=TDX-Gaiko2 runtime initialization
+DefaultDependencies=no
+After=local-fs.target
+Before=tdxs.service taiko-geth.service taiko-client.service gaiko2-tdxgeth.service
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/bin/runtime-init
+RemainAfterExit=yes
+
+[Install]
+WantedBy=multi-user.target
