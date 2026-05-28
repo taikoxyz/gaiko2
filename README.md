@@ -14,6 +14,9 @@ with `taiko-geth` and producing a TEE proof envelope.
   - `native`: sign the final input hash with the fixed GoldenTouch key.
   - `tee`: sign with an enclave-managed key; the bootstrap step emits the `ego`
     quote used by external registration flows.
+- `tdxgeth` mode is available for a measured TDX VM that runs `tdx-gaiko2`,
+  `taiko-geth`, `taiko-client`, and `tdxs` together. It verifies the request
+  against the local taiko-geth JSON-RPC endpoint before signing.
 - the checked-in shared fixture under `testdata/` is derived from a real
   `raiko2` GuestInput fixture and replays successfully.
 
@@ -48,13 +51,16 @@ curl http://127.0.0.1:8080/healthz
 
 Optional proving configuration:
 
-- `GAIKO2_PROVING_MODE=native|tee`
+- `GAIKO2_PROVING_MODE=native|tee|tdxgeth`
 - `GAIKO2_TEE_TYPE=ego`
+- `GAIKO2_TEE_TYPE=tdx` for `tdxgeth` mode
 - `GAIKO2_CONFIG_DIR=/path/to/config`
 - `GAIKO2_SECRET_DIR=/path/to/secrets`
 - `GAIKO2_INSTANCE_ID=0xDEADC0DE`
 - `GAIKO2_FORK=shasta`
 - `GAIKO2_PORT=8080`
+- `GAIKO2_TDXS_SOCKET=/var/tdxs.sock`
+- `GAIKO2_L2_RPC_URL=http://127.0.0.1:8545`
 
 If unset, `gaiko2` defaults to `native` mode.
 
@@ -86,6 +92,23 @@ enclave bootstrap runs.
 If an external registration script writes `registered.gaiko2.json` under
 `GAIKO2_CONFIG_DIR`, setting `GAIKO2_FORK=shasta` lets `gaiko2` resolve the tee
 instance id from that file instead of requiring `GAIKO2_INSTANCE_ID` directly.
+
+For TDX-Geth mode, the expected server environment is:
+
+```bash
+GAIKO2_PROVING_MODE=tdxgeth \
+GAIKO2_TEE_TYPE=tdx \
+GAIKO2_TDXS_SOCKET=/var/tdxs.sock \
+GAIKO2_L2_RPC_URL=http://127.0.0.1:8545 \
+GAIKO2_CONFIG_DIR=/persistent/gaiko2/config \
+GAIKO2_SECRET_DIR=/persistent/gaiko2/secrets \
+GAIKO2_FORK=shasta \
+gaiko2 server
+```
+
+`GAIKO2_L2_RPC_URL` must be loopback. The mode is intended for a measured TDX VM
+where local taiko-geth is started by taiko-client and public geth RPC/debug
+endpoints are not exposed outside the VM.
 
 Inspect the embedded tee image metadata with:
 
@@ -191,4 +214,5 @@ docker run --rm \
 - [Shasta V1 design plan](https://github.com/taikoxyz/gaiko2/blob/main/docs/plans/2026-04-12-gaiko2-shasta-v1-design.md)
 - [Shasta V1 implementation plan](https://github.com/taikoxyz/gaiko2/blob/main/docs/plans/2026-04-12-gaiko2-shasta-v1-implementation-plan.md)
 - [SGX Docker deployment guide](https://github.com/taikoxyz/gaiko2/blob/main/docs/deployment/sgx-docker.md)
+- [TDX-Geth deployment design](https://github.com/taikoxyz/gaiko2/blob/main/docs/deployment/tdx-gaiko2.md)
 - [Current baseline](https://github.com/taikoxyz/gaiko2/blob/main/docs/baselines/2026-04-13-gaiko2-v1-baseline.md)

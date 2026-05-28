@@ -51,6 +51,30 @@ func TestServiceConfigFromEnvRejectsUnknownRegisteredFork(t *testing.T) {
 	}
 }
 
+func TestServiceConfigFromEnvLoadsTDXGethConfig(t *testing.T) {
+	setenv(t, envProvingMode, ProvingModeTDXGeth)
+	setenv(t, envTEEType, tee.TypeTDX)
+	setenv(t, envTDXSocket, "/tmp/tdxs.sock")
+	setenv(t, envL2RPCURL, "http://127.0.0.1:9545")
+
+	cfg, err := ServiceConfigFromEnv()
+	if err != nil {
+		t.Fatalf("service config from env: %v", err)
+	}
+	if cfg.Mode != ProvingModeTDXGeth {
+		t.Fatalf("unexpected mode: %s", cfg.Mode)
+	}
+	if cfg.TeeType != tee.TypeTDX {
+		t.Fatalf("unexpected tee type: %s", cfg.TeeType)
+	}
+	if cfg.TDXSocket != "/tmp/tdxs.sock" {
+		t.Fatalf("unexpected tdx socket: %s", cfg.TDXSocket)
+	}
+	if cfg.L2RPCURL != "http://127.0.0.1:9545" {
+		t.Fatalf("unexpected l2 rpc url: %s", cfg.L2RPCURL)
+	}
+}
+
 func setenv(t *testing.T, key, value string) {
 	t.Helper()
 	prev, ok := os.LookupEnv(key)

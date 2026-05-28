@@ -8,6 +8,7 @@ GAIKO2_TEE_TYPE=${GAIKO2_TEE_TYPE:-ego}
 GAIKO2_CONFIG_DIR=${GAIKO2_CONFIG_DIR:-/var/lib/gaiko2/config}
 GAIKO2_SECRET_DIR=${GAIKO2_SECRET_DIR:-/var/lib/gaiko2/secrets}
 GAIKO2_ATTESTATION_PATH=${GAIKO2_ATTESTATION_PATH:-/opt/gaiko2/etc/attestation.json}
+GAIKO2_TDXS_SOCKET=${GAIKO2_TDXS_SOCKET:-/var/tdxs.sock}
 SGX_QCNL_CONF=${SGX_QCNL_CONF:-/etc/sgx_default_qcnl.conf}
 
 mkdir -p "$GAIKO2_CONFIG_DIR" "$GAIKO2_SECRET_DIR"
@@ -36,6 +37,7 @@ case "$1" in
         --tee-type "$GAIKO2_TEE_TYPE" \
         --secret-dir "$GAIKO2_SECRET_DIR" \
         --config-dir "$GAIKO2_CONFIG_DIR" \
+        --tdxs-socket "$GAIKO2_TDXS_SOCKET" \
         "$@"
     ;;
 --check|check)
@@ -43,6 +45,7 @@ case "$1" in
     exec "$GAIKO2_BIN" check \
         --tee-type "$GAIKO2_TEE_TYPE" \
         --secret-dir "$GAIKO2_SECRET_DIR" \
+        --tdxs-socket "$GAIKO2_TDXS_SOCKET" \
         "$@"
     ;;
 server|serve|s)

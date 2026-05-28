@@ -21,7 +21,11 @@ func NewEGoProvider(secretDir string) *EGoProvider {
 }
 
 func (p *EGoProvider) LoadQuote(instance common.Address) (Quote, error) {
-	report, err := enclave.GetRemoteReport(instance.Bytes())
+	return p.LoadQuoteForReportData(instance.Bytes())
+}
+
+func (p *EGoProvider) LoadQuoteForReportData(reportData []byte) (Quote, error) {
+	report, err := enclave.GetRemoteReport(reportData)
 	if err != nil {
 		return nil, err
 	}

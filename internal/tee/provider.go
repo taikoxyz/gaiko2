@@ -11,6 +11,8 @@ import (
 const (
 	privateKeyFilename = "priv.gaiko2.key"
 	TypeEGo            = "ego"
+	TypeTDX            = "tdx"
+	DefaultTDXSocket   = "/var/tdxs.sock"
 )
 
 // Provider persists the enclave-managed signing key and returns an attestation quote
@@ -21,9 +23,16 @@ type Provider interface {
 	SavePrivateKey(*ecdsa.PrivateKey) error
 }
 
+// ReportDataProvider returns an attestation quote bound to arbitrary report data.
+// TDX uses this for per-proof quotes over the signed input hash.
+type ReportDataProvider interface {
+	LoadQuoteForReportData([]byte) (Quote, error)
+}
+
 type Config struct {
 	Type      string
 	SecretDir string
+	TDXSocket string
 }
 
 func NewProvider(cfg Config) (Provider, error) {
@@ -38,6 +47,11 @@ func NewProvider(cfg Config) (Provider, error) {
 			return nil, fmt.Errorf("tee secret dir is required for %s provider", providerType)
 		}
 		return NewEGoProvider(cfg.SecretDir), nil
+	case TypeTDX:
+		if strings.TrimSpace(cfg.SecretDir) == "" {
+			return nil, fmt.Errorf("tee secret dir is required for %s provider", providerType)
+		}
+		return NewTDXProvider(cfg, nil), nil
 	default:
 		return nil, fmt.Errorf("unsupported tee type %q", cfg.Type)
 	}

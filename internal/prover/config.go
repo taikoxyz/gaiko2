@@ -17,6 +17,8 @@ const (
 	envConfigDir   = "GAIKO2_CONFIG_DIR"
 	envFork        = "GAIKO2_FORK"
 	envInstanceID  = "GAIKO2_INSTANCE_ID"
+	envTDXSocket   = "GAIKO2_TDXS_SOCKET"
+	envL2RPCURL    = "GAIKO2_L2_RPC_URL"
 )
 
 func ServiceConfigFromEnv() (ServiceConfig, error) {
@@ -26,6 +28,11 @@ func ServiceConfigFromEnv() (ServiceConfig, error) {
 		SecretDir: envOrDefault(envSecretDir, tee.DefaultSecretDir()),
 		ConfigDir: envOrDefault(envConfigDir, tee.DefaultConfigDir()),
 		Fork:      strings.TrimSpace(os.Getenv(envFork)),
+		TDXSocket: envOrDefault(envTDXSocket, tee.DefaultTDXSocket),
+		L2RPCURL:  envOrDefault(envL2RPCURL, DefaultLocalL2RPCURL),
+	}
+	if strings.EqualFold(cfg.Mode, ProvingModeTDXGeth) && cfg.TeeType == "" {
+		cfg.TeeType = tee.TypeTDX
 	}
 
 	instanceID := strings.TrimSpace(os.Getenv(envInstanceID))

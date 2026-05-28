@@ -13,8 +13,9 @@ import (
 )
 
 const (
-	ProvingModeNative = "native"
-	ProvingModeTEE    = "tee"
+	ProvingModeNative  = "native"
+	ProvingModeTEE     = "tee"
+	ProvingModeTDXGeth = "tdxgeth"
 )
 
 type ServiceConfig struct {
@@ -24,6 +25,8 @@ type ServiceConfig struct {
 	ConfigDir  string
 	Fork       string
 	InstanceID uint32
+	TDXSocket  string
+	L2RPCURL   string
 }
 
 type ProofSigner interface {
@@ -54,6 +57,12 @@ type TEEProofSigner struct {
 	instanceID uint32
 }
 
+type TDXProofSigner struct {
+	privateKey    *ecdsa.PrivateKey
+	instanceID    uint32
+	quoteProvider tee.ReportDataProvider
+}
+
 var newTEEProviderFn = tee.NewProvider
 
 func NewNativeProofSigner(instanceID uint32) *NativeProofSigner {
@@ -65,6 +74,51 @@ func NewTEEProofSigner(privateKey *ecdsa.PrivateKey, instanceID uint32) *TEEProo
 		privateKey: privateKey,
 		instanceID: instanceID,
 	}
+}
+
+func NewTDXProofSigner(
+	privateKey *ecdsa.PrivateKey,
+	instanceID uint32,
+	quoteProvider tee.ReportDataProvider,
+) *TDXProofSigner {
+	return &TDXProofSigner{
+		privateKey:    privateKey,
+		instanceID:    instanceID,
+		quoteProvider: quoteProvider,
+	}
+}
+
+func NewConfiguredService(cfg ServiceConfig, runner Runner) (Service, error) {
+	mode := strings.ToLower(strings.TrimSpace(cfg.Mode))
+	if mode == ProvingModeTDXGeth {
+		teeType := strings.TrimSpace(cfg.TeeType)
+		if teeType == "" {
+			teeType = tee.TypeTDX
+		}
+		provider, err := newTEEProviderFn(tee.Config{
+			Type:      teeType,
+			SecretDir: cfg.SecretDir,
+			TDXSocket: cfg.TDXSocket,
+		})
+		if err != nil {
+			return nil, err
+		}
+		privateKey, err := provider.LoadPrivateKey()
+		if err != nil {
+			return nil, fmt.Errorf("tdx bootstrap required: %w", err)
+		}
+		quoteProvider, ok := provider.(tee.ReportDataProvider)
+		if !ok {
+			return nil, fmt.Errorf("tee type %q does not support report-data quotes", teeType)
+		}
+		headers, err := newLocalL2HeaderSourceFn(cfg.L2RPCURL)
+		if err != nil {
+			return nil, err
+		}
+		return NewTDXGethService(headers, NewTDXProofSigner(privateKey, cfg.InstanceID, quoteProvider)), nil
+	}
+
+	return NewConfiguredReplayService(cfg, runner)
 }
 
 func NewConfiguredReplayService(cfg ServiceConfig, runner Runner) (ReplayService, error) {
@@ -81,6 +135,7 @@ func NewConfiguredReplayService(cfg ServiceConfig, runner Runner) (ReplayService
 		provider, err := newTEEProviderFn(tee.Config{
 			Type:      cfg.TeeType,
 			SecretDir: cfg.SecretDir,
+			TDXSocket: cfg.TDXSocket,
 		})
 		if err != nil {
 			return ReplayService{}, err
@@ -123,6 +178,27 @@ func (s *TEEProofSigner) SignHash(hash common.Hash) (SignerOutput, error) {
 func (s *TEEProofSigner) Identity() (SignerIdentity, error) {
 	if s.instanceID == 0 {
 		return SignerIdentity{}, fmt.Errorf("tee proving requires %s or a registered %s mapping", envInstanceID, envFork)
+	}
+	return signerIdentity(s.privateKey, s.instanceID), nil
+}
+
+func (s *TDXProofSigner) SignHash(hash common.Hash) (SignerOutput, error) {
+	if s.instanceID == 0 {
+		return SignerOutput{}, fmt.Errorf("tdxgeth proving requires %s or a registered %s mapping", envInstanceID, envFork)
+	}
+	if s.quoteProvider == nil {
+		return SignerOutput{}, fmt.Errorf("tdxgeth quote provider is not configured")
+	}
+	quote, err := s.quoteProvider.LoadQuoteForReportData(hash.Bytes())
+	if err != nil {
+		return SignerOutput{}, fmt.Errorf("load tdx quote: %w", err)
+	}
+	return buildSignerOutput(hash, s.privateKey, quote.Bytes(), s.instanceID)
+}
+
+func (s *TDXProofSigner) Identity() (SignerIdentity, error) {
+	if s.instanceID == 0 {
+		return SignerIdentity{}, fmt.Errorf("tdxgeth proving requires %s or a registered %s mapping", envInstanceID, envFork)
 	}
 	return signerIdentity(s.privateKey, s.instanceID), nil
 }

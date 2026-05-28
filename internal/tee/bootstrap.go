@@ -17,9 +17,12 @@ const (
 )
 
 type BootstrapData struct {
-	PublicKey       hexutil.Bytes  `json:"public_key"`
-	InstanceAddress common.Address `json:"new_instance"`
-	Quote           hexutil.Bytes  `json:"quote"`
+	PublicKey       hexutil.Bytes   `json:"public_key"`
+	InstanceAddress common.Address  `json:"new_instance"`
+	Quote           hexutil.Bytes   `json:"quote"`
+	Nonce           hexutil.Bytes   `json:"nonce,omitempty"`
+	IssuerType      string          `json:"issuer_type,omitempty"`
+	Metadata        json.RawMessage `json:"metadata,omitempty"`
 }
 
 type RegisteredForks map[string]uint64
@@ -39,11 +42,22 @@ func Bootstrap(provider Provider) (BootstrapData, error) {
 		return BootstrapData{}, fmt.Errorf("load tee quote: %w", err)
 	}
 
-	return BootstrapData{
+	data := BootstrapData{
 		PublicKey:       hexutil.Bytes(crypto.FromECDSAPub(&privateKey.PublicKey)),
 		InstanceAddress: instanceAddress,
 		Quote:           hexutil.Bytes(quote.Bytes()),
-	}, nil
+	}
+	if withNonce, ok := quote.(interface{ Nonce() []byte }); ok {
+		data.Nonce = hexutil.Bytes(withNonce.Nonce())
+	}
+	if withIssuer, ok := quote.(interface{ IssuerType() string }); ok {
+		data.IssuerType = withIssuer.IssuerType()
+	}
+	if withMetadata, ok := quote.(interface{ Metadata() json.RawMessage }); ok {
+		data.Metadata = withMetadata.Metadata()
+	}
+
+	return data, nil
 }
 
 func Check(provider Provider) error {

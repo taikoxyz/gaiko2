@@ -73,7 +73,7 @@ EOF
 
     assert_file_exists "${attestation_dst}"
     assert_contains "${attestation_dst}" "\"unique_id\": \"abc\""
-    assert_contains "${stub_out}" "bootstrap --tee-type ego --secret-dir ${secret_dir} --config-dir ${config_dir}"
+    assert_contains "${stub_out}" "bootstrap --tee-type ego --secret-dir ${secret_dir} --config-dir ${config_dir} --tdxs-socket /var/tdxs.sock"
     assert_contains "${qcnl_conf}" "https://pccs:8081/sgx/certification/v4/"
 }
 

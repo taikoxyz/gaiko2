@@ -14,7 +14,14 @@ func (s ReplayService) Aggregate(
 	_ context.Context,
 	req *ValidatedAggregateRequest,
 ) (protocol.ProofResult, error) {
-	identity, err := s.signer.Identity()
+	return aggregateWithSigner(s.signer, req)
+}
+
+func aggregateWithSigner(
+	signer ProofSigner,
+	req *ValidatedAggregateRequest,
+) (protocol.ProofResult, error) {
+	identity, err := signer.Identity()
 	if err != nil {
 		return protocol.ProofResult{}, err
 	}
@@ -49,7 +56,7 @@ func (s ReplayService) Aggregate(
 		return protocol.ProofResult{}, err
 	}
 
-	output, err := s.signer.SignHash(aggregationHash)
+	output, err := signer.SignHash(aggregationHash)
 	if err != nil {
 		return protocol.ProofResult{}, err
 	}
