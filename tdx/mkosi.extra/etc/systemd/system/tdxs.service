@@ -1,0 +1,16 @@
+[Unit]
+Description=TDX quote service
+After=network-online.target
+Wants=tdxs.socket
+
+[Service]
+User=tdxs
+Group=tdx
+WorkingDirectory=/var/lib/tdxs
+Type=notify
+ExecStart=/usr/bin/tdxs --config /etc/tdxs/config.yaml
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target

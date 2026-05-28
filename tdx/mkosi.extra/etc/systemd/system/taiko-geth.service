@@ -1,0 +1,16 @@
+[Unit]
+Description=TDX-local taiko-geth
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+User=taiko-geth
+Group=taiko-geth
+EnvironmentFile=/etc/gaiko2/tdxgeth.env
+ExecStart=/usr/local/bin/taiko-geth-tdx.sh
+Restart=on-failure
+RestartSec=10
+LimitNOFILE=1000000
+
+[Install]
+WantedBy=multi-user.target

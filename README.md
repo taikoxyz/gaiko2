@@ -215,4 +215,5 @@ docker run --rm \
 - [Shasta V1 implementation plan](https://github.com/taikoxyz/gaiko2/blob/main/docs/plans/2026-04-12-gaiko2-shasta-v1-implementation-plan.md)
 - [SGX Docker deployment guide](https://github.com/taikoxyz/gaiko2/blob/main/docs/deployment/sgx-docker.md)
 - [TDX-Geth deployment design](https://github.com/taikoxyz/gaiko2/blob/main/docs/deployment/tdx-gaiko2.md)
+- [TDX image profile](https://github.com/taikoxyz/gaiko2/blob/main/tdx/README.md)
 - [Current baseline](https://github.com/taikoxyz/gaiko2/blob/main/docs/baselines/2026-04-13-gaiko2-v1-baseline.md)

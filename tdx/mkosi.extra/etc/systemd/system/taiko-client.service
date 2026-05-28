@@ -1,0 +1,16 @@
+[Unit]
+Description=TDX-local taiko-client driver
+After=network-online.target taiko-geth.service
+Requires=taiko-geth.service
+
+[Service]
+User=taiko-client
+Group=taiko-client
+EnvironmentFile=/etc/gaiko2/tdxgeth.env
+ExecStart=/usr/local/bin/taiko-client-tdx.sh
+Restart=on-failure
+RestartSec=10
+LimitNOFILE=1000000
+
+[Install]
+WantedBy=multi-user.target

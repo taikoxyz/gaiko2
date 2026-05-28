@@ -20,6 +20,9 @@ The trusted VM image should bake in:
 - systemd units and startup ordering
 - statement-affecting config templates
 
+The first-pass image profile skeleton lives under `tdx/`. It is part of this
+repository's gaiko2 release/deployment surface, not an independent project.
+
 Do not use a runtime model that pulls mutable containers or host-mounted scripts
 inside the measured VM. Floating tags, `pull_policy: always`, and operator-provided
 replacement binaries defeat the image identity boundary.

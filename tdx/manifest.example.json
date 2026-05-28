@@ -1,0 +1,63 @@
+{
+  "schema": "tdx-gaiko2-image-manifest-v1",
+  "release_tag": "example",
+  "provider": {
+    "name": "tdx-gaiko2",
+    "proof_type": "tdxgeth",
+    "protocol": "raiko2-remote-prover"
+  },
+  "components": [
+    {
+      "name": "gaiko2",
+      "commit": "git-commit",
+      "binary": {
+        "path": "/usr/bin/gaiko2",
+        "sha256": "sha256"
+      }
+    },
+    {
+      "name": "taiko-geth",
+      "commit": "git-commit",
+      "binary": {
+        "path": "/usr/bin/taiko-geth",
+        "sha256": "sha256"
+      }
+    },
+    {
+      "name": "taiko-client",
+      "commit": "git-commit",
+      "binary": {
+        "path": "/usr/bin/taiko-client",
+        "sha256": "sha256"
+      }
+    },
+    {
+      "name": "tdxs",
+      "commit": "git-commit",
+      "binary": {
+        "path": "/usr/bin/tdxs",
+        "sha256": "sha256"
+      }
+    }
+  ],
+  "runtime": {
+    "gaiko2_http": "0.0.0.0:8080",
+    "local_l2_rpc": "127.0.0.1:8545",
+    "tdxs_socket": "/var/tdxs.sock",
+    "persistent_root": "/persistent"
+  },
+  "measurement": {
+    "tdx_image_id": "0x...",
+    "mrtd": "0x...",
+    "rtmr0": "0x...",
+    "rtmr1": "0x...",
+    "rtmr2": "0x...",
+    "rtmr3": "0x..."
+  },
+  "statement_affecting_files": [
+    {
+      "path": "tdx/mkosi.extra/etc/systemd/system/gaiko2-tdxgeth.service",
+      "sha256": "sha256"
+    }
+  ]
+}

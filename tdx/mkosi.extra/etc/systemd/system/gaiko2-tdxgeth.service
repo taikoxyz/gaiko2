@@ -1,0 +1,20 @@
+[Unit]
+Description=TDX-Gaiko2 remote prover
+After=network-online.target tdxs.service taiko-geth.service taiko-client.service
+Requires=tdxs.service taiko-geth.service
+Wants=taiko-client.service
+
+[Service]
+User=gaiko2
+Group=tdx
+EnvironmentFile=/etc/gaiko2/tdxgeth.env
+WorkingDirectory=/persistent/gaiko2
+ExecStartPre=/bin/sh -c 'until curl -fsS -X POST "${GAIKO2_L2_RPC_URL}" -H "content-type: application/json" -d "{\"jsonrpc\":\"2.0\",\"method\":\"eth_blockNumber\",\"params\":[],\"id\":1}" >/dev/null; do echo "waiting for local taiko-geth RPC at ${GAIKO2_L2_RPC_URL}"; sleep 5; done'
+ExecStartPre=/usr/local/bin/gaiko2-bootstrap-tdx.sh
+ExecStart=/usr/bin/gaiko2 server
+Restart=on-failure
+RestartSec=10
+LimitNOFILE=1000000
+
+[Install]
+WantedBy=multi-user.target
