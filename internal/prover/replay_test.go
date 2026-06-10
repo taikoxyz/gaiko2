@@ -604,6 +604,35 @@ func TestChainConfigForMasayaEnablesBlobForkAtUnzen(t *testing.T) {
 	}
 }
 
+func TestChainConfigForInternalDevnetUsesGenesisForks(t *testing.T) {
+	cfg, err := chainConfigFor(params.TaikoInternalNetworkID.Uint64())
+	if err != nil {
+		t.Fatalf("chain config: %v", err)
+	}
+
+	if cfg.OntakeBlock == nil || cfg.OntakeBlock.Sign() != 0 {
+		t.Fatalf("unexpected ontake block: %v", cfg.OntakeBlock)
+	}
+	if cfg.PacayaBlock == nil || cfg.PacayaBlock.Sign() != 0 {
+		t.Fatalf("unexpected pacaya block: %v", cfg.PacayaBlock)
+	}
+	if cfg.ShastaTime == nil || *cfg.ShastaTime != 0 {
+		t.Fatalf("unexpected shasta time: %v", cfg.ShastaTime)
+	}
+	if cfg.UnzenTime == nil || *cfg.UnzenTime != 0 {
+		t.Fatalf("unexpected unzen time: %v", cfg.UnzenTime)
+	}
+	if cfg.CancunTime == nil || *cfg.CancunTime != 0 {
+		t.Fatalf("unexpected cancun time: %v", cfg.CancunTime)
+	}
+	if cfg.PragueTime == nil || *cfg.PragueTime != 0 {
+		t.Fatalf("unexpected prague time: %v", cfg.PragueTime)
+	}
+	if cfg.OsakaTime == nil || *cfg.OsakaTime != 0 {
+		t.Fatalf("unexpected osaka time: %v", cfg.OsakaTime)
+	}
+}
+
 func TestReplayExecutionBlockZeroesDifficultyForUnzen(t *testing.T) {
 	cfg, err := chainConfigFor(params.MasayaDevnetNetworkID.Uint64())
 	if err != nil {
