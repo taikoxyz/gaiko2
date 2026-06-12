@@ -58,6 +58,16 @@ This is still not the final production-hardening layer. Before production, add:
 - rootfs immutability or dm-verity
 - RTMR[3] extension from the manifest/event log before `gaiko2 bootstrap`
 - cloud-specific custom image import/start automation
+- structured proof-path logs for direct aggregation, including proposal ids,
+  requested L2 block numbers, local header hash/state root, carry checkpoint,
+  input hash, instance address, quote length, and error reason
+- readiness checks for `tdxs`, sealed signer key availability, local L2 RPC
+  chain id, and local L2 block freshness
+- metrics for proof requests/errors, L2 RPC failures, latest local L2 block,
+  sync lag, and checkpoint mismatches
+- optional canonical RPC comparison for monitoring only. It must not be used as
+  proof input; mismatches should alert operators and make readiness fail, while
+  the proof statement remains bound to the measured VM's local node
 
 ## Manifest
 
