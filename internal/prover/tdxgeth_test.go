@@ -3,6 +3,7 @@ package prover
 import (
 	"context"
 	"crypto/ecdsa"
+	"encoding/json"
 	"errors"
 	"strings"
 	"testing"
@@ -85,10 +86,147 @@ func TestTDXGethServiceRejectsLocalHeaderMismatch(t *testing.T) {
 	}
 }
 
+func TestTDXGethServiceDirectAggregateBuildsCarryFromLocalHeaders(t *testing.T) {
+	firstCarry := mustRawMessage(t, `{
+		"chain_id": 167013,
+		"verifier": "0x00f9f60C79e38c08b785eE4F1a849900693C6630",
+		"transition_input": {
+			"proposal_id": 7,
+			"proposal_hash": "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+			"parent_proposal_hash": "0xbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+			"parent_block_hash": "0xcccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+			"actual_prover": "0x0000777735367b36bC9B61C50022d9D0700dB4Ec",
+			"transition": { "proposer": "0x1111111111111111111111111111111111111111", "timestamp": 123 },
+			"checkpoint": {
+				"blockNumber": "0x2a",
+				"blockHash": "0xdddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+				"stateRoot": "0xeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee"
+			}
+		}
+	}`)
+	secondCarry := mustRawMessage(t, `{
+		"chain_id": 167013,
+		"verifier": "0x00f9f60C79e38c08b785eE4F1a849900693C6630",
+		"transition_input": {
+			"proposal_id": 8,
+			"proposal_hash": "0xffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+			"parent_proposal_hash": "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+			"parent_block_hash": "0xdddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+			"actual_prover": "0x0000777735367b36bC9B61C50022d9D0700dB4Ec",
+			"transition": { "proposer": "0x1111111111111111111111111111111111111111", "timestamp": 124 },
+			"checkpoint": {
+				"blockNumber": "0x2b",
+				"blockHash": "0x9999999999999999999999999999999999999999999999999999999999999999",
+				"stateRoot": "0x8888888888888888888888888888888888888888888888888888888888888888"
+			}
+		}
+	}`)
+	firstProposal := directProposalFromCarry(t, firstCarry, []uint64{42})
+	secondProposal := directProposalFromCarry(t, secondCarry, []uint64{43})
+	req := protocol.ShastaDirectAggregateRequest{
+		Schema: protocol.ShastaDirectAggregateRequestSchemaV1,
+		Payload: protocol.ShastaDirectAggregatePayload{
+			Proposals: []protocol.DirectAggregateProposal{firstProposal, secondProposal},
+		},
+	}
+	validated, err := ValidateDirectAggregateRequest(req)
+	if err != nil {
+		t.Fatalf("validate direct aggregate request: %v", err)
+	}
+
+	source := fakeL2HeaderSource{
+		headers: map[uint64]L2Header{
+			42: {
+				Number:     42,
+				Hash:       common.HexToHash("0xdddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd"),
+				ParentHash: common.HexToHash("0xcccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"),
+				StateRoot:  common.HexToHash("0xeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee"),
+			},
+			43: {
+				Number:     43,
+				Hash:       common.HexToHash("0x9999999999999999999999999999999999999999999999999999999999999999"),
+				ParentHash: common.HexToHash("0xdddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd"),
+				StateRoot:  common.HexToHash("0x8888888888888888888888888888888888888888888888888888888888888888"),
+			},
+		},
+	}
+	service := NewTDXGethService(&source, NewNativeProofSigner(shastaNativeMockInstance))
+
+	result, err := service.DirectAggregate(context.Background(), validated)
+	if err != nil {
+		t.Fatalf("direct aggregate: %v", err)
+	}
+	if result.Proof == nil || *result.Proof == "" {
+		t.Fatalf("expected proof")
+	}
+	if source.calls != 2 {
+		t.Fatalf("expected two local header lookups, got %d", source.calls)
+	}
+	if len(result.ProofCarryDataVec) != 2 {
+		t.Fatalf("unexpected carry vector length: %d", len(result.ProofCarryDataVec))
+	}
+
+	expectedInput, err := hashShastaAggregationInput(
+		[]json.RawMessage{firstCarry, secondCarry},
+		common.HexToAddress("0x0000777735367b36bC9B61C50022d9D0700dB4Ec"),
+	)
+	if err != nil {
+		t.Fatalf("hash expected aggregation input: %v", err)
+	}
+	if result.Input != expectedInput.Hex() {
+		t.Fatalf("unexpected input: got %s want %s", result.Input, expectedInput.Hex())
+	}
+}
+
+func TestValidateDirectAggregateRequestRejectsBrokenProposalContinuity(t *testing.T) {
+	firstCarry := sampleCarryData(t, 167013, testHash("11"), "0x2a", testHash("aa"), testHash("bb"))
+	secondCarry := sampleCarryData(t, 167013, testHash("aa"), "0x2b", testHash("cc"), testHash("dd"))
+	firstProposal := directProposalFromCarry(t, firstCarry, []uint64{42})
+	secondProposal := directProposalFromCarry(t, secondCarry, []uint64{43})
+	secondProposal.ProposalID = 9
+
+	_, err := ValidateDirectAggregateRequest(protocol.ShastaDirectAggregateRequest{
+		Schema: protocol.ShastaDirectAggregateRequestSchemaV1,
+		Payload: protocol.ShastaDirectAggregatePayload{
+			Proposals: []protocol.DirectAggregateProposal{firstProposal, secondProposal},
+		},
+	})
+	if err == nil || !strings.Contains(err.Error(), "proposal_id") {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
 func TestNewLocalL2RPCRejectsExternalEndpoint(t *testing.T) {
 	_, err := NewLocalL2RPC("http://example.com:8545")
 	if err == nil || !strings.Contains(err.Error(), "must be local") {
 		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
+func directProposalFromCarry(
+	t *testing.T,
+	raw json.RawMessage,
+	blockNumbers []uint64,
+) protocol.DirectAggregateProposal {
+	t.Helper()
+
+	carry, err := decodeCarry(raw)
+	if err != nil {
+		t.Fatalf("decode carry: %v", err)
+	}
+	input := carry.TransitionInput
+	return protocol.DirectAggregateProposal{
+		ChainID:            carry.ChainID,
+		Verifier:           carry.Verifier.Hex(),
+		ProposalID:         input.ProposalID,
+		ProposalHash:       input.ProposalHash.Hex(),
+		ParentProposalHash: input.ParentProposalHash.Hex(),
+		ActualProver:       input.ActualProver.Hex(),
+		Transition: protocol.DirectAggregateTransition{
+			Proposer:  input.Transition.Proposer.Hex(),
+			Timestamp: input.Transition.Timestamp,
+		},
+		L2BlockNumbers: blockNumbers,
 	}
 }
 

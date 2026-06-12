@@ -84,12 +84,60 @@ func TestShastaAggregateV1RoundTrip(t *testing.T) {
 	}
 }
 
+func TestShastaDirectAggregateV1RoundTrip(t *testing.T) {
+	req := ShastaDirectAggregateRequest{
+		Schema: ShastaDirectAggregateRequestSchemaV1,
+		Payload: ShastaDirectAggregatePayload{
+			Proposals: []DirectAggregateProposal{
+				{
+					ChainID:            167013,
+					Verifier:           "0x1111111111111111111111111111111111111111",
+					ProposalID:         7,
+					ProposalHash:       "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+					ParentProposalHash: "0xbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+					ActualProver:       "0x2222222222222222222222222222222222222222",
+					Transition: DirectAggregateTransition{
+						Proposer:  "0x3333333333333333333333333333333333333333",
+						Timestamp: 123,
+					},
+					L2BlockNumbers: []uint64{42, 43},
+				},
+			},
+		},
+	}
+
+	data, err := json.Marshal(req)
+	if err != nil {
+		t.Fatalf("marshal direct aggregate request: %v", err)
+	}
+
+	var decoded ShastaDirectAggregateRequest
+	if err := json.Unmarshal(data, &decoded); err != nil {
+		t.Fatalf("unmarshal direct aggregate request: %v", err)
+	}
+
+	if decoded.Schema != ShastaDirectAggregateRequestSchemaV1 {
+		t.Fatalf("unexpected schema: %s", decoded.Schema)
+	}
+	if ShastaDirectAggregateRequestSchemaV1 != "raiko2-shasta-direct-aggregate-request-v1" {
+		t.Fatalf("unexpected direct aggregate schema constant: %s", ShastaDirectAggregateRequestSchemaV1)
+	}
+	if len(decoded.Payload.Proposals) != 1 {
+		t.Fatalf("unexpected proposal count: %d", len(decoded.Payload.Proposals))
+	}
+	if len(decoded.Payload.Proposals[0].L2BlockNumbers) != 2 {
+		t.Fatalf("unexpected block number count: %d", len(decoded.Payload.Proposals[0].L2BlockNumbers))
+	}
+}
+
 func TestProofResponseHelpers(t *testing.T) {
 	proof := "0xproof"
 	input := "0xinput"
+	carry := json.RawMessage(`{"chain_id":167013}`)
 	ok := Success(ProofResult{
-		Proof: &proof,
-		Input: input,
+		Proof:             &proof,
+		Input:             input,
+		ProofCarryDataVec: []json.RawMessage{carry},
 	})
 
 	data, err := json.Marshal(ok)
@@ -113,6 +161,9 @@ func TestProofResponseHelpers(t *testing.T) {
 	}
 	if decodedOK.Result == nil || decodedOK.Result.Input != input {
 		t.Fatalf("unexpected proof result: %+v", decodedOK.Result)
+	}
+	if len(decodedOK.Result.ProofCarryDataVec) != 1 {
+		t.Fatalf("unexpected carry vector: %+v", decodedOK.Result.ProofCarryDataVec)
 	}
 
 	fail := Failure(ProofError{

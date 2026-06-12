@@ -30,6 +30,13 @@ func (f fakeService) Aggregate(context.Context, *prover.ValidatedAggregateReques
 	return f.result, f.err
 }
 
+func (f fakeService) DirectAggregate(
+	context.Context,
+	*prover.ValidatedDirectAggregateRequest,
+) (protocol.ProofResult, error) {
+	return f.result, f.err
+}
+
 func TestNewServerReturnsValidationErrorEnvelope(t *testing.T) {
 	server := NewServer(fakeService{})
 	req := httptest.NewRequest(http.MethodPost, "/prove/shasta", bytes.NewBufferString(`{
@@ -154,6 +161,88 @@ func TestNewServerLogsAggregateFailure(t *testing.T) {
 	}
 	if !strings.Contains(logs.String(), "failed prove/shasta-aggregate request") {
 		t.Fatalf("expected failure log, got %q", logs.String())
+	}
+}
+
+func TestNewServerReturnsDirectAggregateSuccessEnvelope(t *testing.T) {
+	server := NewServer(fakeService{
+		result: protocol.ProofResult{
+			Input: "0x1234567890abcdef1234567890abcdef1234567890abcdef1234567890abcdef",
+			ProofCarryDataVec: []json.RawMessage{
+				json.RawMessage(`{"chain_id":167013}`),
+			},
+		},
+	})
+	req := httptest.NewRequest(http.MethodPost, "/prove/shasta-direct-aggregate", bytes.NewBufferString(`{
+		"schema":"raiko2-shasta-direct-aggregate-request-v1",
+		"payload":{
+			"proposals":[{
+				"chain_id":167013,
+				"verifier":"0x1111111111111111111111111111111111111111",
+				"proposal_id":7,
+				"proposal_hash":"0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+				"parent_proposal_hash":"0xbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+				"actual_prover":"0x2222222222222222222222222222222222222222",
+				"transition":{"proposer":"0x3333333333333333333333333333333333333333","timestamp":123},
+				"l2_block_numbers":[42]
+			}]
+		}
+	}`))
+	recorder := httptest.NewRecorder()
+
+	server.ServeHTTP(recorder, req)
+
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("unexpected status: %d", recorder.Code)
+	}
+
+	var resp protocol.ProofResponse
+	if err := json.Unmarshal(recorder.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+	if resp.Status != protocol.ProofStatusOK {
+		t.Fatalf("unexpected response status: %s", resp.Status)
+	}
+	if resp.Result == nil || len(resp.Result.ProofCarryDataVec) != 1 {
+		t.Fatalf("unexpected result payload: %+v", resp.Result)
+	}
+}
+
+func TestNewServerReturnsRethTDXSchemaForRethDirectAggregateRequest(t *testing.T) {
+	server := NewServer(fakeService{
+		result: protocol.ProofResult{
+			Input: "0x1234567890abcdef1234567890abcdef1234567890abcdef1234567890abcdef",
+		},
+	})
+	req := httptest.NewRequest(http.MethodPost, "/prove/shasta-direct-aggregate", bytes.NewBufferString(`{
+		"schema":"reth-tdx-shasta-direct-aggregate-request-v1",
+		"payload":{
+			"proposals":[{
+				"chain_id":167013,
+				"verifier":"0x1111111111111111111111111111111111111111",
+				"proposal_id":7,
+				"proposal_hash":"0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+				"parent_proposal_hash":"0xbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+				"actual_prover":"0x2222222222222222222222222222222222222222",
+				"transition":{"proposer":"0x3333333333333333333333333333333333333333","timestamp":123},
+				"l2_block_numbers":[42]
+			}]
+		}
+	}`))
+	recorder := httptest.NewRecorder()
+
+	server.ServeHTTP(recorder, req)
+
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("unexpected status: %d", recorder.Code)
+	}
+
+	var resp protocol.ProofResponse
+	if err := json.Unmarshal(recorder.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+	if resp.Schema != protocol.RethTDXProofSchemaV1 {
+		t.Fatalf("unexpected response schema: %s", resp.Schema)
 	}
 }
 

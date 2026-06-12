@@ -2,6 +2,7 @@ package prover
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 
 	"github.com/ethereum/go-ethereum/common"
@@ -49,6 +50,43 @@ func (s TDXGethService) Aggregate(
 	return aggregateWithSigner(s.signer, req)
 }
 
+func (s TDXGethService) DirectAggregate(
+	ctx context.Context,
+	req *ValidatedDirectAggregateRequest,
+) (protocol.ProofResult, error) {
+	if s.headers == nil {
+		return protocol.ProofResult{}, fmt.Errorf("tdxgeth local L2 header source is not configured")
+	}
+	if s.signer == nil {
+		return protocol.ProofResult{}, fmt.Errorf("tdxgeth signer is not configured")
+	}
+
+	rawCarries, carries, err := s.buildDirectAggregateCarries(ctx, req.Proposals)
+	if err != nil {
+		return protocol.ProofResult{}, err
+	}
+	if !validateShastaProofCarryDataVec(carries) {
+		return protocol.ProofResult{}, fmt.Errorf("invalid shasta proof carry data")
+	}
+
+	identity, err := s.signer.Identity()
+	if err != nil {
+		return protocol.ProofResult{}, err
+	}
+	aggregationHash, err := hashShastaAggregationCarries(carries, identity.InstanceAddress)
+	if err != nil {
+		return protocol.ProofResult{}, err
+	}
+	output, err := s.signer.SignHash(aggregationHash)
+	if err != nil {
+		return protocol.ProofResult{}, err
+	}
+
+	result := proofResultFromSignerOutput(aggregationHash, output)
+	result.ProofCarryDataVec = rawCarries
+	return result, nil
+}
+
 func (s TDXGethService) verifyLocalHeaders(ctx context.Context, blocks []BlockView) error {
 	for _, expected := range blocks {
 		actual, err := s.headers.HeaderByNumber(ctx, expected.Number)
@@ -76,6 +114,150 @@ func (s TDXGethService) verifyLocalHeaders(ctx context.Context, blocks []BlockVi
 		}
 	}
 	return nil
+}
+
+func (s TDXGethService) buildDirectAggregateCarries(
+	ctx context.Context,
+	proposals []DirectAggregateProposalView,
+) ([]json.RawMessage, []CarryView, error) {
+	rawCarries := make([]json.RawMessage, 0, len(proposals))
+	carries := make([]CarryView, 0, len(proposals))
+	for index, proposal := range proposals {
+		carry, err := s.buildDirectAggregateCarry(ctx, index, proposal)
+		if err != nil {
+			return nil, nil, err
+		}
+		raw, err := marshalCarry(carry)
+		if err != nil {
+			return nil, nil, err
+		}
+		rawCarries = append(rawCarries, raw)
+		carries = append(carries, carry)
+	}
+	return rawCarries, carries, nil
+}
+
+func (s TDXGethService) buildDirectAggregateCarry(
+	ctx context.Context,
+	proposalIndex int,
+	proposal DirectAggregateProposalView,
+) (CarryView, error) {
+	var first L2Header
+	var last L2Header
+	var previous *L2Header
+	for blockIndex, number := range proposal.L2BlockNumbers {
+		header, err := s.headers.HeaderByNumber(ctx, number)
+		if err != nil {
+			return CarryView{}, fmt.Errorf("fetch local L2 block %d: %w", number, err)
+		}
+		if header.Number != number {
+			return CarryView{}, fmt.Errorf(
+				"local L2 block number mismatch: got %d expected %d",
+				header.Number,
+				number,
+			)
+		}
+		if previous != nil && header.ParentHash != previous.Hash {
+			return CarryView{}, fmt.Errorf(
+				"local L2 parent hash mismatch for direct aggregate proposal %d block %d: got %s expected %s",
+				proposalIndex,
+				number,
+				header.ParentHash.Hex(),
+				previous.Hash.Hex(),
+			)
+		}
+		if blockIndex == 0 {
+			first = header
+		}
+		last = header
+		previous = &last
+	}
+
+	return CarryView{
+		ChainID:  proposal.ChainID,
+		Verifier: proposal.Verifier,
+		TransitionInput: TransitionInputView{
+			ProposalID:         proposal.ProposalID,
+			ProposalHash:       proposal.ProposalHash,
+			ParentProposalHash: proposal.ParentProposalHash,
+			ParentBlockHash:    first.ParentHash,
+			ActualProver:       proposal.ActualProver,
+			Transition:         proposal.Transition,
+			Checkpoint: CheckpointView{
+				BlockNumber: last.Number,
+				BlockHash:   last.Hash,
+				StateRoot:   last.StateRoot,
+			},
+		},
+	}, nil
+}
+
+func marshalCarry(carry CarryView) (json.RawMessage, error) {
+	raw, err := json.Marshal(struct {
+		ChainID         uint64 `json:"chain_id"`
+		Verifier        string `json:"verifier"`
+		TransitionInput struct {
+			ProposalID         uint64 `json:"proposal_id"`
+			ProposalHash       string `json:"proposal_hash"`
+			ParentProposalHash string `json:"parent_proposal_hash"`
+			ParentBlockHash    string `json:"parent_block_hash"`
+			ActualProver       string `json:"actual_prover"`
+			Transition         struct {
+				Proposer  string `json:"proposer"`
+				Timestamp uint64 `json:"timestamp"`
+			} `json:"transition"`
+			Checkpoint struct {
+				BlockNumber string `json:"blockNumber"`
+				BlockHash   string `json:"blockHash"`
+				StateRoot   string `json:"stateRoot"`
+			} `json:"checkpoint"`
+		} `json:"transition_input"`
+	}{
+		ChainID:  carry.ChainID,
+		Verifier: carry.Verifier.Hex(),
+		TransitionInput: struct {
+			ProposalID         uint64 `json:"proposal_id"`
+			ProposalHash       string `json:"proposal_hash"`
+			ParentProposalHash string `json:"parent_proposal_hash"`
+			ParentBlockHash    string `json:"parent_block_hash"`
+			ActualProver       string `json:"actual_prover"`
+			Transition         struct {
+				Proposer  string `json:"proposer"`
+				Timestamp uint64 `json:"timestamp"`
+			} `json:"transition"`
+			Checkpoint struct {
+				BlockNumber string `json:"blockNumber"`
+				BlockHash   string `json:"blockHash"`
+				StateRoot   string `json:"stateRoot"`
+			} `json:"checkpoint"`
+		}{
+			ProposalID:         carry.TransitionInput.ProposalID,
+			ProposalHash:       carry.TransitionInput.ProposalHash.Hex(),
+			ParentProposalHash: carry.TransitionInput.ParentProposalHash.Hex(),
+			ParentBlockHash:    carry.TransitionInput.ParentBlockHash.Hex(),
+			ActualProver:       carry.TransitionInput.ActualProver.Hex(),
+			Transition: struct {
+				Proposer  string `json:"proposer"`
+				Timestamp uint64 `json:"timestamp"`
+			}{
+				Proposer:  carry.TransitionInput.Transition.Proposer.Hex(),
+				Timestamp: carry.TransitionInput.Transition.Timestamp,
+			},
+			Checkpoint: struct {
+				BlockNumber string `json:"blockNumber"`
+				BlockHash   string `json:"blockHash"`
+				StateRoot   string `json:"stateRoot"`
+			}{
+				BlockNumber: quantity(carry.TransitionInput.Checkpoint.BlockNumber),
+				BlockHash:   carry.TransitionInput.Checkpoint.BlockHash.Hex(),
+				StateRoot:   carry.TransitionInput.Checkpoint.StateRoot.Hex(),
+			},
+		},
+	})
+	if err != nil {
+		return nil, fmt.Errorf("marshal proof carry data: %w", err)
+	}
+	return json.RawMessage(raw), nil
 }
 
 func compareHash(label string, number uint64, got common.Hash, expected common.Hash) error {

@@ -17,6 +17,13 @@ func (s ReplayService) Aggregate(
 	return aggregateWithSigner(s.signer, req)
 }
 
+func (s ReplayService) DirectAggregate(
+	context.Context,
+	*ValidatedDirectAggregateRequest,
+) (protocol.ProofResult, error) {
+	return protocol.ProofResult{}, ErrNotImplemented
+}
+
 func aggregateWithSigner(
 	signer ProofSigner,
 	req *ValidatedAggregateRequest,
@@ -60,7 +67,9 @@ func aggregateWithSigner(
 	if err != nil {
 		return protocol.ProofResult{}, err
 	}
-	return proofResultFromSignerOutput(aggregationHash, output), nil
+	result := proofResultFromSignerOutput(aggregationHash, output)
+	result.ProofCarryDataVec = rawCarries
+	return result, nil
 }
 
 func validateAggregateProofSignatures(

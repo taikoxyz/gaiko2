@@ -7,6 +7,10 @@ with `taiko-geth` and producing a TEE proof envelope.
 
 - `GET /healthz` returns a minimal liveness response.
 - `/prove/shasta` is implemented with request `schema: "raiko2-shasta-request-v1"`.
+- `/prove/shasta-direct-aggregate` is implemented for `tdxgeth` mode. It accepts
+  direct proposal payloads, rebuilds the Shasta carry vector from the local
+  loopback L2 node, and signs the aggregate input without requiring proposal
+  subproofs first.
 - `gaiko2` can decode `raiko2`-adapted execution packets and replay them with
   native `taiko-geth` stateless execution.
 - `gaiko2` validates replay continuity against `proof_carry_data`.
@@ -109,6 +113,13 @@ gaiko2 server
 `GAIKO2_L2_RPC_URL` must be loopback. The mode is intended for a measured TDX VM
 where local taiko-geth is started by taiko-client and public geth RPC/debug
 endpoints are not exposed outside the VM.
+
+`/prove/shasta-direct-aggregate` accepts the neutral
+`raiko2-shasta-direct-aggregate-request-v1` schema. For compatibility with the
+current raiko2 TDX adapter, it also accepts
+`reth-tdx-shasta-direct-aggregate-request-v1` and returns
+`reth-tdx-proof-v1` for that request family. In both cases the proof bytes,
+quote, input hash, and `proof_carry_data_vec` semantics are identical.
 
 Inspect the embedded tee image metadata with:
 

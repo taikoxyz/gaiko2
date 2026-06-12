@@ -12,9 +12,10 @@ import (
 )
 
 const (
-	healthzPath              = "/healthz"
-	proveShastaPath          = "/prove/shasta"
-	proveShastaAggregatePath = "/prove/shasta-aggregate"
+	healthzPath                    = "/healthz"
+	proveShastaPath                = "/prove/shasta"
+	proveShastaAggregatePath       = "/prove/shasta-aggregate"
+	proveShastaDirectAggregatePath = "/prove/shasta-direct-aggregate"
 )
 
 func NewServer(service prover.Service) http.Handler {
@@ -140,7 +141,68 @@ func NewServer(service prover.Service) http.Handler {
 		)
 		writeJSON(w, http.StatusOK, protocol.Success(result))
 	})
+	mux.HandleFunc(proveShastaDirectAggregatePath, func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost {
+			writeError(w, http.StatusMethodNotAllowed, "METHOD_NOT_ALLOWED", "expected POST")
+			return
+		}
+
+		var req protocol.ShastaDirectAggregateRequest
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			log.Printf("failed prove/shasta-direct-aggregate request code=%s message=%q", "INVALID_JSON", err.Error())
+			writeError(w, http.StatusBadRequest, "INVALID_JSON", err.Error())
+			return
+		}
+
+		validated, err := prover.ValidateDirectAggregateRequest(req)
+		if err != nil {
+			log.Printf(
+				"failed prove/shasta-direct-aggregate request schema=%s proposal_count=%d code=%s message=%q",
+				req.Schema,
+				len(req.Payload.Proposals),
+				"INVALID_REQUEST",
+				err.Error(),
+			)
+			writeError(w, http.StatusBadRequest, "INVALID_REQUEST", err.Error())
+			return
+		}
+
+		result, err := service.DirectAggregate(r.Context(), validated)
+		if err != nil {
+			statusCode := http.StatusInternalServerError
+			code := "PROVER_ERROR"
+			if errors.Is(err, prover.ErrNotImplemented) {
+				statusCode = http.StatusNotImplemented
+				code = "NOT_IMPLEMENTED"
+			}
+			log.Printf(
+				"failed prove/shasta-direct-aggregate request schema=%s proposal_count=%d code=%s message=%q",
+				req.Schema,
+				len(req.Payload.Proposals),
+				code,
+				err.Error(),
+			)
+			writeError(w, statusCode, code, err.Error())
+			return
+		}
+
+		log.Printf(
+			"completed prove/shasta-direct-aggregate request schema=%s proposal_ids=%s proposal_count=%d",
+			req.Schema,
+			directAggregateProposalIDSummary(validated.Proposals),
+			len(req.Payload.Proposals),
+		)
+		writeJSON(w, http.StatusOK, directAggregateSuccess(req.Schema, result))
+	})
 	return mux
+}
+
+func directAggregateSuccess(requestSchema string, result protocol.ProofResult) protocol.ProofResponse {
+	response := protocol.Success(result)
+	if requestSchema == protocol.RethTDXDirectAggregateRequestSchemaV1 {
+		response.Schema = protocol.RethTDXProofSchemaV1
+	}
+	return response
 }
 
 func aggregateProposalIDSummary(proofs []prover.AggregateProofView) string {
@@ -149,6 +211,18 @@ func aggregateProposalIDSummary(proofs []prover.AggregateProofView) string {
 	}
 	first := proofs[0].Carry.TransitionInput.ProposalID
 	last := proofs[len(proofs)-1].Carry.TransitionInput.ProposalID
+	if first == last {
+		return fmt.Sprintf("%d", first)
+	}
+	return fmt.Sprintf("%d..%d", first, last)
+}
+
+func directAggregateProposalIDSummary(proposals []prover.DirectAggregateProposalView) string {
+	if len(proposals) == 0 {
+		return "none"
+	}
+	first := proposals[0].ProposalID
+	last := proposals[len(proposals)-1].ProposalID
 	if first == last {
 		return fmt.Sprintf("%d", first)
 	}

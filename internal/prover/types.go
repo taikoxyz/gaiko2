@@ -20,6 +20,11 @@ type ValidatedAggregateRequest struct {
 	Proofs  []AggregateProofView
 }
 
+type ValidatedDirectAggregateRequest struct {
+	Request   protocol.ShastaDirectAggregateRequest
+	Proposals []DirectAggregateProposalView
+}
+
 type CarryView struct {
 	ChainID         uint64
 	Verifier        common.Address
@@ -63,6 +68,17 @@ type AggregateProofView struct {
 	Signature       []byte
 	RawCarry        json.RawMessage
 	Carry           CarryView
+}
+
+type DirectAggregateProposalView struct {
+	ChainID            uint64
+	Verifier           common.Address
+	ProposalID         uint64
+	ProposalHash       common.Hash
+	ParentProposalHash common.Hash
+	ActualProver       common.Address
+	Transition         TransitionView
+	L2BlockNumbers     []uint64
 }
 
 type ReplayWitness struct {
