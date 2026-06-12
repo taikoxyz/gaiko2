@@ -56,6 +56,7 @@ func TestServiceConfigFromEnvLoadsTDXGethConfig(t *testing.T) {
 	setenv(t, envTEEType, tee.TypeTDX)
 	setenv(t, envTDXSocket, "/tmp/tdxs.sock")
 	setenv(t, envL2RPCURL, "http://127.0.0.1:9545")
+	setenv(t, envAllowRemoteL2RPC, "true")
 
 	cfg, err := ServiceConfigFromEnv()
 	if err != nil {
@@ -72,6 +73,9 @@ func TestServiceConfigFromEnvLoadsTDXGethConfig(t *testing.T) {
 	}
 	if cfg.L2RPCURL != "http://127.0.0.1:9545" {
 		t.Fatalf("unexpected l2 rpc url: %s", cfg.L2RPCURL)
+	}
+	if !cfg.AllowRemoteL2RPC {
+		t.Fatalf("expected remote l2 rpc override")
 	}
 }
 

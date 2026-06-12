@@ -11,14 +11,15 @@ import (
 )
 
 const (
-	envProvingMode = "GAIKO2_PROVING_MODE"
-	envTEEType     = "GAIKO2_TEE_TYPE"
-	envSecretDir   = "GAIKO2_SECRET_DIR"
-	envConfigDir   = "GAIKO2_CONFIG_DIR"
-	envFork        = "GAIKO2_FORK"
-	envInstanceID  = "GAIKO2_INSTANCE_ID"
-	envTDXSocket   = "GAIKO2_TDXS_SOCKET"
-	envL2RPCURL    = "GAIKO2_L2_RPC_URL"
+	envProvingMode      = "GAIKO2_PROVING_MODE"
+	envTEEType          = "GAIKO2_TEE_TYPE"
+	envSecretDir        = "GAIKO2_SECRET_DIR"
+	envConfigDir        = "GAIKO2_CONFIG_DIR"
+	envFork             = "GAIKO2_FORK"
+	envInstanceID       = "GAIKO2_INSTANCE_ID"
+	envTDXSocket        = "GAIKO2_TDXS_SOCKET"
+	envL2RPCURL         = "GAIKO2_L2_RPC_URL"
+	envAllowRemoteL2RPC = "GAIKO2_ALLOW_REMOTE_L2_RPC"
 )
 
 func ServiceConfigFromEnv() (ServiceConfig, error) {
@@ -31,6 +32,11 @@ func ServiceConfigFromEnv() (ServiceConfig, error) {
 		TDXSocket: envOrDefault(envTDXSocket, tee.DefaultTDXSocket),
 		L2RPCURL:  envOrDefault(envL2RPCURL, DefaultLocalL2RPCURL),
 	}
+	allowRemoteL2RPC, err := parseBoolEnv(envAllowRemoteL2RPC)
+	if err != nil {
+		return ServiceConfig{}, err
+	}
+	cfg.AllowRemoteL2RPC = allowRemoteL2RPC
 	if strings.EqualFold(cfg.Mode, ProvingModeTDXGeth) && cfg.TeeType == "" {
 		cfg.TeeType = tee.TypeTDX
 	}
@@ -69,4 +75,16 @@ func envOrDefault(key, fallback string) string {
 		return fallback
 	}
 	return value
+}
+
+func parseBoolEnv(key string) (bool, error) {
+	value := strings.TrimSpace(os.Getenv(key))
+	if value == "" {
+		return false, nil
+	}
+	parsed, err := strconv.ParseBool(value)
+	if err != nil {
+		return false, fmt.Errorf("parse %s: %w", key, err)
+	}
+	return parsed, nil
 }

@@ -203,6 +203,18 @@ func TestNewLocalL2RPCRejectsExternalEndpoint(t *testing.T) {
 	}
 }
 
+func TestNewLocalL2RPCAllowsExternalEndpointWhenExplicitlyEnabled(t *testing.T) {
+	client, err := NewLocalL2RPCWithOptions("http://example.com:8545", L2RPCOptions{
+		AllowRemote: true,
+	})
+	if err != nil {
+		t.Fatalf("new l2 rpc: %v", err)
+	}
+	if client.endpoint != "http://example.com:8545" {
+		t.Fatalf("unexpected endpoint: %s", client.endpoint)
+	}
+}
+
 func directProposalFromCarry(
 	t *testing.T,
 	raw json.RawMessage,
@@ -251,9 +263,12 @@ func TestNewConfiguredServiceSelectsTDXGethMode(t *testing.T) {
 		}
 		return &configuredFakeProvider{privateKey: privateKey}, nil
 	}
-	newLocalL2HeaderSourceFn = func(rawURL string) (L2HeaderSource, error) {
+	newLocalL2HeaderSourceFn = func(rawURL string, opts L2RPCOptions) (L2HeaderSource, error) {
 		if rawURL != "http://127.0.0.1:8545" {
 			t.Fatalf("unexpected l2 rpc url: %s", rawURL)
+		}
+		if opts.AllowRemote {
+			t.Fatalf("unexpected remote l2 rpc override")
 		}
 		return &fakeL2HeaderSource{}, nil
 	}

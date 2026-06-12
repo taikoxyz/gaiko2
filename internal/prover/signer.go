@@ -19,14 +19,15 @@ const (
 )
 
 type ServiceConfig struct {
-	Mode       string
-	TeeType    string
-	SecretDir  string
-	ConfigDir  string
-	Fork       string
-	InstanceID uint32
-	TDXSocket  string
-	L2RPCURL   string
+	Mode             string
+	TeeType          string
+	SecretDir        string
+	ConfigDir        string
+	Fork             string
+	InstanceID       uint32
+	TDXSocket        string
+	L2RPCURL         string
+	AllowRemoteL2RPC bool
 }
 
 type ProofSigner interface {
@@ -111,7 +112,9 @@ func NewConfiguredService(cfg ServiceConfig, runner Runner) (Service, error) {
 		if !ok {
 			return nil, fmt.Errorf("tee type %q does not support report-data quotes", teeType)
 		}
-		headers, err := newLocalL2HeaderSourceFn(cfg.L2RPCURL)
+		headers, err := newLocalL2HeaderSourceFn(cfg.L2RPCURL, L2RPCOptions{
+			AllowRemote: cfg.AllowRemoteL2RPC,
+		})
 		if err != nil {
 			return nil, err
 		}

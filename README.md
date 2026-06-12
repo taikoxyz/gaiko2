@@ -65,6 +65,8 @@ Optional proving configuration:
 - `GAIKO2_PORT=8080`
 - `GAIKO2_TDXS_SOCKET=/var/tdxs.sock`
 - `GAIKO2_L2_RPC_URL=http://127.0.0.1:8545`
+- `GAIKO2_ALLOW_REMOTE_L2_RPC=true` only for local/dev API testing against a
+  remote L2 RPC endpoint
 
 If unset, `gaiko2` defaults to `native` mode.
 
@@ -113,6 +115,12 @@ gaiko2 server
 `GAIKO2_L2_RPC_URL` must be loopback. The mode is intended for a measured TDX VM
 where local taiko-geth is started by taiko-client and public geth RPC/debug
 endpoints are not exposed outside the VM.
+
+For local API-only testing, set `GAIKO2_ALLOW_REMOTE_L2_RPC=true` to temporarily
+allow `GAIKO2_L2_RPC_URL` to point at a remote endpoint. Do not set this in a
+measured TDX image or production-like deployment; it weakens the statement from
+"the measured VM checked its local node" to "the service checked an external
+RPC endpoint".
 
 `/prove/shasta-direct-aggregate` accepts the neutral
 `raiko2-shasta-direct-aggregate-request-v1` schema. For compatibility with the

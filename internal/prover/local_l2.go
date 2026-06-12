@@ -34,11 +34,19 @@ type LocalL2RPC struct {
 	client   *http.Client
 }
 
-var newLocalL2HeaderSourceFn = func(rawURL string) (L2HeaderSource, error) {
-	return NewLocalL2RPC(rawURL)
+type L2RPCOptions struct {
+	AllowRemote bool
+}
+
+var newLocalL2HeaderSourceFn = func(rawURL string, opts L2RPCOptions) (L2HeaderSource, error) {
+	return NewLocalL2RPCWithOptions(rawURL, opts)
 }
 
 func NewLocalL2RPC(rawURL string) (*LocalL2RPC, error) {
+	return NewLocalL2RPCWithOptions(rawURL, L2RPCOptions{})
+}
+
+func NewLocalL2RPCWithOptions(rawURL string, opts L2RPCOptions) (*LocalL2RPC, error) {
 	rawURL = strings.TrimSpace(rawURL)
 	if rawURL == "" {
 		rawURL = DefaultLocalL2RPCURL
@@ -47,7 +55,7 @@ func NewLocalL2RPC(rawURL string) (*LocalL2RPC, error) {
 	if err != nil {
 		return nil, fmt.Errorf("parse local L2 RPC URL: %w", err)
 	}
-	if !isLocalHTTPURL(parsed) {
+	if !opts.AllowRemote && !isLocalHTTPURL(parsed) {
 		return nil, fmt.Errorf("tdxgeth L2 RPC URL must be local, got %q", rawURL)
 	}
 	return &LocalL2RPC{
