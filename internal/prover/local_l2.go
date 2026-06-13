@@ -3,6 +3,7 @@ package prover
 import (
 	"bytes"
 	"context"
+	"encoding/binary"
 	"encoding/json"
 	"fmt"
 	"net"
@@ -16,13 +17,16 @@ import (
 )
 
 const DefaultLocalL2RPCURL = "http://127.0.0.1:8545"
+const shastaExtraDataLen = 7
 
 type L2Header struct {
-	Number       uint64
-	Hash         common.Hash
-	ParentHash   common.Hash
-	StateRoot    common.Hash
-	ReceiptsRoot common.Hash
+	Number          uint64
+	Hash            common.Hash
+	ParentHash      common.Hash
+	StateRoot       common.Hash
+	ReceiptsRoot    common.Hash
+	ProposalID      uint64
+	ProposalIDValid bool
 }
 
 type L2HeaderSource interface {
@@ -128,6 +132,7 @@ type rawL2Header struct {
 	ParentHash   string `json:"parentHash"`
 	StateRoot    string `json:"stateRoot"`
 	ReceiptsRoot string `json:"receiptsRoot"`
+	ExtraData    string `json:"extraData"`
 }
 
 func (h rawL2Header) header() (L2Header, error) {
@@ -151,13 +156,36 @@ func (h rawL2Header) header() (L2Header, error) {
 	if err != nil {
 		return L2Header{}, fmt.Errorf("parse local L2 receipts root: %w", err)
 	}
+	proposalID, proposalIDValid, err := decodeShastaProposalIDFromExtraData(h.ExtraData)
+	if err != nil {
+		return L2Header{}, fmt.Errorf("parse local L2 extraData: %w", err)
+	}
 	return L2Header{
-		Number:       number,
-		Hash:         hash,
-		ParentHash:   parentHash,
-		StateRoot:    stateRoot,
-		ReceiptsRoot: receiptsRoot,
+		Number:          number,
+		Hash:            hash,
+		ParentHash:      parentHash,
+		StateRoot:       stateRoot,
+		ReceiptsRoot:    receiptsRoot,
+		ProposalID:      proposalID,
+		ProposalIDValid: proposalIDValid,
 	}, nil
+}
+
+func decodeShastaProposalIDFromExtraData(raw string) (uint64, bool, error) {
+	if strings.TrimSpace(raw) == "" {
+		return 0, false, nil
+	}
+	decoded, err := parseHexBytes(raw)
+	if err != nil {
+		return 0, false, err
+	}
+	if len(decoded) < shastaExtraDataLen {
+		return 0, false, nil
+	}
+
+	var proposalBytes [8]byte
+	copy(proposalBytes[2:], decoded[1:shastaExtraDataLen])
+	return binary.BigEndian.Uint64(proposalBytes[:]), true, nil
 }
 
 func isLocalHTTPURL(parsed *url.URL) bool {

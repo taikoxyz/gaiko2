@@ -157,6 +157,9 @@ func (s TDXGethService) buildDirectAggregateCarry(
 				number,
 			)
 		}
+		if err := requireHeaderProposalID("direct aggregate", header, proposal.ProposalID); err != nil {
+			return CarryView{}, err
+		}
 		if previous != nil && header.ParentHash != previous.Hash {
 			return CarryView{}, fmt.Errorf(
 				"local L2 parent hash mismatch for direct aggregate proposal %d block %d: got %s expected %s",
@@ -171,6 +174,13 @@ func (s TDXGethService) buildDirectAggregateCarry(
 		}
 		last = header
 		previous = &last
+	}
+
+	if err := s.verifyDirectAggregateLeftBoundary(ctx, proposal, first); err != nil {
+		return CarryView{}, err
+	}
+	if err := s.verifyDirectAggregateRightBoundary(ctx, proposal, last); err != nil {
+		return CarryView{}, err
 	}
 
 	return CarryView{
@@ -190,6 +200,89 @@ func (s TDXGethService) buildDirectAggregateCarry(
 			},
 		},
 	}, nil
+}
+
+func (s TDXGethService) verifyDirectAggregateLeftBoundary(
+	ctx context.Context,
+	proposal DirectAggregateProposalView,
+	first L2Header,
+) error {
+	if first.Number == 0 {
+		if proposal.ProposalID != 0 {
+			return fmt.Errorf(
+				"direct aggregate left boundary missing for proposal %d at genesis block",
+				proposal.ProposalID,
+			)
+		}
+		return nil
+	}
+	if proposal.ProposalID == 0 {
+		return fmt.Errorf(
+			"direct aggregate left boundary cannot precede proposal 0 at block %d",
+			first.Number,
+		)
+	}
+
+	previousNumber := first.Number - 1
+	previous, err := s.headers.HeaderByNumber(ctx, previousNumber)
+	if err != nil {
+		return fmt.Errorf("fetch direct aggregate left boundary block %d: %w", previousNumber, err)
+	}
+	if previous.Number != previousNumber {
+		return fmt.Errorf(
+			"direct aggregate left boundary block number mismatch: got %d expected %d",
+			previous.Number,
+			previousNumber,
+		)
+	}
+	return requireHeaderProposalID("direct aggregate left boundary", previous, proposal.ProposalID-1)
+}
+
+func (s TDXGethService) verifyDirectAggregateRightBoundary(
+	ctx context.Context,
+	proposal DirectAggregateProposalView,
+	last L2Header,
+) error {
+	if last.Number == ^uint64(0) {
+		return fmt.Errorf("direct aggregate right boundary overflows after block %d", last.Number)
+	}
+	if proposal.ProposalID == ^uint64(0) {
+		return fmt.Errorf("direct aggregate right boundary overflows after proposal %d", proposal.ProposalID)
+	}
+
+	nextNumber := last.Number + 1
+	next, err := s.headers.HeaderByNumber(ctx, nextNumber)
+	if err != nil {
+		return fmt.Errorf("fetch direct aggregate right boundary block %d: %w", nextNumber, err)
+	}
+	if next.Number != nextNumber {
+		return fmt.Errorf(
+			"direct aggregate right boundary block number mismatch: got %d expected %d",
+			next.Number,
+			nextNumber,
+		)
+	}
+	return requireHeaderProposalID("direct aggregate right boundary", next, proposal.ProposalID+1)
+}
+
+func requireHeaderProposalID(label string, header L2Header, expected uint64) error {
+	if !header.ProposalIDValid {
+		return fmt.Errorf(
+			"%s block %d missing Shasta proposal id in extraData",
+			label,
+			header.Number,
+		)
+	}
+	if header.ProposalID != expected {
+		return fmt.Errorf(
+			"%s block %d proposal id mismatch: got %d expected %d",
+			label,
+			header.Number,
+			header.ProposalID,
+			expected,
+		)
+	}
+	return nil
 }
 
 func marshalCarry(carry CarryView) (json.RawMessage, error) {

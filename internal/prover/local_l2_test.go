@@ -2,6 +2,8 @@ package prover
 
 import (
 	"context"
+	"encoding/binary"
+	"encoding/hex"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
@@ -27,6 +29,7 @@ func TestLocalL2RPCFetchesHeaderOnlyBlockByNumber(t *testing.T) {
 				"parentHash":   testHash("11"),
 				"stateRoot":    testHash("bb"),
 				"receiptsRoot": testHash("cc"),
+				"extraData":    shastaExtraDataHex(7),
 			},
 		})
 	}))
@@ -49,6 +52,9 @@ func TestLocalL2RPCFetchesHeaderOnlyBlockByNumber(t *testing.T) {
 	if header.Number != 42 {
 		t.Fatalf("unexpected number: %d", header.Number)
 	}
+	if !header.ProposalIDValid || header.ProposalID != 7 {
+		t.Fatalf("unexpected proposal id: valid=%v id=%d", header.ProposalIDValid, header.ProposalID)
+	}
 }
 
 func TestLocalL2RPCRejectsNonSuccessHTTPStatus(t *testing.T) {
@@ -65,4 +71,10 @@ func TestLocalL2RPCRejectsNonSuccessHTTPStatus(t *testing.T) {
 	if err == nil || err.Error() != "local L2 eth_getBlockByNumber(42) returned HTTP 502" {
 		t.Fatalf("unexpected error: %v", err)
 	}
+}
+
+func shastaExtraDataHex(proposalID uint64) string {
+	var proposalBytes [8]byte
+	binary.BigEndian.PutUint64(proposalBytes[:], proposalID)
+	return "0x00" + hex.EncodeToString(proposalBytes[2:])
 }

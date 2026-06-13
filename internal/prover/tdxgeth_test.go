@@ -136,17 +136,34 @@ func TestTDXGethServiceDirectAggregateBuildsCarryFromLocalHeaders(t *testing.T) 
 
 	source := fakeL2HeaderSource{
 		headers: map[uint64]L2Header{
+			41: {
+				Number:          41,
+				Hash:            common.HexToHash("0xcccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"),
+				ProposalID:      6,
+				ProposalIDValid: true,
+			},
 			42: {
-				Number:     42,
-				Hash:       common.HexToHash("0xdddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd"),
-				ParentHash: common.HexToHash("0xcccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"),
-				StateRoot:  common.HexToHash("0xeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee"),
+				Number:          42,
+				Hash:            common.HexToHash("0xdddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd"),
+				ParentHash:      common.HexToHash("0xcccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"),
+				StateRoot:       common.HexToHash("0xeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee"),
+				ProposalID:      7,
+				ProposalIDValid: true,
 			},
 			43: {
-				Number:     43,
-				Hash:       common.HexToHash("0x9999999999999999999999999999999999999999999999999999999999999999"),
-				ParentHash: common.HexToHash("0xdddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd"),
-				StateRoot:  common.HexToHash("0x8888888888888888888888888888888888888888888888888888888888888888"),
+				Number:          43,
+				Hash:            common.HexToHash("0x9999999999999999999999999999999999999999999999999999999999999999"),
+				ParentHash:      common.HexToHash("0xdddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd"),
+				StateRoot:       common.HexToHash("0x8888888888888888888888888888888888888888888888888888888888888888"),
+				ProposalID:      8,
+				ProposalIDValid: true,
+			},
+			44: {
+				Number:          44,
+				Hash:            common.HexToHash("0x7777777777777777777777777777777777777777777777777777777777777777"),
+				ParentHash:      common.HexToHash("0x9999999999999999999999999999999999999999999999999999999999999999"),
+				ProposalID:      9,
+				ProposalIDValid: true,
 			},
 		},
 	}
@@ -159,8 +176,8 @@ func TestTDXGethServiceDirectAggregateBuildsCarryFromLocalHeaders(t *testing.T) 
 	if result.Proof == nil || *result.Proof == "" {
 		t.Fatalf("expected proof")
 	}
-	if source.calls != 2 {
-		t.Fatalf("expected two local header lookups, got %d", source.calls)
+	if !source.requested(41) || !source.requested(44) {
+		t.Fatalf("expected boundary header lookups, got %v", source.requestedNumbers)
 	}
 	if len(result.ProofCarryDataVec) != 2 {
 		t.Fatalf("unexpected carry vector length: %d", len(result.ProofCarryDataVec))
@@ -175,6 +192,73 @@ func TestTDXGethServiceDirectAggregateBuildsCarryFromLocalHeaders(t *testing.T) 
 	}
 	if result.Input != expectedInput.Hex() {
 		t.Fatalf("unexpected input: got %s want %s", result.Input, expectedInput.Hex())
+	}
+}
+
+func TestTDXGethServiceDirectAggregateRejectsBlockOutsideProposal(t *testing.T) {
+	req := validatedSingleDirectAggregateRequest(t, 7, []uint64{42})
+	source := fakeL2HeaderSource{
+		headers: map[uint64]L2Header{
+			41: proposalHeader(41, 6, testHash("cc"), testHash("bb")),
+			42: proposalHeader(42, 8, testHash("dd"), testHash("cc")),
+			43: proposalHeader(43, 8, testHash("ee"), testHash("dd")),
+		},
+	}
+	service := NewTDXGethService(&source, NewNativeProofSigner(shastaNativeMockInstance))
+
+	_, err := service.DirectAggregate(context.Background(), req)
+	if err == nil || !strings.Contains(err.Error(), "proposal id mismatch") {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
+func TestTDXGethServiceDirectAggregateRejectsLeftBoundaryInsideProposal(t *testing.T) {
+	req := validatedSingleDirectAggregateRequest(t, 7, []uint64{42})
+	source := fakeL2HeaderSource{
+		headers: map[uint64]L2Header{
+			41: proposalHeader(41, 7, testHash("cc"), testHash("bb")),
+			42: proposalHeader(42, 7, testHash("dd"), testHash("cc")),
+			43: proposalHeader(43, 8, testHash("ee"), testHash("dd")),
+		},
+	}
+	service := NewTDXGethService(&source, NewNativeProofSigner(shastaNativeMockInstance))
+
+	_, err := service.DirectAggregate(context.Background(), req)
+	if err == nil || !strings.Contains(err.Error(), "left boundary") {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
+func TestTDXGethServiceDirectAggregateRequiresRightBoundary(t *testing.T) {
+	req := validatedSingleDirectAggregateRequest(t, 7, []uint64{42})
+	source := fakeL2HeaderSource{
+		headers: map[uint64]L2Header{
+			41: proposalHeader(41, 6, testHash("cc"), testHash("bb")),
+			42: proposalHeader(42, 7, testHash("dd"), testHash("cc")),
+		},
+	}
+	service := NewTDXGethService(&source, NewNativeProofSigner(shastaNativeMockInstance))
+
+	_, err := service.DirectAggregate(context.Background(), req)
+	if err == nil || !strings.Contains(err.Error(), "right boundary") {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
+func TestTDXGethServiceDirectAggregateRejectsWrongRightBoundaryProposal(t *testing.T) {
+	req := validatedSingleDirectAggregateRequest(t, 7, []uint64{42})
+	source := fakeL2HeaderSource{
+		headers: map[uint64]L2Header{
+			41: proposalHeader(41, 6, testHash("cc"), testHash("bb")),
+			42: proposalHeader(42, 7, testHash("dd"), testHash("cc")),
+			43: proposalHeader(43, 7, testHash("ee"), testHash("dd")),
+		},
+	}
+	service := NewTDXGethService(&source, NewNativeProofSigner(shastaNativeMockInstance))
+
+	_, err := service.DirectAggregate(context.Background(), req)
+	if err == nil || !strings.Contains(err.Error(), "right boundary") {
+		t.Fatalf("unexpected error: %v", err)
 	}
 }
 
@@ -193,6 +277,45 @@ func TestValidateDirectAggregateRequestRejectsBrokenProposalContinuity(t *testin
 	})
 	if err == nil || !strings.Contains(err.Error(), "proposal_id") {
 		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
+func validatedSingleDirectAggregateRequest(
+	t *testing.T,
+	proposalID uint64,
+	blockNumbers []uint64,
+) *ValidatedDirectAggregateRequest {
+	t.Helper()
+
+	parentHash := testHash("cc")
+	blockHash := testHash("dd")
+	stateRoot := testHash("ee")
+	carry := sampleCarryData(t, 167013, parentHash, "0x2a", blockHash, stateRoot)
+	proposal := directProposalFromCarry(t, carry, blockNumbers)
+	proposal.ProposalID = proposalID
+	proposal.ProposalHash = testHash("aa")
+	proposal.ParentProposalHash = testHash("bb")
+
+	validated, err := ValidateDirectAggregateRequest(protocol.ShastaDirectAggregateRequest{
+		Schema: protocol.ShastaDirectAggregateRequestSchemaV1,
+		Payload: protocol.ShastaDirectAggregatePayload{
+			Proposals: []protocol.DirectAggregateProposal{proposal},
+		},
+	})
+	if err != nil {
+		t.Fatalf("validate direct aggregate request: %v", err)
+	}
+	return validated
+}
+
+func proposalHeader(number uint64, proposalID uint64, hash string, parentHash string) L2Header {
+	return L2Header{
+		Number:          number,
+		Hash:            common.HexToHash(hash),
+		ParentHash:      common.HexToHash(parentHash),
+		StateRoot:       common.HexToHash("0xeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee"),
+		ProposalID:      proposalID,
+		ProposalIDValid: true,
 	}
 }
 
@@ -289,13 +412,15 @@ func TestNewConfiguredServiceSelectsTDXGethMode(t *testing.T) {
 }
 
 type fakeL2HeaderSource struct {
-	headers map[uint64]L2Header
-	err     error
-	calls   int
+	headers          map[uint64]L2Header
+	err              error
+	calls            int
+	requestedNumbers []uint64
 }
 
 func (s *fakeL2HeaderSource) HeaderByNumber(_ context.Context, number uint64) (L2Header, error) {
 	s.calls++
+	s.requestedNumbers = append(s.requestedNumbers, number)
 	if s.err != nil {
 		return L2Header{}, s.err
 	}
@@ -304,6 +429,15 @@ func (s *fakeL2HeaderSource) HeaderByNumber(_ context.Context, number uint64) (L
 		return L2Header{}, errors.New("missing header")
 	}
 	return header, nil
+}
+
+func (s *fakeL2HeaderSource) requested(number uint64) bool {
+	for _, item := range s.requestedNumbers {
+		if item == number {
+			return true
+		}
+	}
+	return false
 }
 
 type configuredFakeProvider struct {
