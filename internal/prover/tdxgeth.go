@@ -182,6 +182,9 @@ func (s TDXGethService) buildDirectAggregateCarry(
 	if err := s.verifyDirectAggregateRightBoundary(ctx, proposal, last); err != nil {
 		return CarryView{}, err
 	}
+	if err := s.verifyDirectAggregateEventCoverage(ctx, proposal, first, last); err != nil {
+		return CarryView{}, err
+	}
 
 	return CarryView{
 		ChainID:  proposal.ChainID,
@@ -200,6 +203,93 @@ func (s TDXGethService) buildDirectAggregateCarry(
 			},
 		},
 	}, nil
+}
+
+func (s TDXGethService) verifyDirectAggregateEventCoverage(
+	ctx context.Context,
+	proposal DirectAggregateProposalView,
+	first L2Header,
+	last L2Header,
+) error {
+	expectedLast, err := s.headers.LastCertainBlockIDByBatchID(ctx, proposal.ProposalID)
+	if err != nil {
+		return fmt.Errorf(
+			"fetch direct aggregate certain last block for proposal %d: %w",
+			proposal.ProposalID,
+			err,
+		)
+	}
+	if expectedLast != last.Number {
+		return fmt.Errorf(
+			"direct aggregate certain last block mismatch for proposal %d: got %d expected %d",
+			proposal.ProposalID,
+			last.Number,
+			expectedLast,
+		)
+	}
+
+	expectedFirst := uint64(0)
+	if proposal.ProposalID > 0 {
+		if proposal.ProposalID == 1 {
+			expectedFirst = 1
+		} else {
+			previousLast, err := s.headers.LastCertainBlockIDByBatchID(ctx, proposal.ProposalID-1)
+			if err != nil {
+				return fmt.Errorf(
+					"fetch direct aggregate previous certain last block for proposal %d: %w",
+					proposal.ProposalID,
+					err,
+				)
+			}
+			if previousLast == ^uint64(0) {
+				return fmt.Errorf(
+					"direct aggregate previous certain last block overflows before proposal %d",
+					proposal.ProposalID,
+				)
+			}
+			expectedFirst = previousLast + 1
+		}
+	}
+	if first.Number != expectedFirst {
+		return fmt.Errorf(
+			"direct aggregate certain first block mismatch for proposal %d: got %d expected %d",
+			proposal.ProposalID,
+			first.Number,
+			expectedFirst,
+		)
+	}
+
+	origin, err := s.headers.LastCertainL1OriginByBatchID(ctx, proposal.ProposalID)
+	if err != nil {
+		return fmt.Errorf(
+			"fetch direct aggregate certain L1 origin for proposal %d: %w",
+			proposal.ProposalID,
+			err,
+		)
+	}
+	if origin.BlockID != last.Number {
+		return fmt.Errorf(
+			"direct aggregate certain L1 origin block id mismatch for proposal %d: got %d expected %d",
+			proposal.ProposalID,
+			origin.BlockID,
+			last.Number,
+		)
+	}
+	if origin.L2BlockHash != last.Hash {
+		return fmt.Errorf(
+			"direct aggregate certain L1 origin L2 block hash mismatch for proposal %d: got %s expected %s",
+			proposal.ProposalID,
+			origin.L2BlockHash.Hex(),
+			last.Hash.Hex(),
+		)
+	}
+	if !origin.L1BlockHeightValid {
+		return fmt.Errorf("direct aggregate certain L1 origin missing L1 block height for proposal %d", proposal.ProposalID)
+	}
+	if !origin.L1BlockHashValid || origin.L1BlockHash == (common.Hash{}) {
+		return fmt.Errorf("direct aggregate certain L1 origin missing L1 block hash for proposal %d", proposal.ProposalID)
+	}
+	return nil
 }
 
 func (s TDXGethService) verifyDirectAggregateLeftBoundary(

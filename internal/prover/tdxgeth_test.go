@@ -166,6 +166,29 @@ func TestTDXGethServiceDirectAggregateBuildsCarryFromLocalHeaders(t *testing.T) 
 				ProposalIDValid: true,
 			},
 		},
+		lastBlocks: map[uint64]uint64{
+			6: 41,
+			7: 42,
+			8: 43,
+		},
+		l1Origins: map[uint64]L1Origin{
+			7: {
+				BlockID:            42,
+				L2BlockHash:        common.HexToHash("0xdddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd"),
+				L1BlockHeight:      100,
+				L1BlockHeightValid: true,
+				L1BlockHash:        common.HexToHash("0x1000000000000000000000000000000000000000000000000000000000000000"),
+				L1BlockHashValid:   true,
+			},
+			8: {
+				BlockID:            43,
+				L2BlockHash:        common.HexToHash("0x9999999999999999999999999999999999999999999999999999999999999999"),
+				L1BlockHeight:      101,
+				L1BlockHeightValid: true,
+				L1BlockHash:        common.HexToHash("0x2000000000000000000000000000000000000000000000000000000000000000"),
+				L1BlockHashValid:   true,
+			},
+		},
 	}
 	service := NewTDXGethService(&source, NewNativeProofSigner(shastaNativeMockInstance))
 
@@ -262,6 +285,79 @@ func TestTDXGethServiceDirectAggregateRejectsWrongRightBoundaryProposal(t *testi
 	}
 }
 
+func TestTDXGethServiceDirectAggregateRequiresCertainLastBlockMapping(t *testing.T) {
+	req := validatedSingleDirectAggregateRequest(t, 7, []uint64{42})
+	source := directAggregateEventCoveredSource()
+	delete(source.lastBlocks, 7)
+	service := NewTDXGethService(&source, NewNativeProofSigner(shastaNativeMockInstance))
+
+	_, err := service.DirectAggregate(context.Background(), req)
+	if err == nil || !strings.Contains(err.Error(), "certain last block") {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
+func TestTDXGethServiceDirectAggregateRejectsRangeOutsideCertainProposal(t *testing.T) {
+	req := validatedSingleDirectAggregateRequest(t, 7, []uint64{42})
+	source := directAggregateEventCoveredSource()
+	source.lastBlocks[7] = 43
+	service := NewTDXGethService(&source, NewNativeProofSigner(shastaNativeMockInstance))
+
+	_, err := service.DirectAggregate(context.Background(), req)
+	if err == nil || !strings.Contains(err.Error(), "certain last block mismatch") {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
+func TestTDXGethServiceDirectAggregateRejectsL1OriginBlockHashMismatch(t *testing.T) {
+	req := validatedSingleDirectAggregateRequest(t, 7, []uint64{42})
+	source := directAggregateEventCoveredSource()
+	source.l1Origins[7] = L1Origin{
+		BlockID:            42,
+		L2BlockHash:        common.HexToHash(testHash("bad")),
+		L1BlockHeight:      100,
+		L1BlockHeightValid: true,
+		L1BlockHash:        common.HexToHash(testHash("10")),
+		L1BlockHashValid:   true,
+	}
+	service := NewTDXGethService(&source, NewNativeProofSigner(shastaNativeMockInstance))
+
+	_, err := service.DirectAggregate(context.Background(), req)
+	if err == nil || !strings.Contains(err.Error(), "certain L1 origin L2 block hash mismatch") {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
+func TestTDXGethServiceDirectAggregateAllowsGenesisPreviousMappingForFirstProposal(t *testing.T) {
+	req := validatedSingleDirectAggregateRequest(t, 1, []uint64{1})
+	source := fakeL2HeaderSource{
+		headers: map[uint64]L2Header{
+			0: proposalHeader(0, 0, testHash("aa"), testHash("00")),
+			1: proposalHeader(1, 1, testHash("bb"), testHash("aa")),
+			2: proposalHeader(2, 2, testHash("cc"), testHash("bb")),
+		},
+		lastBlocks: map[uint64]uint64{
+			1: 1,
+		},
+		l1Origins: map[uint64]L1Origin{
+			1: {
+				BlockID:            1,
+				L2BlockHash:        common.HexToHash(testHash("bb")),
+				L1BlockHeight:      100,
+				L1BlockHeightValid: true,
+				L1BlockHash:        common.HexToHash(testHash("10")),
+				L1BlockHashValid:   true,
+			},
+		},
+	}
+	service := NewTDXGethService(&source, NewNativeProofSigner(shastaNativeMockInstance))
+
+	_, err := service.DirectAggregate(context.Background(), req)
+	if err != nil {
+		t.Fatalf("direct aggregate: %v", err)
+	}
+}
+
 func TestValidateDirectAggregateRequestRejectsBrokenProposalContinuity(t *testing.T) {
 	firstCarry := sampleCarryData(t, 167013, testHash("11"), "0x2a", testHash("aa"), testHash("bb"))
 	secondCarry := sampleCarryData(t, 167013, testHash("aa"), "0x2b", testHash("cc"), testHash("dd"))
@@ -316,6 +412,30 @@ func proposalHeader(number uint64, proposalID uint64, hash string, parentHash st
 		StateRoot:       common.HexToHash("0xeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee"),
 		ProposalID:      proposalID,
 		ProposalIDValid: true,
+	}
+}
+
+func directAggregateEventCoveredSource() fakeL2HeaderSource {
+	return fakeL2HeaderSource{
+		headers: map[uint64]L2Header{
+			41: proposalHeader(41, 6, testHash("cc"), testHash("bb")),
+			42: proposalHeader(42, 7, testHash("dd"), testHash("cc")),
+			43: proposalHeader(43, 8, testHash("ee"), testHash("dd")),
+		},
+		lastBlocks: map[uint64]uint64{
+			6: 41,
+			7: 42,
+		},
+		l1Origins: map[uint64]L1Origin{
+			7: {
+				BlockID:            42,
+				L2BlockHash:        common.HexToHash(testHash("dd")),
+				L1BlockHeight:      100,
+				L1BlockHeightValid: true,
+				L1BlockHash:        common.HexToHash(testHash("10")),
+				L1BlockHashValid:   true,
+			},
+		},
 	}
 }
 
@@ -413,6 +533,8 @@ func TestNewConfiguredServiceSelectsTDXGethMode(t *testing.T) {
 
 type fakeL2HeaderSource struct {
 	headers          map[uint64]L2Header
+	lastBlocks       map[uint64]uint64
+	l1Origins        map[uint64]L1Origin
 	err              error
 	calls            int
 	requestedNumbers []uint64
@@ -429,6 +551,28 @@ func (s *fakeL2HeaderSource) HeaderByNumber(_ context.Context, number uint64) (L
 		return L2Header{}, errors.New("missing header")
 	}
 	return header, nil
+}
+
+func (s *fakeL2HeaderSource) LastCertainBlockIDByBatchID(_ context.Context, batchID uint64) (uint64, error) {
+	if s.err != nil {
+		return 0, s.err
+	}
+	blockID, ok := s.lastBlocks[batchID]
+	if !ok {
+		return 0, errors.New("missing certain block")
+	}
+	return blockID, nil
+}
+
+func (s *fakeL2HeaderSource) LastCertainL1OriginByBatchID(_ context.Context, batchID uint64) (L1Origin, error) {
+	if s.err != nil {
+		return L1Origin{}, s.err
+	}
+	origin, ok := s.l1Origins[batchID]
+	if !ok {
+		return L1Origin{}, errors.New("missing certain l1 origin")
+	}
+	return origin, nil
 }
 
 func (s *fakeL2HeaderSource) requested(number uint64) bool {

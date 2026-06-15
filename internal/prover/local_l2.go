@@ -29,8 +29,19 @@ type L2Header struct {
 	ProposalIDValid bool
 }
 
+type L1Origin struct {
+	BlockID            uint64
+	L2BlockHash        common.Hash
+	L1BlockHeight      uint64
+	L1BlockHeightValid bool
+	L1BlockHash        common.Hash
+	L1BlockHashValid   bool
+}
+
 type L2HeaderSource interface {
 	HeaderByNumber(context.Context, uint64) (L2Header, error)
+	LastCertainBlockIDByBatchID(context.Context, uint64) (uint64, error)
+	LastCertainL1OriginByBatchID(context.Context, uint64) (L1Origin, error)
 }
 
 type LocalL2RPC struct {
@@ -71,42 +82,86 @@ func NewLocalL2RPCWithOptions(rawURL string, opts L2RPCOptions) (*LocalL2RPC, er
 }
 
 func (c *LocalL2RPC) HeaderByNumber(ctx context.Context, number uint64) (L2Header, error) {
-	requestBody, err := json.Marshal(jsonRPCRequest{
-		JSONRPC: "2.0",
-		Method:  "eth_getBlockByNumber",
-		Params:  []any{quantity(number), false},
-		ID:      1,
-	})
-	if err != nil {
-		return L2Header{}, err
-	}
-
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, c.endpoint, bytes.NewReader(requestBody))
-	if err != nil {
-		return L2Header{}, err
-	}
-	req.Header.Set("content-type", "application/json")
-
-	resp, err := c.client.Do(req)
-	if err != nil {
-		return L2Header{}, fmt.Errorf("local L2 eth_getBlockByNumber(%d): %w", number, err)
-	}
-	defer resp.Body.Close()
-	if resp.StatusCode < http.StatusOK || resp.StatusCode >= http.StatusMultipleChoices {
-		return L2Header{}, fmt.Errorf("local L2 eth_getBlockByNumber(%d) returned HTTP %d", number, resp.StatusCode)
-	}
-
 	var rpcResp blockByNumberResponse
-	if err := json.NewDecoder(resp.Body).Decode(&rpcResp); err != nil {
-		return L2Header{}, fmt.Errorf("decode local L2 response: %w", err)
-	}
-	if rpcResp.Error != nil {
-		return L2Header{}, fmt.Errorf("local L2 RPC error %d: %s", rpcResp.Error.Code, rpcResp.Error.Message)
+	if err := c.call(ctx, "eth_getBlockByNumber", []any{quantity(number), false}, &rpcResp); err != nil {
+		return L2Header{}, fmt.Errorf("local L2 eth_getBlockByNumber(%d): %w", number, err)
 	}
 	if rpcResp.Result == nil {
 		return L2Header{}, fmt.Errorf("local L2 missing block %d", number)
 	}
 	return rpcResp.Result.header()
+}
+
+func (c *LocalL2RPC) LastCertainBlockIDByBatchID(ctx context.Context, batchID uint64) (uint64, error) {
+	var rpcResp quantityResponse
+	if err := c.call(
+		ctx,
+		"taikoAuth_lastCertainBlockIDByBatchID",
+		[]any{quantity(batchID)},
+		&rpcResp,
+	); err != nil {
+		return 0, fmt.Errorf("local L2 taikoAuth_lastCertainBlockIDByBatchID(%d): %w", batchID, err)
+	}
+	if rpcResp.Result == nil {
+		return 0, fmt.Errorf("local L2 missing certain last block for proposal %d", batchID)
+	}
+	blockID, err := parseQuantity(*rpcResp.Result)
+	if err != nil {
+		return 0, fmt.Errorf("parse certain last block for proposal %d: %w", batchID, err)
+	}
+	return blockID, nil
+}
+
+func (c *LocalL2RPC) LastCertainL1OriginByBatchID(ctx context.Context, batchID uint64) (L1Origin, error) {
+	var rpcResp l1OriginResponse
+	if err := c.call(
+		ctx,
+		"taikoAuth_lastCertainL1OriginByBatchID",
+		[]any{quantity(batchID)},
+		&rpcResp,
+	); err != nil {
+		return L1Origin{}, fmt.Errorf("local L2 taikoAuth_lastCertainL1OriginByBatchID(%d): %w", batchID, err)
+	}
+	if rpcResp.Result == nil {
+		return L1Origin{}, fmt.Errorf("local L2 missing certain L1 origin for proposal %d", batchID)
+	}
+	origin, err := rpcResp.Result.origin()
+	if err != nil {
+		return L1Origin{}, fmt.Errorf("parse certain L1 origin for proposal %d: %w", batchID, err)
+	}
+	return origin, nil
+}
+
+func (c *LocalL2RPC) call(ctx context.Context, method string, params []any, out any) error {
+	requestBody, err := json.Marshal(jsonRPCRequest{
+		JSONRPC: "2.0",
+		Method:  method,
+		Params:  params,
+		ID:      1,
+	})
+	if err != nil {
+		return err
+	}
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, c.endpoint, bytes.NewReader(requestBody))
+	if err != nil {
+		return err
+	}
+	req.Header.Set("content-type", "application/json")
+
+	resp, err := c.client.Do(req)
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode < http.StatusOK || resp.StatusCode >= http.StatusMultipleChoices {
+		return fmt.Errorf("%s returned HTTP %d", method, resp.StatusCode)
+	}
+
+	if err := json.NewDecoder(resp.Body).Decode(out); err != nil {
+		return fmt.Errorf("decode local L2 response: %w", err)
+	}
+	return rpcError(out)
 }
 
 type jsonRPCRequest struct {
@@ -118,6 +173,16 @@ type jsonRPCRequest struct {
 
 type blockByNumberResponse struct {
 	Result *rawL2Header  `json:"result"`
+	Error  *jsonRPCError `json:"error"`
+}
+
+type quantityResponse struct {
+	Result *string       `json:"result"`
+	Error  *jsonRPCError `json:"error"`
+}
+
+type l1OriginResponse struct {
+	Result *rawL1Origin  `json:"result"`
 	Error  *jsonRPCError `json:"error"`
 }
 
@@ -133,6 +198,13 @@ type rawL2Header struct {
 	StateRoot    string `json:"stateRoot"`
 	ReceiptsRoot string `json:"receiptsRoot"`
 	ExtraData    string `json:"extraData"`
+}
+
+type rawL1Origin struct {
+	BlockID       string  `json:"blockID"`
+	L2BlockHash   string  `json:"l2BlockHash"`
+	L1BlockHeight *string `json:"l1BlockHeight"`
+	L1BlockHash   *string `json:"l1BlockHash"`
 }
 
 func (h rawL2Header) header() (L2Header, error) {
@@ -169,6 +241,56 @@ func (h rawL2Header) header() (L2Header, error) {
 		ProposalID:      proposalID,
 		ProposalIDValid: proposalIDValid,
 	}, nil
+}
+
+func (o rawL1Origin) origin() (L1Origin, error) {
+	blockID, err := parseQuantity(o.BlockID)
+	if err != nil {
+		return L1Origin{}, fmt.Errorf("parse blockID: %w", err)
+	}
+	l2BlockHash, err := parseHashString(o.L2BlockHash)
+	if err != nil {
+		return L1Origin{}, fmt.Errorf("parse l2BlockHash: %w", err)
+	}
+	origin := L1Origin{
+		BlockID:     blockID,
+		L2BlockHash: l2BlockHash,
+	}
+	if o.L1BlockHeight != nil {
+		height, err := parseQuantity(*o.L1BlockHeight)
+		if err != nil {
+			return L1Origin{}, fmt.Errorf("parse l1BlockHeight: %w", err)
+		}
+		origin.L1BlockHeight = height
+		origin.L1BlockHeightValid = true
+	}
+	if o.L1BlockHash != nil {
+		hash, err := parseHashString(*o.L1BlockHash)
+		if err != nil {
+			return L1Origin{}, fmt.Errorf("parse l1BlockHash: %w", err)
+		}
+		origin.L1BlockHash = hash
+		origin.L1BlockHashValid = true
+	}
+	return origin, nil
+}
+
+func rpcError(out any) error {
+	switch resp := out.(type) {
+	case *blockByNumberResponse:
+		if resp.Error != nil {
+			return fmt.Errorf("local L2 RPC error %d: %s", resp.Error.Code, resp.Error.Message)
+		}
+	case *quantityResponse:
+		if resp.Error != nil {
+			return fmt.Errorf("local L2 RPC error %d: %s", resp.Error.Code, resp.Error.Message)
+		}
+	case *l1OriginResponse:
+		if resp.Error != nil {
+			return fmt.Errorf("local L2 RPC error %d: %s", resp.Error.Code, resp.Error.Message)
+		}
+	}
+	return nil
 }
 
 func decodeShastaProposalIDFromExtraData(raw string) (uint64, bool, error) {
