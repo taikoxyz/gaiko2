@@ -121,7 +121,7 @@ func processUnzenReplayBlock(
 	}
 
 	signer := types.MakeSigner(config, header.Number, header.Time)
-	cfg.ZkGasMeter = vm.NewZkGasMeter(vm.UnzenZkGasScheduleFor(config.ChainID))
+	cfg.ZkGasMeter = vm.NewZkGasMeter(&vm.UnzenZkGasSchedule)
 	for i, tx := range block.Transactions() {
 		if tx.Type() == types.BlobTxType {
 			return nil, fmt.Errorf("blob transaction at index %d not allowed in Unzen block", i)
@@ -595,6 +595,7 @@ func chainConfigFor(chainID uint64) (*params.ChainConfig, error) {
 		cfg.OntakeBlock = cloneBigInt(core.TaikoHoodiOntakeBlock)
 		cfg.PacayaBlock = cloneBigInt(core.TaikoHoodiPacayaBlock)
 		cfg.ShastaTime = cloneUint64(core.HoodiShastaTime)
+		enableUnzenForksFrom(cfg, core.HoodiUnzenTime)
 		return cfg, nil
 	default:
 		return nil, fmt.Errorf("unsupported chain ID: %d", chainID)
