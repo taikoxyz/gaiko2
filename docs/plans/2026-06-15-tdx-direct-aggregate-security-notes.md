@@ -5,6 +5,9 @@ Date: 2026-06-15
 This note records the current security boundary for the TDX direct aggregate path and the checks that
 must be added before treating a TDX proof as independent from the raiko2 host request.
 
+For the full safety audit checklist and attack analysis, see
+[`2026-06-15-tdx-direct-aggregate-safety-audit.md`](./2026-06-15-tdx-direct-aggregate-safety-audit.md).
+
 ## Current Model
 
 TDX direct aggregate avoids producing per-proposal subproofs. The TDX service reads local L2 headers,
