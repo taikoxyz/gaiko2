@@ -27,6 +27,7 @@ type ServiceConfig struct {
 	InstanceID       uint32
 	TDXSocket        string
 	L2RPCURL         string
+	ProposalAPIURL   string
 	AllowRemoteL2RPC bool
 }
 
@@ -118,7 +119,15 @@ func NewConfiguredService(cfg ServiceConfig, runner Runner) (Service, error) {
 		if err != nil {
 			return nil, err
 		}
-		return NewTDXGethService(headers, NewTDXProofSigner(privateKey, cfg.InstanceID, quoteProvider)), nil
+		proposals, err := newProposalMetadataSourceFn(cfg.ProposalAPIURL)
+		if err != nil {
+			return nil, err
+		}
+		return NewTDXGethService(
+			headers,
+			proposals,
+			NewTDXProofSigner(privateKey, cfg.InstanceID, quoteProvider),
+		), nil
 	}
 
 	return NewConfiguredReplayService(cfg, runner)

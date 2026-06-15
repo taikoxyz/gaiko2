@@ -10,7 +10,7 @@ must be added before treating a TDX proof as independent from the raiko2 host re
 TDX direct aggregate avoids producing per-proposal subproofs. The TDX service reads local L2 headers,
 builds Shasta proof carry data, and signs the Shasta aggregation public input directly.
 
-For the current trusted-prover/devnet flow, the host request is still trusted for proposal metadata:
+The host request still carries proposal metadata for schema compatibility:
 
 - `proposal_hash`
 - `parent_proposal_hash`
@@ -19,32 +19,28 @@ For the current trusted-prover/devnet flow, the host request is still trusted fo
 - `actual_prover`
 - `verifier`
 
-This is acceptable as a temporary devnet/trusted-prover path, but it is not sufficient for a
-malicious-prover security boundary.
+`tdxgeth` no longer uses the request-supplied proposal hash, parent proposal hash, proposer, or
+timestamp when building the signed direct aggregate carry data. It queries the measured local
+taiko-client proposal API by proposal ID and combines that event-derived metadata with local L2
+headers before signing.
 
 ## Issues And Mitigations
 
 ### Request-Supplied Proposal Metadata
 
-Problem: the host can provide `proposal_hash`, `parent_proposal_hash`, proposer, timestamp, and blob
-source-derived metadata. If TDX signs these fields without checking them against event-derived data,
-the blob/source commitment chain is not closed inside TDX.
+Problem: if TDX signs host-supplied `proposal_hash`, `parent_proposal_hash`, proposer, timestamp, and
+blob source-derived metadata without checking them against event-derived data, the blob/source
+commitment chain is not closed inside TDX.
 
-Current mitigation: none in gaiko2 direct aggregate. The trusted-prover path temporarily accepts this.
+Current mitigation: gaiko2 direct aggregate queries the local taiko-client proposal API:
 
-Required mitigation: expose a local client/engine auth RPC that returns event-derived proposal
-metadata by proposal ID, then have the TDX service build carry data from that local metadata instead
-of the request. Candidate shape:
+- `GET /internal/shasta/proposals/{proposal_id}`
 
-- `proposal_id -> proposal_hash`
-- `proposal_id -> parent_proposal_hash`
-- `proposal_id -> proposer`
-- `proposal_id -> timestamp`
-- `proposal_id -> sources/blob hashes`
-- `proposal_id -> L1 origin block hash/height`
+The response supplies the event-derived proposal hash, parent proposal hash, proposer, and timestamp.
+The endpoint must be loopback and served by the measured taiko-client inside the TDX VM.
 
-The TDX service does not need to redo full L1 derivation if the measured client has already derived
-and persisted this metadata from L1 events.
+Remaining boundary: taiko-client still derives this metadata from its configured L1 RPC. Production
+must define the L1 RPC trust/freshness policy separately.
 
 ### Event-Covered Block Range
 
@@ -90,8 +86,9 @@ blob hashes are included indirectly through the proposal hash chain.
 Risk: if TDX accepts proposal hashes from the host, the blob/source chain is not independently
 verified inside TDX.
 
-Required mitigation: the proposal metadata RPC above must return event-derived proposal data, or TDX
-must query L1/InBox itself and recompute proposal hashes.
+Current mitigation: TDX direct aggregate ignores host-supplied proposal hashes and uses the measured
+local taiko-client proposal API. The proposal API computes `hashProposal` from event-derived proposal
+data.
 
 ### L1 RPC Trust
 
@@ -104,7 +101,8 @@ Todo for production:
 - Verify L1 block hash/finality window.
 - Consider multiple RPCs, a trusted checkpoint, or a light-client-style source for stronger trust.
 
-This is not the first devnet priority if proposal metadata comes from the local measured client.
+This remains a production security boundary even when proposal metadata comes from the local measured
+client.
 
 ### Storage Integrity
 
@@ -148,9 +146,8 @@ TDX-local checks against the measured client/engine state before signing.
 
 ## Near-Term Plan
 
-1. Keep trusted-prover/devnet behavior for proposal metadata.
-2. Add event-covered checks using local `taikoAuth_lastCertain*` RPCs.
-3. Discuss with client/engine owners whether proposal metadata is already persisted.
-4. If not persisted, add a local auth RPC for proposal metadata by proposal ID.
-5. Change TDX direct aggregate to construct proposal metadata from local client/engine state, not from
-   the host request.
+1. Keep event-covered checks using local `taikoAuth_lastCertain*` RPCs.
+2. Require local taiko-client proposal API in the measured TDX image.
+3. Keep request proposal metadata only as compatibility fields; do not use it for signed carry data.
+4. Define production L1 RPC trust/freshness policy.
+5. Define production storage rollback and sync policy.

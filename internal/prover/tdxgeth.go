@@ -10,14 +10,20 @@ import (
 )
 
 type TDXGethService struct {
-	headers L2HeaderSource
-	signer  ProofSigner
+	headers   L2HeaderSource
+	proposals ProposalMetadataSource
+	signer    ProofSigner
 }
 
-func NewTDXGethService(headers L2HeaderSource, signer ProofSigner) TDXGethService {
+func NewTDXGethService(
+	headers L2HeaderSource,
+	proposals ProposalMetadataSource,
+	signer ProofSigner,
+) TDXGethService {
 	return TDXGethService{
-		headers: headers,
-		signer:  signer,
+		headers:   headers,
+		proposals: proposals,
+		signer:    signer,
 	}
 }
 
@@ -59,6 +65,9 @@ func (s TDXGethService) DirectAggregate(
 	}
 	if s.signer == nil {
 		return protocol.ProofResult{}, fmt.Errorf("tdxgeth signer is not configured")
+	}
+	if s.proposals == nil {
+		return protocol.ProofResult{}, fmt.Errorf("tdxgeth local proposal metadata source is not configured")
 	}
 
 	rawCarries, carries, err := s.buildDirectAggregateCarries(ctx, req.Proposals)
@@ -142,6 +151,22 @@ func (s TDXGethService) buildDirectAggregateCarry(
 	proposalIndex int,
 	proposal DirectAggregateProposalView,
 ) (CarryView, error) {
+	metadata, err := s.proposals.ProposalMetadataByID(ctx, proposal.ProposalID)
+	if err != nil {
+		return CarryView{}, fmt.Errorf(
+			"fetch direct aggregate proposal metadata for proposal %d: %w",
+			proposal.ProposalID,
+			err,
+		)
+	}
+	if metadata.ProposalID != proposal.ProposalID {
+		return CarryView{}, fmt.Errorf(
+			"direct aggregate proposal metadata id mismatch: got %d expected %d",
+			metadata.ProposalID,
+			proposal.ProposalID,
+		)
+	}
+
 	var first L2Header
 	var last L2Header
 	var previous *L2Header
@@ -191,11 +216,14 @@ func (s TDXGethService) buildDirectAggregateCarry(
 		Verifier: proposal.Verifier,
 		TransitionInput: TransitionInputView{
 			ProposalID:         proposal.ProposalID,
-			ProposalHash:       proposal.ProposalHash,
-			ParentProposalHash: proposal.ParentProposalHash,
+			ProposalHash:       metadata.ProposalHash,
+			ParentProposalHash: metadata.ParentProposalHash,
 			ParentBlockHash:    first.ParentHash,
 			ActualProver:       proposal.ActualProver,
-			Transition:         proposal.Transition,
+			Transition: TransitionView{
+				Proposer:  metadata.Proposer,
+				Timestamp: metadata.Timestamp,
+			},
 			Checkpoint: CheckpointView{
 				BlockNumber: last.Number,
 				BlockHash:   last.Hash,

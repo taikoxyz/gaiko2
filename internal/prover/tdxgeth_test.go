@@ -28,7 +28,7 @@ func TestTDXGethServiceVerifiesLocalHeadersInsteadOfReplayingWitness(t *testing.
 			},
 		},
 	}
-	service := NewTDXGethService(&source, signer)
+	service := NewTDXGethService(&source, nil, signer)
 
 	result, err := service.Prove(context.Background(), req)
 	if err != nil {
@@ -78,7 +78,7 @@ func TestTDXGethServiceRejectsLocalHeaderMismatch(t *testing.T) {
 			},
 		},
 	}
-	service := NewTDXGethService(&source, NewNativeProofSigner(0x12345678))
+	service := NewTDXGethService(&source, nil, NewNativeProofSigner(0x12345678))
 
 	_, err := service.Prove(context.Background(), req)
 	if err == nil || !strings.Contains(err.Error(), "local L2 block hash mismatch") {
@@ -190,7 +190,7 @@ func TestTDXGethServiceDirectAggregateBuildsCarryFromLocalHeaders(t *testing.T) 
 			},
 		},
 	}
-	service := NewTDXGethService(&source, NewNativeProofSigner(shastaNativeMockInstance))
+	service := newTestTDXGethService(t, &source, validated)
 
 	result, err := service.DirectAggregate(context.Background(), validated)
 	if err != nil {
@@ -218,6 +218,74 @@ func TestTDXGethServiceDirectAggregateBuildsCarryFromLocalHeaders(t *testing.T) 
 	}
 }
 
+func TestTDXGethServiceDirectAggregateUsesLocalProposalMetadata(t *testing.T) {
+	correctCarry := mustRawMessage(t, `{
+		"chain_id": 167013,
+		"verifier": "0x00f9f60C79e38c08b785eE4F1a849900693C6630",
+		"transition_input": {
+			"proposal_id": 7,
+			"proposal_hash": "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+			"parent_proposal_hash": "0xbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+			"parent_block_hash": "0xcccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+			"actual_prover": "0x0000777735367b36bC9B61C50022d9D0700dB4Ec",
+			"transition": { "proposer": "0x1111111111111111111111111111111111111111", "timestamp": 123 },
+			"checkpoint": {
+				"blockNumber": "0x2a",
+				"blockHash": "0xdddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+				"stateRoot": "0xeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee"
+			}
+		}
+	}`)
+	proposal := directProposalFromCarry(t, correctCarry, []uint64{42})
+	proposal.ProposalHash = testHash("fa")
+	proposal.ParentProposalHash = testHash("fb")
+	proposal.Transition.Proposer = testAddress("fc")
+	proposal.Transition.Timestamp = 999
+
+	validated, err := ValidateDirectAggregateRequest(protocol.ShastaDirectAggregateRequest{
+		Schema: protocol.ShastaDirectAggregateRequestSchemaV1,
+		Payload: protocol.ShastaDirectAggregatePayload{
+			Proposals: []protocol.DirectAggregateProposal{proposal},
+		},
+	})
+	if err != nil {
+		t.Fatalf("validate direct aggregate request: %v", err)
+	}
+
+	headers := directAggregateEventCoveredSource()
+	proposals := fakeProposalMetadataSource{
+		proposals: map[uint64]ProposalMetadata{
+			7: metadataFromCarry(t, correctCarry),
+		},
+	}
+	service := NewTDXGethService(&headers, &proposals, NewNativeProofSigner(shastaNativeMockInstance))
+
+	result, err := service.DirectAggregate(context.Background(), validated)
+	if err != nil {
+		t.Fatalf("direct aggregate: %v", err)
+	}
+	if len(result.ProofCarryDataVec) != 1 {
+		t.Fatalf("unexpected carry vector length: %d", len(result.ProofCarryDataVec))
+	}
+
+	carry, err := decodeCarry(result.ProofCarryDataVec[0])
+	if err != nil {
+		t.Fatalf("decode returned carry: %v", err)
+	}
+	if carry.TransitionInput.ProposalHash != common.HexToHash(testHash("aa")) {
+		t.Fatalf("expected local proposal hash, got %s", carry.TransitionInput.ProposalHash.Hex())
+	}
+	if carry.TransitionInput.ParentProposalHash != common.HexToHash(testHash("bb")) {
+		t.Fatalf("expected local parent proposal hash, got %s", carry.TransitionInput.ParentProposalHash.Hex())
+	}
+	if carry.TransitionInput.Transition.Proposer != common.HexToAddress(testAddress("11")) {
+		t.Fatalf("expected local proposer, got %s", carry.TransitionInput.Transition.Proposer.Hex())
+	}
+	if carry.TransitionInput.Transition.Timestamp != 123 {
+		t.Fatalf("expected local timestamp, got %d", carry.TransitionInput.Transition.Timestamp)
+	}
+}
+
 func TestTDXGethServiceDirectAggregateRejectsBlockOutsideProposal(t *testing.T) {
 	req := validatedSingleDirectAggregateRequest(t, 7, []uint64{42})
 	source := fakeL2HeaderSource{
@@ -227,7 +295,7 @@ func TestTDXGethServiceDirectAggregateRejectsBlockOutsideProposal(t *testing.T) 
 			43: proposalHeader(43, 8, testHash("ee"), testHash("dd")),
 		},
 	}
-	service := NewTDXGethService(&source, NewNativeProofSigner(shastaNativeMockInstance))
+	service := newTestTDXGethService(t, &source, req)
 
 	_, err := service.DirectAggregate(context.Background(), req)
 	if err == nil || !strings.Contains(err.Error(), "proposal id mismatch") {
@@ -244,7 +312,7 @@ func TestTDXGethServiceDirectAggregateRejectsLeftBoundaryInsideProposal(t *testi
 			43: proposalHeader(43, 8, testHash("ee"), testHash("dd")),
 		},
 	}
-	service := NewTDXGethService(&source, NewNativeProofSigner(shastaNativeMockInstance))
+	service := newTestTDXGethService(t, &source, req)
 
 	_, err := service.DirectAggregate(context.Background(), req)
 	if err == nil || !strings.Contains(err.Error(), "left boundary") {
@@ -260,7 +328,7 @@ func TestTDXGethServiceDirectAggregateRequiresRightBoundary(t *testing.T) {
 			42: proposalHeader(42, 7, testHash("dd"), testHash("cc")),
 		},
 	}
-	service := NewTDXGethService(&source, NewNativeProofSigner(shastaNativeMockInstance))
+	service := newTestTDXGethService(t, &source, req)
 
 	_, err := service.DirectAggregate(context.Background(), req)
 	if err == nil || !strings.Contains(err.Error(), "right boundary") {
@@ -277,7 +345,7 @@ func TestTDXGethServiceDirectAggregateRejectsWrongRightBoundaryProposal(t *testi
 			43: proposalHeader(43, 7, testHash("ee"), testHash("dd")),
 		},
 	}
-	service := NewTDXGethService(&source, NewNativeProofSigner(shastaNativeMockInstance))
+	service := newTestTDXGethService(t, &source, req)
 
 	_, err := service.DirectAggregate(context.Background(), req)
 	if err == nil || !strings.Contains(err.Error(), "right boundary") {
@@ -289,7 +357,7 @@ func TestTDXGethServiceDirectAggregateRequiresCertainLastBlockMapping(t *testing
 	req := validatedSingleDirectAggregateRequest(t, 7, []uint64{42})
 	source := directAggregateEventCoveredSource()
 	delete(source.lastBlocks, 7)
-	service := NewTDXGethService(&source, NewNativeProofSigner(shastaNativeMockInstance))
+	service := newTestTDXGethService(t, &source, req)
 
 	_, err := service.DirectAggregate(context.Background(), req)
 	if err == nil || !strings.Contains(err.Error(), "certain last block") {
@@ -301,7 +369,7 @@ func TestTDXGethServiceDirectAggregateRejectsRangeOutsideCertainProposal(t *test
 	req := validatedSingleDirectAggregateRequest(t, 7, []uint64{42})
 	source := directAggregateEventCoveredSource()
 	source.lastBlocks[7] = 43
-	service := NewTDXGethService(&source, NewNativeProofSigner(shastaNativeMockInstance))
+	service := newTestTDXGethService(t, &source, req)
 
 	_, err := service.DirectAggregate(context.Background(), req)
 	if err == nil || !strings.Contains(err.Error(), "certain last block mismatch") {
@@ -320,7 +388,7 @@ func TestTDXGethServiceDirectAggregateRejectsL1OriginBlockHashMismatch(t *testin
 		L1BlockHash:        common.HexToHash(testHash("10")),
 		L1BlockHashValid:   true,
 	}
-	service := NewTDXGethService(&source, NewNativeProofSigner(shastaNativeMockInstance))
+	service := newTestTDXGethService(t, &source, req)
 
 	_, err := service.DirectAggregate(context.Background(), req)
 	if err == nil || !strings.Contains(err.Error(), "certain L1 origin L2 block hash mismatch") {
@@ -350,7 +418,7 @@ func TestTDXGethServiceDirectAggregateAllowsGenesisPreviousMappingForFirstPropos
 			},
 		},
 	}
-	service := NewTDXGethService(&source, NewNativeProofSigner(shastaNativeMockInstance))
+	service := newTestTDXGethService(t, &source, req)
 
 	_, err := service.DirectAggregate(context.Background(), req)
 	if err != nil {
@@ -439,6 +507,35 @@ func directAggregateEventCoveredSource() fakeL2HeaderSource {
 	}
 }
 
+func newTestTDXGethService(
+	t *testing.T,
+	headers *fakeL2HeaderSource,
+	req *ValidatedDirectAggregateRequest,
+) TDXGethService {
+	t.Helper()
+	return NewTDXGethService(
+		headers,
+		proposalMetadataSourceFromViews(req.Proposals),
+		NewNativeProofSigner(shastaNativeMockInstance),
+	)
+}
+
+func proposalMetadataSourceFromViews(proposals []DirectAggregateProposalView) *fakeProposalMetadataSource {
+	source := &fakeProposalMetadataSource{
+		proposals: make(map[uint64]ProposalMetadata, len(proposals)),
+	}
+	for _, proposal := range proposals {
+		source.proposals[proposal.ProposalID] = ProposalMetadata{
+			ProposalID:         proposal.ProposalID,
+			ProposalHash:       proposal.ProposalHash,
+			ParentProposalHash: proposal.ParentProposalHash,
+			Proposer:           proposal.Transition.Proposer,
+			Timestamp:          proposal.Transition.Timestamp,
+		}
+	}
+	return source
+}
+
 func TestNewLocalL2RPCRejectsExternalEndpoint(t *testing.T) {
 	_, err := NewLocalL2RPC("http://example.com:8545")
 	if err == nil || !strings.Contains(err.Error(), "must be local") {
@@ -488,9 +585,11 @@ func directProposalFromCarry(
 func TestNewConfiguredServiceSelectsTDXGethMode(t *testing.T) {
 	prevProvider := newTEEProviderFn
 	prevHeaderSource := newLocalL2HeaderSourceFn
+	prevProposalSource := newProposalMetadataSourceFn
 	t.Cleanup(func() {
 		newTEEProviderFn = prevProvider
 		newLocalL2HeaderSourceFn = prevHeaderSource
+		newProposalMetadataSourceFn = prevProposalSource
 	})
 
 	privateKey, err := crypto.GenerateKey()
@@ -515,13 +614,20 @@ func TestNewConfiguredServiceSelectsTDXGethMode(t *testing.T) {
 		}
 		return &fakeL2HeaderSource{}, nil
 	}
+	newProposalMetadataSourceFn = func(rawURL string) (ProposalMetadataSource, error) {
+		if rawURL != "http://127.0.0.1:9876" {
+			t.Fatalf("unexpected proposal api url: %s", rawURL)
+		}
+		return &fakeProposalMetadataSource{}, nil
+	}
 
 	service, err := NewConfiguredService(ServiceConfig{
-		Mode:       ProvingModeTDXGeth,
-		SecretDir:  t.TempDir(),
-		TDXSocket:  "/var/tdxs.sock",
-		L2RPCURL:   "http://127.0.0.1:8545",
-		InstanceID: 0x12345678,
+		Mode:           ProvingModeTDXGeth,
+		SecretDir:      t.TempDir(),
+		TDXSocket:      "/var/tdxs.sock",
+		L2RPCURL:       "http://127.0.0.1:8545",
+		ProposalAPIURL: "http://127.0.0.1:9876",
+		InstanceID:     0x12345678,
 	}, nil)
 	if err != nil {
 		t.Fatalf("new configured service: %v", err)
@@ -538,6 +644,37 @@ type fakeL2HeaderSource struct {
 	err              error
 	calls            int
 	requestedNumbers []uint64
+}
+
+type fakeProposalMetadataSource struct {
+	proposals map[uint64]ProposalMetadata
+	err       error
+}
+
+func (s *fakeProposalMetadataSource) ProposalMetadataByID(_ context.Context, proposalID uint64) (ProposalMetadata, error) {
+	if s.err != nil {
+		return ProposalMetadata{}, s.err
+	}
+	proposal, ok := s.proposals[proposalID]
+	if !ok {
+		return ProposalMetadata{}, errors.New("missing proposal metadata")
+	}
+	return proposal, nil
+}
+
+func metadataFromCarry(t *testing.T, raw json.RawMessage) ProposalMetadata {
+	t.Helper()
+	carry, err := decodeCarry(raw)
+	if err != nil {
+		t.Fatalf("decode carry: %v", err)
+	}
+	return ProposalMetadata{
+		ProposalID:         carry.TransitionInput.ProposalID,
+		ProposalHash:       carry.TransitionInput.ProposalHash,
+		ParentProposalHash: carry.TransitionInput.ParentProposalHash,
+		Proposer:           carry.TransitionInput.Transition.Proposer,
+		Timestamp:          carry.TransitionInput.Transition.Timestamp,
+	}
 }
 
 func (s *fakeL2HeaderSource) HeaderByNumber(_ context.Context, number uint64) (L2Header, error) {

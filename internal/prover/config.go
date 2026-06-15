@@ -19,6 +19,7 @@ const (
 	envInstanceID       = "GAIKO2_INSTANCE_ID"
 	envTDXSocket        = "GAIKO2_TDXS_SOCKET"
 	envL2RPCURL         = "GAIKO2_L2_RPC_URL"
+	envProposalAPIURL   = "GAIKO2_PROPOSAL_API_URL"
 	envAllowRemoteL2RPC = "GAIKO2_ALLOW_REMOTE_L2_RPC"
 )
 
@@ -31,6 +32,10 @@ func ServiceConfigFromEnv() (ServiceConfig, error) {
 		Fork:      strings.TrimSpace(os.Getenv(envFork)),
 		TDXSocket: envOrDefault(envTDXSocket, tee.DefaultTDXSocket),
 		L2RPCURL:  envOrDefault(envL2RPCURL, DefaultLocalL2RPCURL),
+		ProposalAPIURL: envOrDefault(
+			envProposalAPIURL,
+			DefaultLocalProposalAPIURL,
+		),
 	}
 	allowRemoteL2RPC, err := parseBoolEnv(envAllowRemoteL2RPC)
 	if err != nil {

@@ -115,14 +115,6 @@ func validateDirectAggregateProposalContinuity(
 			previous.ProposalID,
 		)
 	}
-	if current.ParentProposalHash != previous.ProposalHash {
-		return fmt.Errorf(
-			"direct aggregate proposal %d parent_proposal_hash mismatch: got %s expected %s",
-			index,
-			current.ParentProposalHash.Hex(),
-			previous.ProposalHash.Hex(),
-		)
-	}
 	if current.ChainID != previous.ChainID {
 		return fmt.Errorf(
 			"direct aggregate proposal %d chain_id mismatch: got %d expected %d",
