@@ -121,7 +121,7 @@ func processUnzenReplayBlock(
 	}
 
 	signer := types.MakeSigner(config, header.Number, header.Time)
-	cfg.ZkGasMeter = vm.NewZkGasMeter(vm.UnzenZkGasScheduleFor(config.ChainID))
+	cfg.ZkGasMeter = vm.NewZkGasMeter(unzenZkGasScheduleFor(config))
 	for i, tx := range block.Transactions() {
 		if tx.Type() == types.BlobTxType {
 			return nil, fmt.Errorf("blob transaction at index %d not allowed in Unzen block", i)
@@ -595,6 +595,7 @@ func chainConfigFor(chainID uint64) (*params.ChainConfig, error) {
 		cfg.OntakeBlock = cloneBigInt(core.TaikoHoodiOntakeBlock)
 		cfg.PacayaBlock = cloneBigInt(core.TaikoHoodiPacayaBlock)
 		cfg.ShastaTime = cloneUint64(core.HoodiShastaTime)
+		enableUnzenForksFrom(cfg, core.HoodiUnzenTime)
 		return cfg, nil
 	default:
 		return nil, fmt.Errorf("unsupported chain ID: %d", chainID)
@@ -620,6 +621,13 @@ func enableUnzenForksFrom(cfg *params.ChainConfig, timestamp uint64) {
 	if cfg.BlobScheduleConfig == nil {
 		cfg.BlobScheduleConfig = cloneBlobSchedule(params.DefaultBlobSchedule)
 	}
+}
+
+func unzenZkGasScheduleFor(config *params.ChainConfig) *vm.ZkGasSchedule {
+	// Current taiko-geth no longer selects Unzen zk-gas schedules by chain ID.
+	// In particular, taiko-geth #569 reset Masaya to the default Unzen schedule.
+	_ = config
+	return &vm.UnzenZkGasSchedule
 }
 
 func cloneChainConfig(cfg *params.ChainConfig) *params.ChainConfig {

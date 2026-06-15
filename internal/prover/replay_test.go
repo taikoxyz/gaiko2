@@ -9,6 +9,7 @@ import (
 
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/core/types"
+	"github.com/ethereum/go-ethereum/core/vm"
 	"github.com/ethereum/go-ethereum/params"
 	"github.com/taikoxyz/gaiko2/internal/protocol"
 )
@@ -601,6 +602,71 @@ func TestChainConfigForMasayaEnablesBlobForkAtUnzen(t *testing.T) {
 	}
 	if !cfg.IsUnzen(unzenTime) {
 		t.Fatalf("expected unzen activation at unzen")
+	}
+}
+
+func TestChainConfigForHoodiEnablesBlobForkAtUnzen(t *testing.T) {
+	const unzenTime uint64 = 1781787600
+
+	cfg, err := chainConfigFor(params.TaikoHoodiNetworkID.Uint64())
+	if err != nil {
+		t.Fatalf("chain config: %v", err)
+	}
+
+	if cfg.UnzenTime == nil || *cfg.UnzenTime != unzenTime {
+		t.Fatalf("unexpected unzen time: %v", cfg.UnzenTime)
+	}
+	if cfg.CancunTime == nil || *cfg.CancunTime != unzenTime {
+		t.Fatalf("unexpected cancun time: %v", cfg.CancunTime)
+	}
+	if cfg.PragueTime == nil || *cfg.PragueTime != unzenTime {
+		t.Fatalf("unexpected prague time: %v", cfg.PragueTime)
+	}
+	if cfg.OsakaTime == nil || *cfg.OsakaTime != unzenTime {
+		t.Fatalf("unexpected osaka time: %v", cfg.OsakaTime)
+	}
+	if cfg.BlobScheduleConfig == nil || cfg.BlobScheduleConfig.Cancun == nil || cfg.BlobScheduleConfig.Prague == nil || cfg.BlobScheduleConfig.Osaka == nil {
+		t.Fatalf("missing blob schedule config: %+v", cfg.BlobScheduleConfig)
+	}
+	if cfg.IsCancun(common.Big0, unzenTime-1) {
+		t.Fatalf("unexpected cancun activation before unzen")
+	}
+	if !cfg.IsCancun(common.Big0, unzenTime) {
+		t.Fatalf("expected cancun activation at unzen")
+	}
+	if cfg.IsUnzen(unzenTime - 1) {
+		t.Fatalf("unexpected unzen activation before unzen")
+	}
+	if !cfg.IsUnzen(unzenTime) {
+		t.Fatalf("expected unzen activation at unzen")
+	}
+}
+
+func TestUnzenZkGasScheduleForFollowsTaikoGethDefaultSchedule(t *testing.T) {
+	for _, tc := range []struct {
+		name    string
+		chainID uint64
+	}{
+		{name: "masaya", chainID: params.MasayaDevnetNetworkID.Uint64()},
+		{name: "hoodi", chainID: params.TaikoHoodiNetworkID.Uint64()},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			cfg, err := chainConfigFor(tc.chainID)
+			if err != nil {
+				t.Fatalf("chain config: %v", err)
+			}
+
+			schedule := unzenZkGasScheduleFor(cfg)
+			if schedule != &vm.UnzenZkGasSchedule {
+				t.Fatalf("unexpected unzen zk-gas schedule: %p", schedule)
+			}
+			if schedule.BlockLimit != vm.BlockZkGasLimit {
+				t.Fatalf("unexpected block zk-gas limit: %d", schedule.BlockLimit)
+			}
+			if schedule.TxIntrinsicZkGas != vm.TxIntrinsicZkGas {
+				t.Fatalf("unexpected tx intrinsic zk gas: %d", schedule.TxIntrinsicZkGas)
+			}
+		})
 	}
 }
 
