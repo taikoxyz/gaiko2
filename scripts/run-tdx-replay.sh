@@ -7,10 +7,50 @@ REPO_ROOT=$(cd -- "${SCRIPT_DIR}/.." && pwd)
 
 export GAIKO2_PROVING_MODE="${GAIKO2_PROVING_MODE:-tee}"
 export GAIKO2_TEE_TYPE="${GAIKO2_TEE_TYPE:-tdx}"
-export GAIKO2_TDXS_SOCKET="${GAIKO2_TDXS_SOCKET:-/var/tdxs.sock}"
 export GAIKO2_CONFIG_DIR="${GAIKO2_CONFIG_DIR:-${HOME}/.config/gaiko2/tdx/config}"
 export GAIKO2_SECRET_DIR="${GAIKO2_SECRET_DIR:-${HOME}/.config/gaiko2/tdx/secrets}"
 export GAIKO2_PORT="${GAIKO2_PORT:-8080}"
+
+discover_tdxs_socket() {
+    if [[ -n "${GAIKO2_TDXS_SOCKET:-}" ]]; then
+        printf '%s\n' "${GAIKO2_TDXS_SOCKET}"
+        return 0
+    fi
+    if [[ -S /var/tdxs.sock ]]; then
+        printf '%s\n' "/var/tdxs.sock"
+        return 0
+    fi
+    if command -v ss >/dev/null 2>&1; then
+        local candidate
+        candidate=$(
+            ss -xlpnH 2>/dev/null | awk '{
+                for (i = 1; i <= NF; i++) {
+                    if ($i ~ /(^|\/)tdxs\.sock$/) {
+                        print $i
+                        exit
+                    }
+                }
+            }'
+        )
+        if [[ -n "${candidate}" && -S "${candidate}" ]]; then
+            printf '%s\n' "${candidate}"
+            return 0
+        fi
+    fi
+
+    local search_dirs
+    search_dirs="${GAIKO2_TDXS_SOCKET_SEARCH_DIRS:-/run /var /tmp /mnt}"
+    local root candidate
+    for root in ${search_dirs}; do
+        [[ -d "${root}" ]] || continue
+        candidate=$(find "${root}" -type s -name tdxs.sock -print -quit 2>/dev/null || true)
+        if [[ -n "${candidate}" && -S "${candidate}" ]]; then
+            printf '%s\n' "${candidate}"
+            return 0
+        fi
+    done
+    printf '%s\n' "/var/tdxs.sock"
+}
 
 if [[ "${GAIKO2_PROVING_MODE}" != "tee" ]]; then
     echo "error: GAIKO2_PROVING_MODE must be tee for TDX replay" >&2
@@ -24,10 +64,14 @@ if [[ -z "${GAIKO2_INSTANCE_ID:-}" && -z "${GAIKO2_FORK:-}" ]]; then
     echo "error: set GAIKO2_INSTANCE_ID or GAIKO2_FORK before starting TDX replay" >&2
     exit 1
 fi
+export GAIKO2_TDXS_SOCKET
+GAIKO2_TDXS_SOCKET=$(discover_tdxs_socket)
 if [[ ! -S "${GAIKO2_TDXS_SOCKET}" ]]; then
     echo "error: TDXS socket not found: ${GAIKO2_TDXS_SOCKET}" >&2
+    echo "hint: set GAIKO2_TDXS_SOCKET to the socket shown by: ss -xlpn | grep tdxs.sock" >&2
     exit 1
 fi
+echo "[gaiko2-tdx] using TDXS socket ${GAIKO2_TDXS_SOCKET}"
 
 mkdir -p "${GAIKO2_CONFIG_DIR}" "${GAIKO2_SECRET_DIR}"
 

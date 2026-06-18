@@ -87,8 +87,10 @@ GAIKO2_INSTANCE_ID=0xDEADC0DE \
 ```
 
 The helper defaults to `GAIKO2_PROVING_MODE=tee`, `GAIKO2_TEE_TYPE=tdx`,
-`GAIKO2_TDXS_SOCKET=/var/tdxs.sock`, bootstraps the TDX key if missing, runs
-`gaiko2 check`, and then starts `/prove/shasta` on `GAIKO2_PORT` or `8080`.
+auto-discovers a listening `tdxs.sock` from `/var/tdxs.sock`, `ss`, or common
+runtime directories, bootstraps the TDX key if missing, runs `gaiko2 check`,
+and then starts `/prove/shasta` on `GAIKO2_PORT` or `8080`. Set
+`GAIKO2_TDXS_SOCKET` explicitly when the quote service uses a custom socket.
 Use `GAIKO2_FORK=shasta` instead of `GAIKO2_INSTANCE_ID` if
 `registered.gaiko2.json` already exists under `GAIKO2_CONFIG_DIR`.
 
