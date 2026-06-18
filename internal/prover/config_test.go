@@ -51,6 +51,20 @@ func TestServiceConfigFromEnvRejectsUnknownRegisteredFork(t *testing.T) {
 	}
 }
 
+func TestServiceConfigFromEnvLoadsTDXSocket(t *testing.T) {
+	setenv(t, envProvingMode, ProvingModeTEE)
+	setenv(t, envTEEType, tee.TypeTDX)
+	setenv(t, envTDXSocket, "/tmp/tdxs-test.sock")
+
+	cfg, err := ServiceConfigFromEnv()
+	if err != nil {
+		t.Fatalf("service config from env: %v", err)
+	}
+	if cfg.TDXSocket != "/tmp/tdxs-test.sock" {
+		t.Fatalf("unexpected tdx socket: %s", cfg.TDXSocket)
+	}
+}
+
 func setenv(t *testing.T, key, value string) {
 	t.Helper()
 	prev, ok := os.LookupEnv(key)

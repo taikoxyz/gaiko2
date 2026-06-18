@@ -12,8 +12,10 @@ with `taiko-geth` and producing a TEE proof envelope.
 - `gaiko2` validates replay continuity against `proof_carry_data`.
 - proof output now supports two signer modes behind one envelope:
   - `native`: sign the final input hash with the fixed GoldenTouch key.
-  - `tee`: sign with an enclave-managed key; the bootstrap step emits the `ego`
-    quote used by external registration flows.
+  - `tee` + `ego`: sign with an SGX enclave-managed key; the bootstrap step
+    emits the `ego` quote used by external registration flows.
+  - `tee` + `tdx`: sign with a TDX VM-managed key and attach a per-proof quote
+    bound to the replay input hash.
 - the checked-in shared fixture under `testdata/` is derived from a real
   `raiko2` GuestInput fixture and replays successfully.
 
@@ -49,7 +51,8 @@ curl http://127.0.0.1:8080/healthz
 Optional proving configuration:
 
 - `GAIKO2_PROVING_MODE=native|tee`
-- `GAIKO2_TEE_TYPE=ego`
+- `GAIKO2_TEE_TYPE=ego|tdx`
+- `GAIKO2_TDXS_SOCKET=/var/tdxs.sock` for `tdx`
 - `GAIKO2_CONFIG_DIR=/path/to/config`
 - `GAIKO2_SECRET_DIR=/path/to/secrets`
 - `GAIKO2_INSTANCE_ID=0xDEADC0DE`
@@ -71,6 +74,23 @@ GAIKO2_PROVING_MODE=tee GAIKO2_TEE_TYPE=ego \
   GAIKO2_SECRET_DIR=/tmp/gaiko2-secrets \
   go run ./cmd/gaiko2 bootstrap
 ```
+
+For a TDX replay provider on a TDX VM, build or point to a local `gaiko2`
+binary and start it with:
+
+```bash
+cd gaiko2
+go build -trimpath -o bin/gaiko2 ./cmd/gaiko2
+
+GAIKO2_INSTANCE_ID=0xDEADC0DE \
+  ./scripts/run-tdx-replay.sh
+```
+
+The helper defaults to `GAIKO2_PROVING_MODE=tee`, `GAIKO2_TEE_TYPE=tdx`,
+`GAIKO2_TDXS_SOCKET=/var/tdxs.sock`, bootstraps the TDX key if missing, runs
+`gaiko2 check`, and then starts `/prove/shasta` on `GAIKO2_PORT` or `8080`.
+Use `GAIKO2_FORK=shasta` instead of `GAIKO2_INSTANCE_ID` if
+`registered.gaiko2.json` already exists under `GAIKO2_CONFIG_DIR`.
 
 The bootstrap command writes:
 

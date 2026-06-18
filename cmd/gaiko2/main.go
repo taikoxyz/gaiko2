@@ -137,6 +137,7 @@ func runBootstrapCommand(args []string, stdout io.Writer) error {
 	teeType := flags.String("tee-type", strings.TrimSpace(os.Getenv("GAIKO2_TEE_TYPE")), "tee provider type")
 	secretDir := flags.String("secret-dir", envOrDefault("GAIKO2_SECRET_DIR", tee.DefaultSecretDir()), "directory for sealed keys")
 	configDir := flags.String("config-dir", envOrDefault("GAIKO2_CONFIG_DIR", tee.DefaultConfigDir()), "directory for bootstrap metadata")
+	tdxsSocket := flags.String("tdxs-socket", envOrDefault("GAIKO2_TDXS_SOCKET", tee.DefaultTDXSocket), "tdxs Unix socket for tdx tee provider")
 	if err := flags.Parse(args); err != nil {
 		return err
 	}
@@ -144,6 +145,7 @@ func runBootstrapCommand(args []string, stdout io.Writer) error {
 	provider, err := tee.NewProvider(tee.Config{
 		Type:      *teeType,
 		SecretDir: *secretDir,
+		TDXSocket: *tdxsSocket,
 	})
 	if err != nil {
 		return err
@@ -175,6 +177,7 @@ func runCheckCommand(args []string, stdout io.Writer) error {
 
 	teeType := flags.String("tee-type", strings.TrimSpace(os.Getenv("GAIKO2_TEE_TYPE")), "tee provider type")
 	secretDir := flags.String("secret-dir", envOrDefault("GAIKO2_SECRET_DIR", tee.DefaultSecretDir()), "directory for sealed keys")
+	tdxsSocket := flags.String("tdxs-socket", envOrDefault("GAIKO2_TDXS_SOCKET", tee.DefaultTDXSocket), "tdxs Unix socket for tdx tee provider")
 	if err := flags.Parse(args); err != nil {
 		return err
 	}
@@ -182,6 +185,7 @@ func runCheckCommand(args []string, stdout io.Writer) error {
 	provider, err := tee.NewProvider(tee.Config{
 		Type:      *teeType,
 		SecretDir: *secretDir,
+		TDXSocket: *tdxsSocket,
 	})
 	if err != nil {
 		return err

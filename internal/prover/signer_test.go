@@ -65,6 +65,39 @@ func TestTEEProofSignerOmitsQuoteDuringProving(t *testing.T) {
 	}
 }
 
+func TestTDXProofSignerIncludesQuoteBoundToInputHash(t *testing.T) {
+	privateKey, err := crypto.GenerateKey()
+	if err != nil {
+		t.Fatalf("generate key: %v", err)
+	}
+	provider := &fakeTEEProvider{
+		privateKey: privateKey,
+		quote:      []byte{0xde, 0xad, 0xbe, 0xef},
+	}
+	signer := NewTDXProofSigner(privateKey, 0x12345678, provider)
+	hash := crypto.Keccak256Hash([]byte("gaiko2-tdx-replay"))
+
+	output, err := signer.SignHash(hash)
+	if err != nil {
+		t.Fatalf("sign hash: %v", err)
+	}
+	if got := common.Bytes2Hex(output.Quote); got != "deadbeef" {
+		t.Fatalf("quote mismatch: %s", got)
+	}
+	if provider.quoteCalls != 1 {
+		t.Fatalf("expected one quote call, got %d", provider.quoteCalls)
+	}
+	if got := common.Bytes2Hex(provider.reportData); got != common.Bytes2Hex(hash.Bytes()) {
+		t.Fatalf("report data mismatch: got %s want %s", got, common.Bytes2Hex(hash.Bytes()))
+	}
+	if output.InstanceID != 0x12345678 {
+		t.Fatalf("unexpected instance id: %x", output.InstanceID)
+	}
+	if output.InstanceAddress != crypto.PubkeyToAddress(privateKey.PublicKey) {
+		t.Fatalf("unexpected instance address: %s", output.InstanceAddress.Hex())
+	}
+}
+
 func TestNewConfiguredReplayServiceRejectsUnknownMode(t *testing.T) {
 	_, err := NewConfiguredReplayService(ServiceConfig{
 		Mode: "wat",
@@ -124,9 +157,66 @@ func TestNewConfiguredReplayServiceTEELoadsBootstrappedKeyAtStartup(t *testing.T
 	}
 }
 
+func TestNewConfiguredReplayServiceTDXRequiresReportDataProvider(t *testing.T) {
+	prev := newTEEProviderFn
+	t.Cleanup(func() {
+		newTEEProviderFn = prev
+	})
+
+	privateKey, err := crypto.GenerateKey()
+	if err != nil {
+		t.Fatalf("generate key: %v", err)
+	}
+	newTEEProviderFn = func(tee.Config) (tee.Provider, error) {
+		return &fakeEGoProvider{privateKey: privateKey}, nil
+	}
+
+	_, err = NewConfiguredReplayService(ServiceConfig{
+		Mode:       ProvingModeTEE,
+		TeeType:    tee.TypeTDX,
+		SecretDir:  t.TempDir(),
+		InstanceID: 0x12345678,
+	}, nil)
+	if err == nil || err.Error() != "tdx proving requires report-data quote provider" {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
+func TestNewConfiguredReplayServiceTDXPassesSocketToProvider(t *testing.T) {
+	prev := newTEEProviderFn
+	t.Cleanup(func() {
+		newTEEProviderFn = prev
+	})
+
+	privateKey, err := crypto.GenerateKey()
+	if err != nil {
+		t.Fatalf("generate key: %v", err)
+	}
+	var gotConfig tee.Config
+	newTEEProviderFn = func(cfg tee.Config) (tee.Provider, error) {
+		gotConfig = cfg
+		return &fakeTEEProvider{privateKey: privateKey}, nil
+	}
+
+	_, err = NewConfiguredReplayService(ServiceConfig{
+		Mode:       ProvingModeTEE,
+		TeeType:    tee.TypeTDX,
+		SecretDir:  t.TempDir(),
+		TDXSocket:  "/tmp/tdxs-replay.sock",
+		InstanceID: 0x12345678,
+	}, nil)
+	if err != nil {
+		t.Fatalf("new configured replay service: %v", err)
+	}
+	if gotConfig.TDXSocket != "/tmp/tdxs-replay.sock" {
+		t.Fatalf("tdx socket mismatch: %s", gotConfig.TDXSocket)
+	}
+}
+
 type fakeTEEProvider struct {
 	privateKey *ecdsa.PrivateKey
 	quote      []byte
+	reportData []byte
 	loadErr    error
 	loadCalls  int
 	quoteCalls int
@@ -134,6 +224,12 @@ type fakeTEEProvider struct {
 
 func (f *fakeTEEProvider) LoadQuote(instance common.Address) (tee.Quote, error) {
 	f.quoteCalls++
+	return tee.StaticQuote(f.quote), nil
+}
+
+func (f *fakeTEEProvider) LoadQuoteForReportData(reportData []byte) (tee.Quote, error) {
+	f.quoteCalls++
+	f.reportData = append([]byte(nil), reportData...)
 	return tee.StaticQuote(f.quote), nil
 }
 
@@ -149,6 +245,22 @@ func (f *fakeTEEProvider) LoadPrivateKey() (*ecdsa.PrivateKey, error) {
 }
 
 func (f *fakeTEEProvider) SavePrivateKey(*ecdsa.PrivateKey) error {
+	return nil
+}
+
+type fakeEGoProvider struct {
+	privateKey *ecdsa.PrivateKey
+}
+
+func (f *fakeEGoProvider) LoadQuote(common.Address) (tee.Quote, error) {
+	return tee.StaticQuote(nil), nil
+}
+
+func (f *fakeEGoProvider) LoadPrivateKey() (*ecdsa.PrivateKey, error) {
+	return f.privateKey, nil
+}
+
+func (f *fakeEGoProvider) SavePrivateKey(*ecdsa.PrivateKey) error {
 	return nil
 }
 

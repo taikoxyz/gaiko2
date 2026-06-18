@@ -17,6 +17,7 @@ const (
 	envConfigDir   = "GAIKO2_CONFIG_DIR"
 	envFork        = "GAIKO2_FORK"
 	envInstanceID  = "GAIKO2_INSTANCE_ID"
+	envTDXSocket   = "GAIKO2_TDXS_SOCKET"
 )
 
 func ServiceConfigFromEnv() (ServiceConfig, error) {
@@ -26,6 +27,7 @@ func ServiceConfigFromEnv() (ServiceConfig, error) {
 		SecretDir: envOrDefault(envSecretDir, tee.DefaultSecretDir()),
 		ConfigDir: envOrDefault(envConfigDir, tee.DefaultConfigDir()),
 		Fork:      strings.TrimSpace(os.Getenv(envFork)),
+		TDXSocket: envOrDefault(envTDXSocket, tee.DefaultTDXSocket),
 	}
 
 	instanceID := strings.TrimSpace(os.Getenv(envInstanceID))
