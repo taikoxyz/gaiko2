@@ -248,6 +248,29 @@ If later we need full end-to-end independence from `raiko2` preflight, then `gai
 - independent manifest and continuity reconstruction,
 - cross-checks for preflight as well as execution.
 
+### TDX derived-input follow-up
+
+For the TDX path, prefer a bounded v2 endpoint where the untrusted host still
+provides blob/calldata payloads, proposal source metadata, parent context, and
+witnesses. The TDX service should verify those inputs and then derive the
+candidate txlist internally:
+
+- verify blob or calldata payloads against proposal source metadata,
+- decompress and RLP-decode the txlist inside TDX,
+- prepend or validate the anchor transaction from the supplied parent/proposal
+  context,
+- execute the candidate txlist with taiko-geth's exported prover helper so
+  invalid transaction filtering and zk-gas truncation reuse the canonical geth
+  rules,
+- assemble the filtered block from the actually committed transactions,
+- replay/check the filtered block with the existing gaiko2 stateless execution
+  path before signing.
+
+Do not reimplement invalid transaction filtering or zk-gas truncation directly
+in gaiko2. If taiko-geth does not expose the needed helper, add that export
+first and treat this as a v2 task rather than extending the current v1 replay
+packet implicitly.
+
 That is a separate project phase and should not block v1.
 
 ## Final Recommendation
