@@ -48,6 +48,51 @@ func TestValidateRequestAcceptsContiguousPacket(t *testing.T) {
 	}
 }
 
+func TestValidateRequestAcceptsGuestInputV2(t *testing.T) {
+	input := newManifestBindingFixture(t).view(t).Raw
+	req := protocol.ShastaRequest{
+		Schema: protocol.ShastaRequestSchemaV2,
+		Payload: protocol.ShastaPayload{
+			GuestInput: &input,
+		},
+	}
+
+	validated, err := ValidateRequest(req)
+	if err != nil {
+		t.Fatalf("validate v2 guest input request: %v", err)
+	}
+
+	if validated.Request.Schema != protocol.ShastaRequestSchemaV2 {
+		t.Fatalf("unexpected schema: %s", validated.Request.Schema)
+	}
+	if validated.Request.Payload.ChainID != 167013 {
+		t.Fatalf("unexpected chain id: %d", validated.Request.Payload.ChainID)
+	}
+	if len(validated.Request.Payload.Blocks) != 1 {
+		t.Fatalf("unexpected replay block count: %d", len(validated.Request.Payload.Blocks))
+	}
+	if validated.Carry.TransitionInput.ProposalID != 12345 {
+		t.Fatalf("unexpected proposal id: %d", validated.Carry.TransitionInput.ProposalID)
+	}
+}
+
+func TestValidateRequestV2RejectsManifestMismatch(t *testing.T) {
+	fixture := newManifestBindingFixture(t)
+	fixture.blockTimestamp++
+	input := fixture.view(t).Raw
+	req := protocol.ShastaRequest{
+		Schema: protocol.ShastaRequestSchemaV2,
+		Payload: protocol.ShastaPayload{
+			GuestInput: &input,
+		},
+	}
+
+	_, err := ValidateRequest(req)
+	if err == nil || !strings.Contains(err.Error(), "manifest block 0") {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
 func TestValidateRequestRejectsUnsupportedSchema(t *testing.T) {
 	_, err := ValidateRequest(protocol.ShastaRequest{
 		Schema: "v2",

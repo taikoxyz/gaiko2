@@ -35,9 +35,17 @@ type rawCheckpoint struct {
 }
 
 func ValidateRequest(req protocol.ShastaRequest) (*ValidatedRequest, error) {
-	if req.Schema != protocol.ShastaRequestSchemaV1 {
+	switch req.Schema {
+	case protocol.ShastaRequestSchemaV1:
+		return validateReplayRequest(req)
+	case protocol.ShastaRequestSchemaV2:
+		return validateGuestInputRequest(req)
+	default:
 		return nil, fmt.Errorf("unsupported schema %q", req.Schema)
 	}
+}
+
+func validateReplayRequest(req protocol.ShastaRequest) (*ValidatedRequest, error) {
 	if len(req.Payload.Blocks) == 0 {
 		return nil, fmt.Errorf("request must include at least one replay block")
 	}
@@ -81,8 +89,83 @@ func ValidateRequest(req protocol.ShastaRequest) (*ValidatedRequest, error) {
 		blocks = append(blocks, view)
 	}
 
+	if err := validateBlockViews(blocks, carry); err != nil {
+		return nil, err
+	}
+
+	return &ValidatedRequest{
+		Request: req,
+		Carry:   carry,
+		Blocks:  blocks,
+	}, nil
+}
+
+func validateGuestInputRequest(req protocol.ShastaRequest) (*ValidatedRequest, error) {
+	if req.Payload.GuestInput == nil {
+		return nil, fmt.Errorf("v2 request must include guest_input")
+	}
+
+	view, err := DecodeGuestInput(*req.Payload.GuestInput)
+	if err != nil {
+		return nil, err
+	}
+	if err := ValidateGuestInputCarry(view); err != nil {
+		return nil, err
+	}
+	if err := ValidateGuestInputBlobSources(view); err != nil {
+		return nil, err
+	}
+	if err := ValidateGuestInputManifestBinding(view); err != nil {
+		return nil, err
+	}
+	if err := validateBlockViews(view.Blocks, view.Carry); err != nil {
+		return nil, err
+	}
+
+	blocks := make([]protocol.ReplayBlock, len(view.Witnesses))
+	for index, witness := range view.Witnesses {
+		blocks[index] = witness.ReplayBlock
+	}
+	normalized := protocol.ShastaRequest{
+		Schema: req.Schema,
+		Payload: protocol.ShastaPayload{
+			ChainID:        view.GuestInputChainID,
+			Blocks:         blocks,
+			ProofCarryData: view.Raw.ProofCarryData,
+			GuestInput:     req.Payload.GuestInput,
+		},
+	}
+
+	return &ValidatedRequest{
+		Request: normalized,
+		Carry:   view.Carry,
+		Blocks:  view.Blocks,
+	}, nil
+}
+
+func validateBlockViews(blocks []BlockView, carry CarryView) error {
+	for index := 1; index < len(blocks); index++ {
+		prev := blocks[index-1]
+		current := blocks[index]
+		if current.Number != prev.Number+1 {
+			return fmt.Errorf(
+				"block numbers must be contiguous: got %d after %d",
+				current.Number,
+				prev.Number,
+			)
+		}
+		if current.ParentHash != prev.Hash {
+			return fmt.Errorf(
+				"block parent hash mismatch at index %d: got %s expected %s",
+				index,
+				current.ParentHash.Hex(),
+				prev.Hash.Hex(),
+			)
+		}
+	}
+
 	if first := blocks[0]; first.ParentHash != carry.TransitionInput.ParentBlockHash {
-		return nil, fmt.Errorf(
+		return fmt.Errorf(
 			"first block parent hash mismatch: block=%s checkpoint=%s",
 			first.ParentHash.Hex(),
 			carry.TransitionInput.ParentBlockHash.Hex(),
@@ -91,32 +174,27 @@ func ValidateRequest(req protocol.ShastaRequest) (*ValidatedRequest, error) {
 
 	last := blocks[len(blocks)-1]
 	if last.Number != carry.TransitionInput.Checkpoint.BlockNumber {
-		return nil, fmt.Errorf(
+		return fmt.Errorf(
 			"checkpoint block number mismatch: block=%d checkpoint=%d",
 			last.Number,
 			carry.TransitionInput.Checkpoint.BlockNumber,
 		)
 	}
 	if last.Hash != carry.TransitionInput.Checkpoint.BlockHash {
-		return nil, fmt.Errorf(
+		return fmt.Errorf(
 			"checkpoint block hash mismatch: block=%s checkpoint=%s",
 			last.Hash.Hex(),
 			carry.TransitionInput.Checkpoint.BlockHash.Hex(),
 		)
 	}
 	if last.StateRoot != carry.TransitionInput.Checkpoint.StateRoot {
-		return nil, fmt.Errorf(
+		return fmt.Errorf(
 			"checkpoint state root mismatch: block=%s checkpoint=%s",
 			last.StateRoot.Hex(),
 			carry.TransitionInput.Checkpoint.StateRoot.Hex(),
 		)
 	}
-
-	return &ValidatedRequest{
-		Request: req,
-		Carry:   carry,
-		Blocks:  blocks,
-	}, nil
+	return nil
 }
 
 func decodeBlock(block protocol.ReplayBlock) (BlockView, error) {

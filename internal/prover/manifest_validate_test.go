@@ -267,6 +267,7 @@ func (f *manifestBindingFixture) view(t *testing.T) *GuestInputView {
 
 	manifestPayload := f.manifestPayload(t)
 	dataSourceJSON, sourceJSON := f.dataSourceAndSourceJSON(t, manifestPayload)
+	proposalJSON := f.proposalJSON(t, sourceJSON)
 	block := f.blockJSON(t)
 	blockHash := replayBlockHash(t, block)
 	parentHash := f.parentHeader.Hash().Hex()
@@ -290,15 +291,14 @@ func (f *manifestBindingFixture) view(t *testing.T) *GuestInputView {
 				"last_anchor_block_number": 899
 			},
 			"data_sources": [%s]
-		}`, f.chainID, f.proposalID, f.proposalJSON(t, sourceJSON), testAddress("77"), dataSourceJSON)),
+		}`, f.chainID, f.proposalID, proposalJSON, testAddress("77"), dataSourceJSON)),
 		ProposalAncestorHeaders: []json.RawMessage{mustRawMessage(t, f.parentWitnessHeaderJSON(t))},
-		ProofCarryData: sampleCarryData(
+		ProofCarryData: f.proofCarryData(
 			t,
-			f.chainID,
 			parentHash,
-			"0x2a",
 			blockHash,
 			stateRoot,
+			proposalJSON,
 		),
 	}
 
@@ -307,6 +307,57 @@ func (f *manifestBindingFixture) view(t *testing.T) *GuestInputView {
 		t.Fatalf("decode guest input: %v", err)
 	}
 	return view
+}
+
+func (f *manifestBindingFixture) proofCarryData(
+	t *testing.T,
+	parentHash string,
+	blockHash string,
+	stateRoot string,
+	proposalRaw json.RawMessage,
+) json.RawMessage {
+	t.Helper()
+
+	proposal, err := decodeShastaProposal(proposalRaw)
+	if err != nil {
+		t.Fatalf("decode proposal for carry: %v", err)
+	}
+	proposalHash, err := hashShastaProposal(proposal)
+	if err != nil {
+		t.Fatalf("hash proposal for carry: %v", err)
+	}
+	return mustRawMessage(t, fmt.Sprintf(`{
+		"chain_id": %d,
+		"verifier": %q,
+		"transition_input": {
+			"proposal_id": %d,
+			"proposal_hash": %q,
+			"parent_proposal_hash": %q,
+			"parent_block_hash": %q,
+			"actual_prover": %q,
+			"transition": {
+				"proposer": %q,
+				"timestamp": %d
+			},
+			"checkpoint": {
+				"blockNumber": "0x2a",
+				"blockHash": %q,
+				"stateRoot": %q
+			}
+		}
+	}`,
+		f.chainID,
+		testAddress("f9"),
+		proposal.ID,
+		proposalHash.Hex(),
+		proposal.ParentProposalHash.Hex(),
+		parentHash,
+		testAddress("77"),
+		proposal.Proposer.Hex(),
+		proposal.Timestamp,
+		blockHash,
+		stateRoot,
+	))
 }
 
 func (f *manifestBindingFixture) dataSourceAndSourceJSON(t *testing.T, manifestPayload []byte) (string, string) {
