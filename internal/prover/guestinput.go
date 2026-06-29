@@ -1,6 +1,7 @@
 package prover
 
 import (
+	"bytes"
 	"encoding/json"
 	"fmt"
 
@@ -8,29 +9,34 @@ import (
 )
 
 type GuestInputView struct {
-	Raw             protocol.ShastaGuestInput
-	Blocks          []BlockView
-	Carry           CarryView
-	ChainID         uint64
-	Witnesses       []GuestInputWitnessView
-	TaikoRaw        json.RawMessage
-	Taiko           GuestInputTaikoView
-	DataSourcesRaw  []json.RawMessage
-	DataSourceCount int
+	Raw               protocol.ShastaGuestInput
+	Blocks            []BlockView
+	Carry             CarryView
+	GuestInputChainID uint64
+	CarryChainID      uint64
+	Witnesses         []GuestInputWitnessView
+	TaikoRaw          json.RawMessage
+	Taiko             GuestInputTaikoView
+	DataSourcesRaw    []json.RawMessage
+	DataSourceCount   int
 }
 
 type GuestInputWitnessView struct {
-	Raw          json.RawMessage
-	BlockRaw     json.RawMessage
-	ChainSpecRaw json.RawMessage
-	WitnessRaw   json.RawMessage
-	AccountsRaw  json.RawMessage
-	ReplayBlock  protocol.ReplayBlock
+	Raw            json.RawMessage
+	BlockRaw       json.RawMessage
+	ChainSpecRaw   json.RawMessage
+	ChainID        uint64
+	ChainIDPresent bool
+	WitnessRaw     json.RawMessage
+	AccountsRaw    json.RawMessage
+	ReplayBlock    protocol.ReplayBlock
 }
 
 type GuestInputTaikoView struct {
 	ProposalID              uint64
 	ProposalEventProposalID uint64
+	ChainID                 uint64
+	ChainIDPresent          bool
 	DataSourcesRaw          []json.RawMessage
 	DataSourceCount         int
 }
@@ -44,6 +50,7 @@ type rawGuestInputWitness struct {
 
 type rawGuestInputTaiko struct {
 	ProposalID    json.RawMessage         `json:"proposal_id"`
+	ChainSpec     json.RawMessage         `json:"chain_spec"`
 	ProposalEvent rawGuestInputTaikoEvent `json:"proposal_event"`
 	DataSources   []json.RawMessage       `json:"data_sources"`
 }
@@ -82,16 +89,24 @@ func DecodeGuestInput(input protocol.ShastaGuestInput) (*GuestInputView, error) 
 		return nil, err
 	}
 
+	guestInputChainID := uint64(0)
+	if witnesses[0].ChainIDPresent {
+		guestInputChainID = witnesses[0].ChainID
+	} else if taiko.ChainIDPresent {
+		guestInputChainID = taiko.ChainID
+	}
+
 	return &GuestInputView{
-		Raw:             input,
-		Blocks:          blocks,
-		Carry:           carry,
-		ChainID:         carry.ChainID,
-		Witnesses:       witnesses,
-		TaikoRaw:        input.Taiko,
-		Taiko:           taiko,
-		DataSourcesRaw:  taiko.DataSourcesRaw,
-		DataSourceCount: taiko.DataSourceCount,
+		Raw:               input,
+		Blocks:            blocks,
+		Carry:             carry,
+		GuestInputChainID: guestInputChainID,
+		CarryChainID:      carry.ChainID,
+		Witnesses:         witnesses,
+		TaikoRaw:          input.Taiko,
+		Taiko:             taiko,
+		DataSourcesRaw:    taiko.DataSourcesRaw,
+		DataSourceCount:   taiko.DataSourceCount,
 	}, nil
 }
 
@@ -100,17 +115,17 @@ func decodeGuestInputWitness(raw json.RawMessage) (GuestInputWitnessView, BlockV
 	if err := json.Unmarshal(raw, &decoded); err != nil {
 		return GuestInputWitnessView{}, BlockView{}, fmt.Errorf("unmarshal witness: %w", err)
 	}
-	if len(decoded.Block) == 0 {
-		return GuestInputWitnessView{}, BlockView{}, fmt.Errorf("missing witness.block")
+	if isEmptyOrNullRawMessage(decoded.Block) {
+		return GuestInputWitnessView{}, BlockView{}, fmt.Errorf("missing or null witness.block")
 	}
-	if len(decoded.ChainSpec) == 0 {
-		return GuestInputWitnessView{}, BlockView{}, fmt.Errorf("missing witness.chain_spec")
+	if isEmptyOrNullRawMessage(decoded.ChainSpec) {
+		return GuestInputWitnessView{}, BlockView{}, fmt.Errorf("missing or null witness.chain_spec")
 	}
-	if len(decoded.Witness) == 0 {
-		return GuestInputWitnessView{}, BlockView{}, fmt.Errorf("missing witness.witness")
+	if isEmptyOrNullRawMessage(decoded.Witness) {
+		return GuestInputWitnessView{}, BlockView{}, fmt.Errorf("missing or null witness.witness")
 	}
-	if len(decoded.Accounts) == 0 {
-		return GuestInputWitnessView{}, BlockView{}, fmt.Errorf("missing witness.accounts")
+	if isEmptyOrNullRawMessage(decoded.Accounts) {
+		return GuestInputWitnessView{}, BlockView{}, fmt.Errorf("missing or null witness.accounts")
 	}
 
 	replay := protocol.ReplayBlock{
@@ -123,18 +138,28 @@ func decodeGuestInputWitness(raw json.RawMessage) (GuestInputWitnessView, BlockV
 	if err != nil {
 		return GuestInputWitnessView{}, BlockView{}, err
 	}
+	chainID, chainIDPresent, err := decodeGuestInputChainID(decoded.ChainSpec)
+	if err != nil {
+		return GuestInputWitnessView{}, BlockView{}, fmt.Errorf("decode witness.chain_spec: %w", err)
+	}
 
 	return GuestInputWitnessView{
-		Raw:          raw,
-		BlockRaw:     decoded.Block,
-		ChainSpecRaw: decoded.ChainSpec,
-		WitnessRaw:   decoded.Witness,
-		AccountsRaw:  decoded.Accounts,
-		ReplayBlock:  replay,
+		Raw:            raw,
+		BlockRaw:       decoded.Block,
+		ChainSpecRaw:   decoded.ChainSpec,
+		ChainID:        chainID,
+		ChainIDPresent: chainIDPresent,
+		WitnessRaw:     decoded.Witness,
+		AccountsRaw:    decoded.Accounts,
+		ReplayBlock:    replay,
 	}, block, nil
 }
 
 func decodeGuestInputTaiko(raw json.RawMessage) (GuestInputTaikoView, error) {
+	if isEmptyOrNullRawMessage(raw) {
+		return GuestInputTaikoView{}, fmt.Errorf("missing or null taiko")
+	}
+
 	var decoded rawGuestInputTaiko
 	if err := json.Unmarshal(raw, &decoded); err != nil {
 		return GuestInputTaikoView{}, fmt.Errorf("unmarshal taiko: %w", err)
@@ -158,10 +183,41 @@ func decodeGuestInputTaiko(raw json.RawMessage) (GuestInputTaikoView, error) {
 		proposalEventProposalID = value
 	}
 
+	chainID, chainIDPresent, err := decodeGuestInputChainID(decoded.ChainSpec)
+	if err != nil {
+		return GuestInputTaikoView{}, fmt.Errorf("decode taiko.chain_spec: %w", err)
+	}
+
 	return GuestInputTaikoView{
 		ProposalID:              proposalID,
 		ProposalEventProposalID: proposalEventProposalID,
+		ChainID:                 chainID,
+		ChainIDPresent:          chainIDPresent,
 		DataSourcesRaw:          decoded.DataSources,
 		DataSourceCount:         len(decoded.DataSources),
 	}, nil
+}
+
+func decodeGuestInputChainID(raw json.RawMessage) (uint64, bool, error) {
+	if isEmptyOrNullRawMessage(raw) {
+		return 0, false, nil
+	}
+	fields, err := decodeJSONObject(raw)
+	if err != nil {
+		return 0, false, err
+	}
+	rawChainID, ok := lookupField(fields, "chain_id", "chainId")
+	if !ok {
+		return 0, false, nil
+	}
+	chainID, err := parseUint64JSON(rawChainID)
+	if err != nil {
+		return 0, false, fmt.Errorf("parse chain_id: %w", err)
+	}
+	return chainID, true, nil
+}
+
+func isEmptyOrNullRawMessage(raw json.RawMessage) bool {
+	trimmed := bytes.TrimSpace(raw)
+	return len(trimmed) == 0 || bytes.Equal(trimmed, []byte("null"))
 }

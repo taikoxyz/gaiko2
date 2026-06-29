@@ -15,15 +15,18 @@ func TestDecodeGuestInputExtractsReplayCompatibleViews(t *testing.T) {
 	receiptsRoot := testHash("33")
 	blockRaw := sampleReplayBlock(t, "0x2a", parentHash, stateRoot, receiptsRoot)
 	blockHash := replayBlockHash(t, blockRaw)
+	chainSpecRaw := mustRawMessage(t, `{"chainId": 167013}`)
+	witnessRaw := mustRawMessage(t, `{"state": [], "state_indices": [], "codes": [], "headers": []}`)
+	accountsRaw := mustRawMessage(t, `{"0x0000000000000000000000000000000000000000": {"balance": "0x0"}}`)
 
 	input := protocol.ShastaGuestInput{
 		Witnesses: []json.RawMessage{
 			mustRawMessage(t, fmt.Sprintf(`{
 				"block": %s,
-				"chain_spec": {"chainId": 167013},
-				"witness": {"state": [], "state_indices": [], "codes": [], "headers": []},
-				"accounts": {"0x0000000000000000000000000000000000000000": {"balance": "0x0"}}
-			}`, blockRaw)),
+				"chain_spec": %s,
+				"witness": %s,
+				"accounts": %s
+			}`, blockRaw, chainSpecRaw, witnessRaw, accountsRaw)),
 		},
 		Taiko: mustRawMessage(t, `{
 			"proposal_id": 77,
@@ -45,8 +48,11 @@ func TestDecodeGuestInputExtractsReplayCompatibleViews(t *testing.T) {
 		t.Fatalf("decode guest input: %v", err)
 	}
 
-	if view.ChainID != 167013 {
-		t.Fatalf("unexpected chain id: %d", view.ChainID)
+	if view.GuestInputChainID != 167013 {
+		t.Fatalf("unexpected guest input chain id: %d", view.GuestInputChainID)
+	}
+	if view.CarryChainID != 167013 {
+		t.Fatalf("unexpected carry chain id: %d", view.CarryChainID)
 	}
 	if len(view.Witnesses) != 1 {
 		t.Fatalf("unexpected witness count: %d", len(view.Witnesses))
@@ -89,20 +95,196 @@ func TestDecodeGuestInputExtractsReplayCompatibleViews(t *testing.T) {
 	}
 
 	witness := view.Witnesses[0]
-	if string(witness.Raw) == "" {
-		t.Fatal("expected raw witness to be retained")
+	if string(witness.BlockRaw) != string(blockRaw) {
+		t.Fatalf("unexpected raw witness block:\n%s", witness.BlockRaw)
 	}
-	if string(witness.BlockRaw) == "" {
-		t.Fatal("expected raw witness block to be retained")
+	if string(witness.ChainSpecRaw) != string(chainSpecRaw) {
+		t.Fatalf("unexpected raw witness chain spec: %s", witness.ChainSpecRaw)
 	}
-	if string(witness.ChainSpecRaw) == "" {
-		t.Fatal("expected raw witness chain spec to be retained")
+	if string(witness.WitnessRaw) != string(witnessRaw) {
+		t.Fatalf("unexpected raw witness payload: %s", witness.WitnessRaw)
 	}
-	if string(witness.WitnessRaw) == "" {
-		t.Fatal("expected raw witness payload to be retained")
+	if string(witness.AccountsRaw) != string(accountsRaw) {
+		t.Fatalf("unexpected raw witness accounts: %s", witness.AccountsRaw)
 	}
-	if string(witness.AccountsRaw) == "" {
-		t.Fatal("expected raw witness accounts to be retained")
+}
+
+func TestDecodeGuestInputExposesMismatchedChainIDsWithoutValidation(t *testing.T) {
+	parentHash := testHash("11")
+	stateRoot := testHash("22")
+	blockRaw := sampleReplayBlock(t, "0x2a", parentHash, stateRoot, testHash("33"))
+	blockHash := replayBlockHash(t, blockRaw)
+
+	input := protocol.ShastaGuestInput{
+		Witnesses: []json.RawMessage{
+			mustRawMessage(t, fmt.Sprintf(`{
+				"block": %s,
+				"chain_spec": {"chain_id": 31337},
+				"witness": {"state": [], "state_indices": [], "codes": [], "headers": []},
+				"accounts": {}
+			}`, blockRaw)),
+		},
+		Taiko: mustRawMessage(t, `{
+			"proposal_id": 77,
+			"proposal_event": {"proposal": {"id": 88}},
+			"data_sources": []
+		}`),
+		ProofCarryData: sampleCarryData(t, 167013, parentHash, "0x2a", blockHash, stateRoot),
+	}
+
+	view, err := DecodeGuestInput(input)
+	if err != nil {
+		t.Fatalf("decode guest input: %v", err)
+	}
+
+	if view.GuestInputChainID != 31337 {
+		t.Fatalf("unexpected guest input chain id: %d", view.GuestInputChainID)
+	}
+	if view.CarryChainID != 167013 {
+		t.Fatalf("unexpected carry chain id: %d", view.CarryChainID)
+	}
+}
+
+func TestDecodeGuestInputFallsBackToTaikoChainID(t *testing.T) {
+	parentHash := testHash("11")
+	stateRoot := testHash("22")
+	blockRaw := sampleReplayBlock(t, "0x2a", parentHash, stateRoot, testHash("33"))
+	blockHash := replayBlockHash(t, blockRaw)
+
+	input := protocol.ShastaGuestInput{
+		Witnesses: []json.RawMessage{
+			mustRawMessage(t, fmt.Sprintf(`{
+				"block": %s,
+				"chain_spec": {},
+				"witness": {"state": [], "state_indices": [], "codes": [], "headers": []},
+				"accounts": {}
+			}`, blockRaw)),
+		},
+		Taiko: mustRawMessage(t, `{
+			"chain_spec": {"chainId": 31337},
+			"proposal_id": 77,
+			"proposal_event": {"proposal": {"id": 88}},
+			"data_sources": []
+		}`),
+		ProofCarryData: sampleCarryData(t, 167013, parentHash, "0x2a", blockHash, stateRoot),
+	}
+
+	view, err := DecodeGuestInput(input)
+	if err != nil {
+		t.Fatalf("decode guest input: %v", err)
+	}
+
+	if view.GuestInputChainID != 31337 {
+		t.Fatalf("unexpected guest input chain id: %d", view.GuestInputChainID)
+	}
+	if view.CarryChainID != 167013 {
+		t.Fatalf("unexpected carry chain id: %d", view.CarryChainID)
+	}
+}
+
+func TestDecodeGuestInputRejectsNullWitnessSubtrees(t *testing.T) {
+	parentHash := testHash("11")
+	stateRoot := testHash("22")
+	blockRaw := sampleReplayBlock(t, "0x2a", parentHash, stateRoot, testHash("33"))
+	blockHash := replayBlockHash(t, blockRaw)
+
+	cases := []struct {
+		name    string
+		witness json.RawMessage
+		wantErr string
+	}{
+		{
+			name: "block",
+			witness: mustRawMessage(t, `{
+				"block": null,
+				"chain_spec": {"chainId": 167013},
+				"witness": {"state": [], "state_indices": [], "codes": [], "headers": []},
+				"accounts": {}
+			}`),
+			wantErr: "decode guest input witness 0: missing or null witness.block",
+		},
+		{
+			name: "chain spec",
+			witness: mustRawMessage(t, fmt.Sprintf(`{
+				"block": %s,
+				"chain_spec": null,
+				"witness": {"state": [], "state_indices": [], "codes": [], "headers": []},
+				"accounts": {}
+			}`, blockRaw)),
+			wantErr: "decode guest input witness 0: missing or null witness.chain_spec",
+		},
+		{
+			name: "witness",
+			witness: mustRawMessage(t, fmt.Sprintf(`{
+				"block": %s,
+				"chain_spec": {"chainId": 167013},
+				"witness": null,
+				"accounts": {}
+			}`, blockRaw)),
+			wantErr: "decode guest input witness 0: missing or null witness.witness",
+		},
+		{
+			name: "accounts",
+			witness: mustRawMessage(t, fmt.Sprintf(`{
+				"block": %s,
+				"chain_spec": {"chainId": 167013},
+				"witness": {"state": [], "state_indices": [], "codes": [], "headers": []},
+				"accounts": null
+			}`, blockRaw)),
+			wantErr: "decode guest input witness 0: missing or null witness.accounts",
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			_, err := DecodeGuestInput(protocol.ShastaGuestInput{
+				Witnesses: []json.RawMessage{tc.witness},
+				Taiko: mustRawMessage(t, `{
+					"proposal_id": 77,
+					"proposal_event": {"proposal": {"id": 88}},
+					"data_sources": []
+				}`),
+				ProofCarryData: sampleCarryData(t, 167013, parentHash, "0x2a", blockHash, stateRoot),
+			})
+			if err == nil || err.Error() != tc.wantErr {
+				t.Fatalf("unexpected error: %v", err)
+			}
+		})
+	}
+}
+
+func TestDecodeGuestInputRejectsNullOrEmptyTaiko(t *testing.T) {
+	parentHash := testHash("11")
+	stateRoot := testHash("22")
+	blockRaw := sampleReplayBlock(t, "0x2a", parentHash, stateRoot, testHash("33"))
+	blockHash := replayBlockHash(t, blockRaw)
+
+	cases := []struct {
+		name string
+		raw  json.RawMessage
+	}{
+		{name: "empty"},
+		{name: "null", raw: mustRawMessage(t, `null`)},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			_, err := DecodeGuestInput(protocol.ShastaGuestInput{
+				Witnesses: []json.RawMessage{
+					mustRawMessage(t, fmt.Sprintf(`{
+						"block": %s,
+						"chain_spec": {"chainId": 167013},
+						"witness": {"state": [], "state_indices": [], "codes": [], "headers": []},
+						"accounts": {}
+					}`, blockRaw)),
+				},
+				Taiko:          tc.raw,
+				ProofCarryData: sampleCarryData(t, 167013, parentHash, "0x2a", blockHash, stateRoot),
+			})
+			if err == nil || err.Error() != "missing or null taiko" {
+				t.Fatalf("unexpected error: %v", err)
+			}
+		})
 	}
 }
 
