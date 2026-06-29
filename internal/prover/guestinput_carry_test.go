@@ -280,6 +280,16 @@ func TestGuestInputCarrySelectsActiveVerifierFork(t *testing.T) {
 			}`, shastaVerifier),
 			wantVerifier: shastaVerifier,
 		},
+		{
+			name:        "unzen active skips unzen without sgxgeth verifier",
+			blockNumber: 150,
+			blockTime:   600,
+			verifierForks: fmt.Sprintf(`{
+				"SHASTA": {"SgxGeth": %q},
+				"UNZEN": {"SP1": %q}
+			}`, shastaVerifier, unzenVerifier),
+			wantVerifier: shastaVerifier,
+		},
 	}
 
 	for _, tc := range cases {
@@ -302,6 +312,55 @@ func TestGuestInputCarrySelectsActiveVerifierFork(t *testing.T) {
 				t.Fatalf("validate guest input carry: %v", err)
 			}
 		})
+	}
+}
+
+func TestGuestInputCarryRejectsMalformedActiveVerifierInsteadOfFallback(t *testing.T) {
+	shastaVerifier := testAddress("a1")
+	cases := []struct {
+		name         string
+		unzenSgxGeth string
+	}{
+		{name: "null", unzenSgxGeth: "null"},
+		{name: "malformed", unzenSgxGeth: `"0x1234"`},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			fixture := newGuestInputCarryFixture(t)
+			fixture.verifier = shastaVerifier
+			setGuestInputCarryFixtureBlock(t, fixture, 150, 600)
+			fixture.witnessChainSpec = guestInputChainSpec(t,
+				`{
+					"SHASTA": {"Timestamp": 200},
+					"UNZEN": {"Timestamp": 500}
+				}`,
+				fmt.Sprintf(`{
+					"SHASTA": {"SgxGeth": %q},
+					"UNZEN": {"SgxGeth": %s}
+				}`, shastaVerifier, tc.unzenSgxGeth),
+			)
+			view := decodeGuestInputCarryView(t, fixture)
+
+			err := ValidateGuestInputCarry(view)
+			if err == nil || !strings.Contains(err.Error(), "parse witness.chain_spec.verifier_address_forks.UNZEN.SgxGeth") {
+				t.Fatalf("unexpected error: %v", err)
+			}
+		})
+	}
+}
+
+func TestGuestInputCarryRejectsUnknownHardForkString(t *testing.T) {
+	fixture := newGuestInputCarryFixture(t)
+	fixture.witnessChainSpec = guestInputChainSpec(t,
+		`{"SHASTA": "later"}`,
+		fmt.Sprintf(`{"SHASTA": {"SgxGeth": %q}}`, fixture.verifier),
+	)
+	view := decodeGuestInputCarryView(t, fixture)
+
+	err := ValidateGuestInputCarry(view)
+	if err == nil || !strings.Contains(err.Error(), `unknown hard fork string "later"`) {
+		t.Fatalf("unexpected error: %v", err)
 	}
 }
 
@@ -443,6 +502,18 @@ func TestHashShastaProposalRejectsNullRequiredArrays(t *testing.T) {
 				}
 			}]`),
 			wantErr: `field "blobHashes" must be an array`,
+		},
+		{
+			name: "is forced inclusion",
+			raw: proposalJSONWithSources(t, `[{
+				"isForcedInclusion": null,
+				"blobSlice": {
+					"blobHashes": ["0x67890abcdef1234567890abcdef123451234567890abcdef1234567890abcdef"],
+					"offset": 0,
+					"timestamp": 100
+				}
+			}]`),
+			wantErr: `missing or null required field "isForcedInclusion"`,
 		},
 	}
 

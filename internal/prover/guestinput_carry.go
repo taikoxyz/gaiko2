@@ -377,7 +377,7 @@ func resolveGuestInputVerifier(view *GuestInputView) (common.Address, error) {
 		}
 		rawVerifier, ok := lookupField(fork, "SgxGeth", "SGXGETH", "sgxgeth", "sgx_geth")
 		if !ok {
-			return common.Address{}, fmt.Errorf("missing verifier for %s.SgxGeth in witness.chain_spec.verifier_address_forks", forkName)
+			continue
 		}
 		verifier, err := parseAddressJSON(rawVerifier)
 		if err != nil {
@@ -386,7 +386,7 @@ func resolveGuestInputVerifier(view *GuestInputView) (common.Address, error) {
 		return verifier, nil
 	}
 
-	return common.Address{}, fmt.Errorf("missing active verifier for SgxGeth in witness.chain_spec.verifier_address_forks")
+	return common.Address{}, fmt.Errorf("missing verifier for active SgxGeth in witness.chain_spec.verifier_address_forks")
 }
 
 func decodeFirstWitnessHeader(view *GuestInputView) (*typesHeaderView, error) {
@@ -448,7 +448,10 @@ func activeTaikoFork(
 func hardForkActive(raw json.RawMessage, blockNumber uint64, blockTimestamp uint64) (bool, error) {
 	var text string
 	if err := json.Unmarshal(raw, &text); err == nil {
-		return !strings.EqualFold(text, "Tbd"), nil
+		if strings.EqualFold(text, "Tbd") {
+			return false, nil
+		}
+		return false, fmt.Errorf("unknown hard fork string %q", text)
 	}
 
 	fields, err := decodeJSONObject(raw)
@@ -640,6 +643,9 @@ func requireBool(fields map[string]json.RawMessage, names ...string) (bool, erro
 	raw, ok := lookupField(fields, names...)
 	if !ok {
 		return false, fmt.Errorf("missing required field %q", names[0])
+	}
+	if isEmptyOrNullRawMessage(raw) {
+		return false, fmt.Errorf("missing or null required field %q", names[0])
 	}
 	var value bool
 	if err := json.Unmarshal(raw, &value); err != nil {
