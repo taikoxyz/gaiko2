@@ -96,6 +96,35 @@ func TestShastaV2DecodePreservesGuestInputFields(t *testing.T) {
 	assertRawMessage(t, guestInput.ProofCarryData, `{"chain_id":167013,"transition_input":{"proposal_id":"0x1"}}`)
 }
 
+func TestShastaRequestUnionDecodesV2GuestInputPayload(t *testing.T) {
+	data := []byte(`{
+		"schema":"raiko2-shasta-request-v2",
+		"payload":{
+			"guest_input":{
+				"witnesses":[{"block":{"number":"0x2a"}}],
+				"taiko":{"proposal_id":"0x1"},
+				"proposal_ancestor_headers":[],
+				"proposal_state_nodes":[],
+				"proof_carry_data":{"chain_id":167013}
+			}
+		}
+	}`)
+
+	var decoded ShastaRequest
+	if err := json.Unmarshal(data, &decoded); err != nil {
+		t.Fatalf("unmarshal union request: %v", err)
+	}
+	if decoded.Schema != ShastaRequestSchemaV2 {
+		t.Fatalf("unexpected schema: %s", decoded.Schema)
+	}
+	if decoded.Payload.GuestInput == nil {
+		t.Fatalf("expected guest_input to decode into union payload")
+	}
+	if len(decoded.Payload.GuestInput.Witnesses) != 1 {
+		t.Fatalf("unexpected witness count: %d", len(decoded.Payload.GuestInput.Witnesses))
+	}
+}
+
 func TestShastaV1ConstantsRemainStable(t *testing.T) {
 	if ShastaRequestSchemaV1 != "raiko2-shasta-request-v1" {
 		t.Fatalf("unexpected v1 request schema constant: %s", ShastaRequestSchemaV1)

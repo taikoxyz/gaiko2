@@ -52,6 +52,23 @@ with payload:
 
 The old replay-only schema, `raiko2-shasta-request-v1`, should not be treated as soundness-equivalent. It can either be removed from the active service path or kept only behind a local/dev compatibility flag. Production proving should reject it after the cutover.
 
+## Implementation Status
+
+The current implementation accepts `raiko2-shasta-request-v2` on the existing
+`POST /prove/shasta` route and validates:
+
+- strict `GuestInput` decoding into replay-compatible witnesses,
+- `proof_carry_data` binding to the proposal, prover, verifier, and final checkpoint,
+- raw blob KZG commitment and versioned hash matching proposal blob hashes,
+- inline calldata and blob-backed Shasta source manifest decoding,
+- Shasta manifest metadata defaulting and validation for timestamp, anchor number, gas limit, forced inclusion, and source block limits,
+- canonical transaction and block metadata binding before `taiko-geth` replay.
+
+The old `raiko2-shasta-request-v1` replay-only path remains accepted for compatibility
+in this branch. It should still be considered unsafe for production soundness until
+it is guarded by an explicit compatibility flag or removed from production service
+configuration.
+
 ## Soundness Boundary
 
 For proposal proofs, `gaiko2` should validate the same conceptual chain as the `raiko2` guest:

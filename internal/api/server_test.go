@@ -56,6 +56,32 @@ func TestNewServerReturnsValidationErrorEnvelope(t *testing.T) {
 	}
 }
 
+func TestNewServerRejectsV2WithoutGuestInput(t *testing.T) {
+	server := NewServer(fakeService{})
+	req := httptest.NewRequest(http.MethodPost, "/prove/shasta", bytes.NewBufferString(`{
+		"schema":"raiko2-shasta-request-v2",
+		"payload":{}
+	}`))
+	recorder := httptest.NewRecorder()
+
+	server.ServeHTTP(recorder, req)
+
+	if recorder.Code != http.StatusBadRequest {
+		t.Fatalf("unexpected status: %d", recorder.Code)
+	}
+
+	var resp protocol.ProofResponse
+	if err := json.Unmarshal(recorder.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+	if resp.Error == nil || resp.Error.Code != "INVALID_REQUEST" {
+		t.Fatalf("unexpected error payload: %+v", resp.Error)
+	}
+	if resp.Error == nil || !strings.Contains(resp.Error.Message, "guest_input") {
+		t.Fatalf("expected guest_input validation message, got %+v", resp.Error)
+	}
+}
+
 func TestNewServerReturnsSuccessEnvelope(t *testing.T) {
 	server := NewServer(fakeService{
 		result: protocol.ProofResult{
