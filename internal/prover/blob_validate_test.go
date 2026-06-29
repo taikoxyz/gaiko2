@@ -42,6 +42,14 @@ func TestValidateGuestInputBlobSourcesAcceptsHexStringBlob(t *testing.T) {
 	}
 }
 
+func TestValidateGuestInputBlobSourcesAcceptsEmptyProposalSourcesWithEmptyDataSources(t *testing.T) {
+	view := decodeBlobSourceGuestInputView(t, `[]`, `[]`)
+
+	if err := ValidateGuestInputBlobSources(view); err != nil {
+		t.Fatalf("validate guest input blob sources: %v", err)
+	}
+}
+
 func TestValidateGuestInputBlobSourcesRejectsBlobSourceMismatches(t *testing.T) {
 	blob := testKZGBlobBytes(0x33)
 	commitment, blobHash := testBlobCommitmentAndHash(t, blob)
@@ -116,6 +124,12 @@ func TestValidateGuestInputBlobSourcesRejectsBlobSourceMismatches(t *testing.T) 
 			dataSources: `[]`,
 			wantErr:     "data source count mismatch",
 		},
+		{
+			name:        "extra data source rejected when proposal has no sources",
+			sourcesJSON: `[]`,
+			dataSources: `[{}]`,
+			wantErr:     "data source count mismatch",
+		},
 	}
 
 	for _, tc := range cases {
@@ -148,6 +162,42 @@ func TestValidateGuestInputBlobSourcesRejectsMalformedDataSources(t *testing.T) 
 			name:        "non byte array value",
 			sourcesJSON: emptyBlobSourceJSON(),
 			dataSources: `[{"tx_data_from_calldata":[256]}]`,
+			wantErr:     "invalid byte value",
+		},
+		{
+			name:        "negative byte array value",
+			sourcesJSON: emptyBlobSourceJSON(),
+			dataSources: `[{"tx_data_from_calldata":[-1]}]`,
+			wantErr:     "invalid byte value",
+		},
+		{
+			name:        "float byte array value",
+			sourcesJSON: emptyBlobSourceJSON(),
+			dataSources: `[{"tx_data_from_calldata":[1.5]}]`,
+			wantErr:     "invalid byte value",
+		},
+		{
+			name:        "string byte array value",
+			sourcesJSON: emptyBlobSourceJSON(),
+			dataSources: `[{"tx_data_from_calldata":["1"]}]`,
+			wantErr:     "invalid byte value",
+		},
+		{
+			name:        "bool byte array value",
+			sourcesJSON: emptyBlobSourceJSON(),
+			dataSources: `[{"tx_data_from_calldata":[true]}]`,
+			wantErr:     "invalid byte value",
+		},
+		{
+			name:        "object byte array value",
+			sourcesJSON: emptyBlobSourceJSON(),
+			dataSources: `[{"tx_data_from_calldata":[{}]}]`,
+			wantErr:     "invalid byte value",
+		},
+		{
+			name:        "null byte array value",
+			sourcesJSON: emptyBlobSourceJSON(),
+			dataSources: `[{"tx_data_from_calldata":[null]}]`,
 			wantErr:     "invalid byte value",
 		},
 		{

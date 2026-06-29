@@ -29,15 +29,15 @@ func ValidateGuestInputBlobSources(view *GuestInputView) error {
 	if err != nil {
 		return err
 	}
-	if len(proposal.Sources) == 0 {
-		return nil
-	}
 	if len(view.DataSourcesRaw) != len(proposal.Sources) {
 		return fmt.Errorf(
 			"data source count mismatch: proposal_sources=%d data_sources=%d",
 			len(proposal.Sources),
 			len(view.DataSourcesRaw),
 		)
+	}
+	if len(proposal.Sources) == 0 {
+		return nil
 	}
 
 	for sourceIndex, source := range proposal.Sources {
@@ -212,6 +212,10 @@ func parseByteArrayJSON(raw json.RawMessage) ([]byte, error) {
 	for i, rawByte := range rawValues {
 		if isEmptyOrNullRawMessage(rawByte) {
 			return nil, fmt.Errorf("invalid byte value at index %d: null", i)
+		}
+		trimmed := bytes.TrimSpace(rawByte)
+		if trimmed[0] < '0' || trimmed[0] > '9' {
+			return nil, fmt.Errorf("invalid byte value at index %d: must be a JSON number", i)
 		}
 		var number json.Number
 		decoder := json.NewDecoder(bytes.NewReader(rawByte))
