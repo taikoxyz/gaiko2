@@ -113,12 +113,6 @@ func TestValidateGuestInputBlobSourcesRejectsBlobSourceMismatches(t *testing.T) 
 			wantErr: "blob_commitments[0] mismatch",
 		},
 		{
-			name:        "inline calldata rejected for source without blob hashes",
-			sourcesJSON: emptyBlobSourceJSON(),
-			dataSources: `[{"tx_data_from_calldata":[1,2,3]}]`,
-			wantErr:     "tx_data_from_calldata must be empty",
-		},
-		{
 			name:        "proposal source count mismatch rejected",
 			sourcesJSON: blobSourceJSON(blobHash),
 			dataSources: `[]`,

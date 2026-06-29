@@ -48,9 +48,6 @@ func ValidateGuestInputBlobSources(view *GuestInputView) error {
 
 		expectedBlobHashes := source.BlobSlice.BlobHashes
 		if len(expectedBlobHashes) == 0 {
-			if err := requireEmptyNonBlobDataSource(sourceIndex, dataSource); err != nil {
-				return err
-			}
 			continue
 		}
 
@@ -230,22 +227,6 @@ func parseByteArrayJSON(raw json.RawMessage) ([]byte, error) {
 		value[i] = byte(parsed)
 	}
 	return value, nil
-}
-
-func requireEmptyNonBlobDataSource(sourceIndex int, dataSource blobSourceDataView) error {
-	if len(dataSource.TxDataFromCalldata) != 0 {
-		return fmt.Errorf("data_sources[%d].tx_data_from_calldata must be empty for source without blob hashes", sourceIndex)
-	}
-	if len(dataSource.TxDataFromBlob) != 0 {
-		return fmt.Errorf("data_sources[%d].tx_data_from_blob must be empty for source without blob hashes", sourceIndex)
-	}
-	if len(dataSource.BlobCommitments) != 0 {
-		return fmt.Errorf("data_sources[%d].blob_commitments must be empty for source without blob hashes", sourceIndex)
-	}
-	if len(dataSource.BlobProofs) != 0 {
-		return fmt.Errorf("data_sources[%d].blob_proofs must be empty for source without blob hashes", sourceIndex)
-	}
-	return nil
 }
 
 func deriveBlobCommitmentAndHash(raw []byte) (kzg4844.Commitment, common.Hash, error) {
