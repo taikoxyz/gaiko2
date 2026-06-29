@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"math/big"
+	"strings"
 
 	"github.com/ethereum/go-ethereum/accounts/abi"
 	"github.com/ethereum/go-ethereum/common"
@@ -11,10 +12,11 @@ import (
 )
 
 const (
-	shastaCarryVerifierFork = "SHASTA"
-	maxUint24               = uint64(1<<24 - 1)
-	maxUint48               = uint64(1<<48 - 1)
+	maxUint24 = uint64(1<<24 - 1)
+	maxUint48 = uint64(1<<48 - 1)
 )
+
+var taikoVerifierForks = []string{"PACAYA", "SHASTA", "UNZEN"}
 
 type shastaProposalView struct {
 	ID                             uint64
@@ -192,6 +194,101 @@ func ValidateGuestInputCarry(view *GuestInputView) error {
 	return nil
 }
 
+func decodeCarryStrict(raw json.RawMessage) (CarryView, error) {
+	if isEmptyOrNullRawMessage(raw) {
+		return CarryView{}, fmt.Errorf("missing or null proof_carry_data")
+	}
+	fields, err := decodeJSONObject(raw)
+	if err != nil {
+		return CarryView{}, fmt.Errorf("unmarshal proof_carry_data: %w", err)
+	}
+
+	chainID, err := requireUint64(fields, "chain_id")
+	if err != nil {
+		return CarryView{}, fmt.Errorf("parse proof_carry_data.chain_id: %w", err)
+	}
+	verifier, err := requireAddress(fields, "verifier")
+	if err != nil {
+		return CarryView{}, fmt.Errorf("parse proof_carry_data.verifier: %w", err)
+	}
+	transitionFields, err := requireJSONObjectField(fields, "transition_input")
+	if err != nil {
+		return CarryView{}, fmt.Errorf("parse proof_carry_data.transition_input: %w", err)
+	}
+
+	proposalID, err := requireUint64(transitionFields, "proposal_id")
+	if err != nil {
+		return CarryView{}, fmt.Errorf("parse proof_carry_data.transition_input.proposal_id: %w", err)
+	}
+	proposalHash, err := requireHash(transitionFields, "proposal_hash")
+	if err != nil {
+		return CarryView{}, fmt.Errorf("parse proof_carry_data.transition_input.proposal_hash: %w", err)
+	}
+	parentProposalHash, err := requireHash(transitionFields, "parent_proposal_hash")
+	if err != nil {
+		return CarryView{}, fmt.Errorf("parse proof_carry_data.transition_input.parent_proposal_hash: %w", err)
+	}
+	parentBlockHash, err := requireHash(transitionFields, "parent_block_hash")
+	if err != nil {
+		return CarryView{}, fmt.Errorf("parse proof_carry_data.transition_input.parent_block_hash: %w", err)
+	}
+	actualProver, err := requireAddress(transitionFields, "actual_prover")
+	if err != nil {
+		return CarryView{}, fmt.Errorf("parse proof_carry_data.transition_input.actual_prover: %w", err)
+	}
+
+	transition, err := requireJSONObjectField(transitionFields, "transition")
+	if err != nil {
+		return CarryView{}, fmt.Errorf("parse proof_carry_data.transition_input.transition: %w", err)
+	}
+	proposer, err := requireAddress(transition, "proposer")
+	if err != nil {
+		return CarryView{}, fmt.Errorf("parse proof_carry_data.transition_input.transition.proposer: %w", err)
+	}
+	timestamp, err := requireUint64(transition, "timestamp")
+	if err != nil {
+		return CarryView{}, fmt.Errorf("parse proof_carry_data.transition_input.transition.timestamp: %w", err)
+	}
+
+	checkpoint, err := requireJSONObjectField(transitionFields, "checkpoint")
+	if err != nil {
+		return CarryView{}, fmt.Errorf("parse proof_carry_data.transition_input.checkpoint: %w", err)
+	}
+	blockNumber, err := requireUint64(checkpoint, "blockNumber")
+	if err != nil {
+		return CarryView{}, fmt.Errorf("parse proof_carry_data.transition_input.checkpoint.blockNumber: %w", err)
+	}
+	blockHash, err := requireHash(checkpoint, "blockHash")
+	if err != nil {
+		return CarryView{}, fmt.Errorf("parse proof_carry_data.transition_input.checkpoint.blockHash: %w", err)
+	}
+	stateRoot, err := requireHash(checkpoint, "stateRoot")
+	if err != nil {
+		return CarryView{}, fmt.Errorf("parse proof_carry_data.transition_input.checkpoint.stateRoot: %w", err)
+	}
+
+	return CarryView{
+		ChainID:  chainID,
+		Verifier: verifier,
+		TransitionInput: TransitionInputView{
+			ProposalID:         proposalID,
+			ProposalHash:       proposalHash,
+			ParentProposalHash: parentProposalHash,
+			ParentBlockHash:    parentBlockHash,
+			ActualProver:       actualProver,
+			Transition: TransitionView{
+				Proposer:  proposer,
+				Timestamp: timestamp,
+			},
+			Checkpoint: CheckpointView{
+				BlockNumber: blockNumber,
+				BlockHash:   blockHash,
+				StateRoot:   stateRoot,
+			},
+		},
+	}, nil
+}
+
 func decodeGuestInputTaikoProposal(raw json.RawMessage) (shastaProposalView, error) {
 	fields, err := decodeJSONObject(raw)
 	if err != nil {
@@ -244,9 +341,17 @@ func resolveGuestInputVerifier(view *GuestInputView) (common.Address, error) {
 	if len(view.Witnesses) == 0 {
 		return common.Address{}, fmt.Errorf("guest input must include at least one witness")
 	}
+	firstHeader, err := decodeFirstWitnessHeader(view)
+	if err != nil {
+		return common.Address{}, err
+	}
 	fields, err := decodeJSONObject(view.Witnesses[0].ChainSpecRaw)
 	if err != nil {
 		return common.Address{}, fmt.Errorf("unmarshal witness.chain_spec: %w", err)
+	}
+	activeForkIndex, forkActive, err := activeTaikoFork(fields, firstHeader.Number.Uint64(), firstHeader.Time)
+	if err != nil {
+		return common.Address{}, err
 	}
 	rawForks, ok := lookupField(fields, "verifier_address_forks", "verifierAddressForks")
 	if !ok {
@@ -256,23 +361,127 @@ func resolveGuestInputVerifier(view *GuestInputView) (common.Address, error) {
 	if err != nil {
 		return common.Address{}, fmt.Errorf("unmarshal witness.chain_spec.verifier_address_forks: %w", err)
 	}
-	rawFork, ok := lookupField(forks, shastaCarryVerifierFork)
-	if !ok {
-		return common.Address{}, fmt.Errorf("missing verifier fork %s in witness.chain_spec.verifier_address_forks", shastaCarryVerifierFork)
+
+	for index := activeForkIndex; index >= 0; index-- {
+		forkName := taikoVerifierForks[index]
+		if !forkActive[forkName] {
+			continue
+		}
+		rawFork, ok := lookupField(forks, forkName)
+		if !ok {
+			continue
+		}
+		fork, err := decodeJSONObject(rawFork)
+		if err != nil {
+			return common.Address{}, fmt.Errorf("unmarshal witness.chain_spec.verifier_address_forks.%s: %w", forkName, err)
+		}
+		rawVerifier, ok := lookupField(fork, "SgxGeth", "SGXGETH", "sgxgeth", "sgx_geth")
+		if !ok {
+			return common.Address{}, fmt.Errorf("missing verifier for %s.SgxGeth in witness.chain_spec.verifier_address_forks", forkName)
+		}
+		verifier, err := parseAddressJSON(rawVerifier)
+		if err != nil {
+			return common.Address{}, fmt.Errorf("parse witness.chain_spec.verifier_address_forks.%s.SgxGeth: %w", forkName, err)
+		}
+		return verifier, nil
 	}
-	fork, err := decodeJSONObject(rawFork)
+
+	return common.Address{}, fmt.Errorf("missing active verifier for SgxGeth in witness.chain_spec.verifier_address_forks")
+}
+
+func decodeFirstWitnessHeader(view *GuestInputView) (*typesHeaderView, error) {
+	decoded, err := decodeBlockEnvelope(view.Witnesses[0].BlockRaw)
 	if err != nil {
-		return common.Address{}, fmt.Errorf("unmarshal witness.chain_spec.verifier_address_forks.%s: %w", shastaCarryVerifierFork, err)
+		return nil, fmt.Errorf("decode first witness block: %w", err)
 	}
-	rawVerifier, ok := lookupField(fork, "SGXGETH", "sgxgeth")
-	if !ok {
-		return common.Address{}, fmt.Errorf("missing verifier for %s.SGXGETH in witness.chain_spec.verifier_address_forks", shastaCarryVerifierFork)
-	}
-	verifier, err := parseAddressJSON(rawVerifier)
+	header, err := decodeHeader(decoded.Header)
 	if err != nil {
-		return common.Address{}, fmt.Errorf("parse witness.chain_spec.verifier_address_forks.%s.SGXGETH: %w", shastaCarryVerifierFork, err)
+		return nil, fmt.Errorf("decode first witness header: %w", err)
 	}
-	return verifier, nil
+	return &typesHeaderView{
+		Number: header.Number,
+		Time:   header.Time,
+	}, nil
+}
+
+type typesHeaderView struct {
+	Number *big.Int
+	Time   uint64
+}
+
+func activeTaikoFork(
+	chainSpec map[string]json.RawMessage,
+	blockNumber uint64,
+	blockTimestamp uint64,
+) (int, map[string]bool, error) {
+	rawHardForks, ok := lookupField(chainSpec, "hard_forks", "hardForks")
+	if !ok {
+		return 0, nil, fmt.Errorf("missing hard_forks in witness.chain_spec")
+	}
+	hardForks, err := decodeJSONObject(rawHardForks)
+	if err != nil {
+		return 0, nil, fmt.Errorf("unmarshal witness.chain_spec.hard_forks: %w", err)
+	}
+
+	activeIndex := -1
+	active := make(map[string]bool, len(taikoVerifierForks))
+	for index, forkName := range taikoVerifierForks {
+		rawFork, ok := lookupForkCaseInsensitive(hardForks, forkName)
+		if !ok {
+			continue
+		}
+		isActive, err := hardForkActive(rawFork, blockNumber, blockTimestamp)
+		if err != nil {
+			return 0, nil, fmt.Errorf("parse witness.chain_spec.hard_forks.%s: %w", forkName, err)
+		}
+		active[forkName] = isActive
+		if isActive {
+			activeIndex = index
+		}
+	}
+	if activeIndex < 0 {
+		return 0, nil, fmt.Errorf("no active Taiko verifier fork for first witness block")
+	}
+	return activeIndex, active, nil
+}
+
+func hardForkActive(raw json.RawMessage, blockNumber uint64, blockTimestamp uint64) (bool, error) {
+	var text string
+	if err := json.Unmarshal(raw, &text); err == nil {
+		return !strings.EqualFold(text, "Tbd"), nil
+	}
+
+	fields, err := decodeJSONObject(raw)
+	if err != nil {
+		return false, err
+	}
+	block, err := optionalUint64Ptr(fields, "Block", "block")
+	if err != nil {
+		return false, err
+	}
+	if block != nil {
+		return blockNumber >= *block, nil
+	}
+	timestamp, err := optionalUint64Ptr(fields, "Timestamp", "timestamp")
+	if err != nil {
+		return false, err
+	}
+	if timestamp != nil {
+		return blockTimestamp >= *timestamp, nil
+	}
+	return false, nil
+}
+
+func lookupForkCaseInsensitive(fields map[string]json.RawMessage, name string) (json.RawMessage, bool) {
+	if raw, ok := fields[name]; ok {
+		return raw, true
+	}
+	for key, raw := range fields {
+		if strings.EqualFold(key, name) {
+			return raw, true
+		}
+	}
+	return nil, false
 }
 
 func decodeShastaProposal(raw json.RawMessage) (shastaProposalView, error) {
@@ -444,6 +653,9 @@ func requireDerivationSources(fields map[string]json.RawMessage, names ...string
 	if !ok {
 		return nil, fmt.Errorf("missing required field %q", names[0])
 	}
+	if isEmptyOrNullRawMessage(raw) {
+		return nil, fmt.Errorf("field %q must be an array", names[0])
+	}
 	var rawSources []json.RawMessage
 	if err := json.Unmarshal(raw, &rawSources); err != nil {
 		return nil, fmt.Errorf("parse field %q: %w", names[0], err)
@@ -492,6 +704,9 @@ func decodeBlobSlice(raw json.RawMessage) (shastaBlobSliceView, error) {
 	if !ok {
 		return shastaBlobSliceView{}, fmt.Errorf("missing required field %q", "blobHashes")
 	}
+	if isEmptyOrNullRawMessage(rawBlobHashes) {
+		return shastaBlobSliceView{}, fmt.Errorf("field %q must be an array", "blobHashes")
+	}
 	var rawHashes []json.RawMessage
 	if err := json.Unmarshal(rawBlobHashes, &rawHashes); err != nil {
 		return shastaBlobSliceView{}, fmt.Errorf("parse field %q: %w", "blobHashes", err)
@@ -521,4 +736,19 @@ func decodeBlobSlice(raw json.RawMessage) (shastaBlobSliceView, error) {
 
 func uint64Big(value uint64) *big.Int {
 	return new(big.Int).SetUint64(value)
+}
+
+func requireJSONObjectField(fields map[string]json.RawMessage, names ...string) (map[string]json.RawMessage, error) {
+	raw, ok := lookupField(fields, names...)
+	if !ok {
+		return nil, fmt.Errorf("missing required field %q", names[0])
+	}
+	if isEmptyOrNullRawMessage(raw) {
+		return nil, fmt.Errorf("missing or null field %q", names[0])
+	}
+	value, err := decodeJSONObject(raw)
+	if err != nil {
+		return nil, err
+	}
+	return value, nil
 }

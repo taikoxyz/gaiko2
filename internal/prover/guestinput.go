@@ -79,7 +79,7 @@ func DecodeGuestInput(input protocol.ShastaGuestInput) (*GuestInputView, error) 
 		blocks = append(blocks, block)
 	}
 
-	carry, err := decodeCarry(input.ProofCarryData)
+	carry, err := decodeCarryStrict(input.ProofCarryData)
 	if err != nil {
 		return nil, err
 	}

@@ -189,6 +189,9 @@ func TestGuestInputCarryRejectsMissingVerifier(t *testing.T) {
 	fixture := newGuestInputCarryFixture(t)
 	fixture.witnessChainSpec = mustRawMessage(t, `{
 		"chain_id": 167013,
+		"hard_forks": {
+			"SHASTA": {"Block": 0}
+		},
 		"verifier_address_forks": {
 			"SHASTA": {
 				"SP1": "0x1111111111111111111111111111111111111111"
@@ -200,6 +203,105 @@ func TestGuestInputCarryRejectsMissingVerifier(t *testing.T) {
 	err := ValidateGuestInputCarry(view)
 	if err == nil || !strings.Contains(err.Error(), "missing verifier") {
 		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
+func TestGuestInputCarryAcceptsSgxGethVerifierSpellings(t *testing.T) {
+	cases := []string{"SgxGeth", "SGXGETH", "sgxgeth", "sgx_geth"}
+
+	for _, verifierKey := range cases {
+		t.Run(verifierKey, func(t *testing.T) {
+			fixture := newGuestInputCarryFixture(t)
+			fixture.witnessChainSpec = guestInputChainSpec(t,
+				`{"SHASTA": {"Block": 0}}`,
+				fmt.Sprintf(`{"SHASTA": {%q: %q}}`, verifierKey, fixture.verifier),
+			)
+			view := decodeGuestInputCarryView(t, fixture)
+
+			if err := ValidateGuestInputCarry(view); err != nil {
+				t.Fatalf("validate guest input carry: %v", err)
+			}
+		})
+	}
+}
+
+func TestGuestInputCarryRejectsPlainSgxVerifierLane(t *testing.T) {
+	fixture := newGuestInputCarryFixture(t)
+	fixture.witnessChainSpec = guestInputChainSpec(t,
+		`{"SHASTA": {"Block": 0}}`,
+		fmt.Sprintf(`{"SHASTA": {"Sgx": %q}}`, fixture.verifier),
+	)
+	view := decodeGuestInputCarryView(t, fixture)
+
+	err := ValidateGuestInputCarry(view)
+	if err == nil || !strings.Contains(err.Error(), "missing verifier") {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
+func TestGuestInputCarrySelectsActiveVerifierFork(t *testing.T) {
+	shastaVerifier := testAddress("a1")
+	unzenVerifier := testAddress("b2")
+
+	cases := []struct {
+		name          string
+		blockNumber   uint64
+		blockTime     uint64
+		verifierForks string
+		wantVerifier  string
+	}{
+		{
+			name:        "shasta active",
+			blockNumber: 150,
+			blockTime:   250,
+			verifierForks: fmt.Sprintf(`{
+				"PACAYA": {"SgxGeth": %q},
+				"SHASTA": {"SgxGeth": %q},
+				"UNZEN": {"SgxGeth": %q}
+			}`, testAddress("c3"), shastaVerifier, unzenVerifier),
+			wantVerifier: shastaVerifier,
+		},
+		{
+			name:        "unzen active with unzen verifier",
+			blockNumber: 150,
+			blockTime:   600,
+			verifierForks: fmt.Sprintf(`{
+				"SHASTA": {"SgxGeth": %q},
+				"UNZEN": {"SgxGeth": %q}
+			}`, shastaVerifier, unzenVerifier),
+			wantVerifier: unzenVerifier,
+		},
+		{
+			name:        "unzen active falls back to shasta verifier",
+			blockNumber: 150,
+			blockTime:   600,
+			verifierForks: fmt.Sprintf(`{
+				"SHASTA": {"SgxGeth": %q}
+			}`, shastaVerifier),
+			wantVerifier: shastaVerifier,
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			fixture := newGuestInputCarryFixture(t)
+			fixture.verifier = tc.wantVerifier
+			setGuestInputCarryFixtureBlock(t, fixture, tc.blockNumber, tc.blockTime)
+			fixture.witnessChainSpec = guestInputChainSpec(t,
+				`{
+					"CANCUN": "Tbd",
+					"PACAYA": {"Block": 100},
+					"SHASTA": {"Timestamp": 200},
+					"UNZEN": {"Timestamp": 500}
+				}`,
+				tc.verifierForks,
+			)
+			view := decodeGuestInputCarryView(t, fixture)
+
+			if err := ValidateGuestInputCarry(view); err != nil {
+				t.Fatalf("validate guest input carry: %v", err)
+			}
+		})
 	}
 }
 
@@ -215,6 +317,145 @@ func TestHashShastaProposalKnownVector(t *testing.T) {
 	}
 	if got != common.HexToHash(shastaProposalKnownVectorHash) {
 		t.Fatalf("unexpected proposal hash: got %s want %s", got, shastaProposalKnownVectorHash)
+	}
+}
+
+func TestDecodeGuestInputRejectsMissingOrNullStrictCarryFields(t *testing.T) {
+	cases := []struct {
+		name    string
+		carry   json.RawMessage
+		wantErr string
+	}{
+		{
+			name: "missing proposal id",
+			carry: strictCarryData(t, `{
+				"proposal_hash": "$proposalHash",
+				"parent_proposal_hash": "$parentProposalHash",
+				"parent_block_hash": "$parentBlockHash",
+				"actual_prover": "$actualProver",
+				"transition": {"proposer": "$proposer", "timestamp": 193828690},
+				"checkpoint": {"blockNumber": "$checkpointNumber", "blockHash": "$checkpointBlockHash", "stateRoot": "$checkpointStateRoot"}
+			}`),
+			wantErr: `missing required field "proposal_id"`,
+		},
+		{
+			name: "null proposal id",
+			carry: strictCarryData(t, `{
+				"proposal_id": null,
+				"proposal_hash": "$proposalHash",
+				"parent_proposal_hash": "$parentProposalHash",
+				"parent_block_hash": "$parentBlockHash",
+				"actual_prover": "$actualProver",
+				"transition": {"proposer": "$proposer", "timestamp": 193828690},
+				"checkpoint": {"blockNumber": "$checkpointNumber", "blockHash": "$checkpointBlockHash", "stateRoot": "$checkpointStateRoot"}
+			}`),
+			wantErr: `parse field "proposal_id": empty quantity`,
+		},
+		{
+			name: "missing transition timestamp",
+			carry: strictCarryData(t, `{
+				"proposal_id": 12345,
+				"proposal_hash": "$proposalHash",
+				"parent_proposal_hash": "$parentProposalHash",
+				"parent_block_hash": "$parentBlockHash",
+				"actual_prover": "$actualProver",
+				"transition": {"proposer": "$proposer"},
+				"checkpoint": {"blockNumber": "$checkpointNumber", "blockHash": "$checkpointBlockHash", "stateRoot": "$checkpointStateRoot"}
+			}`),
+			wantErr: `missing required field "timestamp"`,
+		},
+		{
+			name: "null transition timestamp",
+			carry: strictCarryData(t, `{
+				"proposal_id": 12345,
+				"proposal_hash": "$proposalHash",
+				"parent_proposal_hash": "$parentProposalHash",
+				"parent_block_hash": "$parentBlockHash",
+				"actual_prover": "$actualProver",
+				"transition": {"proposer": "$proposer", "timestamp": null},
+				"checkpoint": {"blockNumber": "$checkpointNumber", "blockHash": "$checkpointBlockHash", "stateRoot": "$checkpointStateRoot"}
+			}`),
+			wantErr: `parse field "timestamp": empty quantity`,
+		},
+		{
+			name: "missing checkpoint block number",
+			carry: strictCarryData(t, `{
+				"proposal_id": 12345,
+				"proposal_hash": "$proposalHash",
+				"parent_proposal_hash": "$parentProposalHash",
+				"parent_block_hash": "$parentBlockHash",
+				"actual_prover": "$actualProver",
+				"transition": {"proposer": "$proposer", "timestamp": 193828690},
+				"checkpoint": {"blockHash": "$checkpointBlockHash", "stateRoot": "$checkpointStateRoot"}
+			}`),
+			wantErr: `missing required field "blockNumber"`,
+		},
+		{
+			name: "null checkpoint block number",
+			carry: strictCarryData(t, `{
+				"proposal_id": 12345,
+				"proposal_hash": "$proposalHash",
+				"parent_proposal_hash": "$parentProposalHash",
+				"parent_block_hash": "$parentBlockHash",
+				"actual_prover": "$actualProver",
+				"transition": {"proposer": "$proposer", "timestamp": 193828690},
+				"checkpoint": {"blockNumber": null, "blockHash": "$checkpointBlockHash", "stateRoot": "$checkpointStateRoot"}
+			}`),
+			wantErr: `parse field "blockNumber": empty quantity`,
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			fixture := newGuestInputCarryFixture(t)
+			fixture.proofCarryOverride = tc.carry
+
+			_, err := DecodeGuestInput(fixture.input(t))
+			if err == nil {
+				t.Fatalf("expected error containing %q", tc.wantErr)
+			}
+			if !strings.Contains(err.Error(), tc.wantErr) {
+				t.Fatalf("unexpected error: %v", err)
+			}
+		})
+	}
+}
+
+func TestHashShastaProposalRejectsNullRequiredArrays(t *testing.T) {
+	cases := []struct {
+		name    string
+		raw     json.RawMessage
+		wantErr string
+	}{
+		{
+			name:    "sources",
+			raw:     proposalJSONWithSources(t, `null`),
+			wantErr: `field "sources" must be an array`,
+		},
+		{
+			name: "blob hashes",
+			raw: proposalJSONWithSources(t, `[{
+				"isForcedInclusion": true,
+				"blobSlice": {
+					"blobHashes": null,
+					"offset": 0,
+					"timestamp": 100
+				}
+			}]`),
+			wantErr: `field "blobHashes" must be an array`,
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			_, err := decodeShastaProposal(tc.raw)
+			if err == nil {
+				t.Fatalf("expected error containing %q", tc.wantErr)
+			}
+			if !strings.Contains(err.Error(), tc.wantErr) {
+				t.Fatalf("unexpected error: %v", err)
+			}
+		})
 	}
 }
 
@@ -234,6 +475,7 @@ type guestInputCarryFixture struct {
 	block               []byte
 	witnessChainSpec    json.RawMessage
 	taiko               json.RawMessage
+	proofCarryOverride  json.RawMessage
 }
 
 func newGuestInputCarryFixture(t *testing.T) *guestInputCarryFixture {
@@ -260,14 +502,10 @@ func newGuestInputCarryFixture(t *testing.T) *guestInputCarryFixture {
 		checkpointBlockHash: blockHash,
 		checkpointStateRoot: stateRoot,
 		block:               blockRaw,
-		witnessChainSpec: mustRawMessage(t, fmt.Sprintf(`{
-			"chain_id": 167013,
-			"verifier_address_forks": {
-				"SHASTA": {
-					"SGXGETH": %q
-				}
-			}
-		}`, verifier)),
+		witnessChainSpec: guestInputChainSpec(t,
+			`{"SHASTA": {"Block": 0}}`,
+			fmt.Sprintf(`{"SHASTA": {"SGXGETH": %q}}`, verifier),
+		),
 		taiko: mustRawMessage(t, fmt.Sprintf(`{
 			"chain_spec": {
 				"chain_id": 167013
@@ -312,6 +550,9 @@ func (f *guestInputCarryFixture) input(t *testing.T) protocol.ShastaGuestInput {
 
 func (f *guestInputCarryFixture) proofCarryData(t *testing.T) json.RawMessage {
 	t.Helper()
+	if len(f.proofCarryOverride) != 0 {
+		return f.proofCarryOverride
+	}
 
 	return mustRawMessage(t, fmt.Sprintf(`{
 		"chain_id": %d,
@@ -333,4 +574,99 @@ func (f *guestInputCarryFixture) proofCarryData(t *testing.T) json.RawMessage {
 			}
 		}
 	}`, f.chainID, f.verifier, f.proposalID, f.proposalHash, f.parentProposalHash, f.parentBlockHash, f.actualProver, f.proposer, f.timestamp, f.checkpointNumber, f.checkpointBlockHash, f.checkpointStateRoot))
+}
+
+func guestInputChainSpec(t *testing.T, hardForks string, verifierForks string) json.RawMessage {
+	t.Helper()
+	return mustRawMessage(t, fmt.Sprintf(`{
+		"chain_id": 167013,
+		"hard_forks": %s,
+		"verifier_address_forks": %s
+	}`, hardForks, verifierForks))
+}
+
+func setGuestInputCarryFixtureBlock(
+	t *testing.T,
+	fixture *guestInputCarryFixture,
+	number uint64,
+	timestamp uint64,
+) {
+	t.Helper()
+	fixture.block = sampleReplayBlockWithTimestamp(
+		t,
+		number,
+		timestamp,
+		fixture.parentBlockHash,
+		fixture.checkpointStateRoot,
+		testHash("33"),
+	)
+	fixture.checkpointNumber = fmt.Sprintf("0x%x", number)
+	fixture.checkpointBlockHash = replayBlockHash(t, fixture.block)
+}
+
+func sampleReplayBlockWithTimestamp(
+	t *testing.T,
+	number uint64,
+	timestamp uint64,
+	parentHash string,
+	stateRoot string,
+	receiptsRoot string,
+) []byte {
+	t.Helper()
+	blockRaw := sampleReplayBlock(t, fmt.Sprintf("0x%x", number), parentHash, stateRoot, receiptsRoot)
+	decoded, err := decodeBlockEnvelope(blockRaw)
+	if err != nil {
+		t.Fatalf("decode block envelope: %v", err)
+	}
+	header, err := decodeJSONObject(decoded.Header)
+	if err != nil {
+		t.Fatalf("decode header object: %v", err)
+	}
+	header["timestamp"] = mustRawMessage(t, fmt.Sprintf("%d", timestamp))
+	decoded.Header, err = json.Marshal(header)
+	if err != nil {
+		t.Fatalf("marshal header: %v", err)
+	}
+	encoded, err := json.Marshal(decoded)
+	if err != nil {
+		t.Fatalf("marshal block: %v", err)
+	}
+	return encoded
+}
+
+func strictCarryData(t *testing.T, transitionInputFormat string) json.RawMessage {
+	t.Helper()
+	fixture := newGuestInputCarryFixture(t)
+	transitionInput := strings.NewReplacer(
+		"$proposalHash", fixture.proposalHash,
+		"$parentProposalHash", fixture.parentProposalHash,
+		"$parentBlockHash", fixture.parentBlockHash,
+		"$actualProver", fixture.actualProver,
+		"$proposer", fixture.proposer,
+		"$checkpointNumber", fixture.checkpointNumber,
+		"$checkpointBlockHash", fixture.checkpointBlockHash,
+		"$checkpointStateRoot", fixture.checkpointStateRoot,
+	).Replace(
+		transitionInputFormat,
+	)
+	return mustRawMessage(t, fmt.Sprintf(`{
+		"chain_id": 167013,
+		"verifier": %q,
+		"transition_input": %s
+	}`, fixture.verifier, transitionInput))
+}
+
+func proposalJSONWithSources(t *testing.T, sources string) json.RawMessage {
+	t.Helper()
+	return mustRawMessage(t, fmt.Sprintf(`{
+		"id": 12345,
+		"timestamp": 193828690,
+		"endOfSubmissionWindowTimestamp": 193829690,
+		"proposer": "0x1234567890abcdef1234567890abcdef12345678",
+		"parentProposalHash": "0xabcdef1234567890abcdef1234567890abcdef1234567890abcdef1234567890",
+		"originBlockNumber": 73826,
+		"originBlockHash": "0x1234567890abcdef1234567890abcdef1234567890abcdef1234567890abcdef",
+		"basefeeSharingPctg": 42,
+		"sources": %s
+	}`, sources))
 }
