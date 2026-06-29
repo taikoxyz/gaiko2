@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"io"
 	"math/big"
+	"strings"
 
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/core/types"
@@ -16,9 +17,18 @@ import (
 )
 
 const (
-	shastaPayloadVersion       = 1
-	shastaAnchorGasLimit       = 1_000_000
-	shastaManifestMainnetChain = 167000
+	shastaPayloadVersion             = 1
+	shastaAnchorGasLimit             = 1_000_000
+	shastaManifestMainnetChain       = 167000
+	shastaMaxAnchorOffset            = 128
+	shastaMaxAnchorOffsetMainnet     = 512
+	shastaMinBlockGasLimit           = 10_000_000
+	shastaMaxBlockGasLimit           = 45_000_000
+	shastaBlockGasLimitMaxChange     = 200
+	shastaGasLimitDenominator        = 1_000_000
+	shastaDerivationSourceMaxBlocks  = 192
+	shastaUnzenDerivationSourceLimit = 768
+	shastaMaxManifestOffset          = shastaBytesPerBlob - 64
 )
 
 type shastaSourceManifest struct {
@@ -70,19 +80,33 @@ func ValidateGuestInputManifestBinding(view *GuestInputView) error {
 		Header:            parentHeader,
 		AnchorBlockNumber: lastAnchor,
 	}
+	forkTimestamp, err := decodeWitnessForkTimestamp(view, "SHASTA")
+	if err != nil {
+		return err
+	}
+	maxBlocks, err := derivationSourceMaxBlocks(view, proposal)
+	if err != nil {
+		return err
+	}
 
 	derived := make([]shastaManifestBlock, 0, len(view.Witnesses))
 	for sourceIndex, source := range proposal.Sources {
-		if len(source.BlobSlice.BlobHashes) > 0 {
-			return fmt.Errorf("blob-backed manifest binding is not implemented")
-		}
-
 		dataSource, err := decodeBlobSourceData(view.DataSourcesRaw[sourceIndex])
 		if err != nil {
 			return fmt.Errorf("decode data_sources[%d]: %w", sourceIndex, err)
 		}
-		manifest := decodeInlineSourceManifest(dataSource, source.BlobSlice.Offset)
-		manifest = prepareInlineSourceManifest(manifest, source, parent, proposal, view.GuestInputChainID)
+		manifest, err := prepareSourceManifest(
+			dataSource,
+			source,
+			parent,
+			proposal,
+			view.GuestInputChainID,
+			forkTimestamp,
+			maxBlocks,
+		)
+		if err != nil {
+			return fmt.Errorf("prepare source manifest %d: %w", sourceIndex, err)
+		}
 
 		for _, block := range manifest.Blocks {
 			derived = append(derived, block)
@@ -139,9 +163,48 @@ func decodeLastFullProposalAncestorHeader(raws []json.RawMessage) (*types.Header
 	return nil, fmt.Errorf("missing full proposal ancestor header")
 }
 
-func decodeInlineSourceManifest(dataSource blobSourceDataView, offset uint64) shastaSourceManifest {
+func prepareSourceManifest(
+	dataSource blobSourceDataView,
+	source shastaDerivationSourceView,
+	parent shastaManifestParentContext,
+	proposal shastaProposalView,
+	chainID uint64,
+	forkTimestamp uint64,
+	maxBlocks int,
+) (shastaSourceManifest, error) {
+	var (
+		manifest shastaSourceManifest
+		err      error
+	)
+	if len(source.BlobSlice.BlobHashes) == 0 {
+		manifest = decodeInlineSourceManifest(dataSource, source.BlobSlice.Offset, maxBlocks)
+	} else if source.BlobSlice.Offset > shastaMaxManifestOffset {
+		manifest = defaultSourceManifest()
+	} else {
+		manifest, err = decodeBlobBackedSourceManifest(dataSource, source.BlobSlice.Offset, maxBlocks)
+		if err != nil {
+			return shastaSourceManifest{}, err
+		}
+	}
+
+	if source.IsForcedInclusion && len(manifest.Blocks) != 1 {
+		manifest = defaultSourceManifest()
+	}
+	if source.IsForcedInclusion || isDefaultSourceManifest(manifest) {
+		applyInheritedManifestMetadata(&manifest, parent, proposal, chainID, forkTimestamp)
+	}
+
+	if !validateSourceManifest(manifest, source, parent, proposal, chainID, forkTimestamp) {
+		manifest = defaultSourceManifest()
+		applyInheritedManifestMetadata(&manifest, parent, proposal, chainID, forkTimestamp)
+	}
+
+	return manifest, nil
+}
+
+func decodeInlineSourceManifest(dataSource blobSourceDataView, offset uint64, maxBlocks int) shastaSourceManifest {
 	if len(dataSource.TxDataFromCalldata) != 0 {
-		manifest, err := decodeManifestPayload(dataSource.TxDataFromCalldata, offset)
+		manifest, err := decodeManifestPayload(dataSource.TxDataFromCalldata, offset, maxBlocks)
 		if err == nil {
 			return manifest
 		}
@@ -152,7 +215,7 @@ func decodeInlineSourceManifest(dataSource blobSourceDataView, offset uint64) sh
 		for _, chunk := range dataSource.TxDataFromBlob {
 			concatenated = append(concatenated, chunk...)
 		}
-		manifest, err := decodeManifestPayload(concatenated, offset)
+		manifest, err := decodeManifestPayload(concatenated, offset, maxBlocks)
 		if err == nil {
 			return manifest
 		}
@@ -160,7 +223,31 @@ func decodeInlineSourceManifest(dataSource blobSourceDataView, offset uint64) sh
 	return defaultSourceManifest()
 }
 
-func decodeManifestPayload(payload []byte, offset uint64) (shastaSourceManifest, error) {
+func decodeBlobBackedSourceManifest(dataSource blobSourceDataView, offset uint64, maxBlocks int) (shastaSourceManifest, error) {
+	if len(dataSource.TxDataFromBlob) == 0 {
+		return shastaSourceManifest{}, fmt.Errorf("blob-backed derivation source is missing blob data")
+	}
+
+	var concatenated []byte
+	for index, raw := range dataSource.TxDataFromBlob {
+		decoded, err := decodeShastaBlob(raw)
+		if err != nil {
+			if len(raw) != shastaBytesPerBlob {
+				return shastaSourceManifest{}, fmt.Errorf("blob %d has invalid length %d; expected %d", index, len(raw), shastaBytesPerBlob)
+			}
+			return shastaSourceManifest{}, fmt.Errorf("invalid blob encoding")
+		}
+		concatenated = append(concatenated, decoded...)
+	}
+
+	manifest, err := decodeManifestPayload(concatenated, offset, maxBlocks)
+	if err != nil {
+		return defaultSourceManifest(), nil
+	}
+	return manifest, nil
+}
+
+func decodeManifestPayload(payload []byte, offset uint64, maxBlocks int) (shastaSourceManifest, error) {
 	if offset > uint64(len(payload)) {
 		return shastaSourceManifest{}, fmt.Errorf("manifest offset %d exceeds payload length %d", offset, len(payload))
 	}
@@ -192,24 +279,10 @@ func decodeManifestPayload(payload []byte, offset uint64) (shastaSourceManifest,
 	if err := rlp.DecodeBytes(decoded, &manifest); err != nil {
 		return shastaSourceManifest{}, fmt.Errorf("decode manifest rlp: %w", err)
 	}
+	if len(manifest.Blocks) > maxBlocks {
+		return shastaSourceManifest{}, fmt.Errorf("manifest block count %d exceeds max %d", len(manifest.Blocks), maxBlocks)
+	}
 	return manifest, nil
-}
-
-func prepareInlineSourceManifest(
-	manifest shastaSourceManifest,
-	source shastaDerivationSourceView,
-	parent shastaManifestParentContext,
-	proposal shastaProposalView,
-	chainID uint64,
-) shastaSourceManifest {
-	if source.IsForcedInclusion && len(manifest.Blocks) != 1 {
-		manifest = defaultSourceManifest()
-	}
-	if len(manifest.Blocks) == 0 || isDefaultSourceManifest(manifest) {
-		manifest = defaultSourceManifest()
-		applyInheritedManifestMetadata(&manifest, parent, proposal, chainID)
-	}
-	return manifest
 }
 
 func defaultSourceManifest() shastaSourceManifest {
@@ -233,11 +306,12 @@ func applyInheritedManifestMetadata(
 	parent shastaManifestParentContext,
 	proposal shastaProposalView,
 	chainID uint64,
+	forkTimestamp uint64,
 ) {
 	parentTime := parent.Header.Time
 	parentGasLimit := effectiveManifestParentGasLimit(parent.Header.Number.Uint64(), parent.Header.GasLimit)
 	for index := range manifest.Blocks {
-		timestamp := manifestTimestampLowerBound(parentTime, proposal.Timestamp, 0, chainID)
+		timestamp := manifestTimestampLowerBound(parentTime, proposal.Timestamp, forkTimestamp, chainID)
 		manifest.Blocks[index].Timestamp = timestamp
 		manifest.Blocks[index].Coinbase = proposal.Proposer
 		manifest.Blocks[index].AnchorBlockNumber = parent.AnchorBlockNumber
@@ -274,6 +348,201 @@ func effectiveManifestParentGasLimit(parentBlockNumber uint64, parentGasLimit ui
 		return 0
 	}
 	return parentGasLimit - shastaAnchorGasLimit
+}
+
+func validateSourceManifest(
+	manifest shastaSourceManifest,
+	source shastaDerivationSourceView,
+	parent shastaManifestParentContext,
+	proposal shastaProposalView,
+	chainID uint64,
+	forkTimestamp uint64,
+) bool {
+	if len(manifest.Blocks) == 0 {
+		return false
+	}
+	return validateManifestTimestamps(manifest, parent.Header.Time, proposal.Timestamp, forkTimestamp, chainID) &&
+		validateManifestAnchorNumbers(manifest, proposal.OriginBlockNumber, parent.AnchorBlockNumber, source.IsForcedInclusion, chainID) &&
+		validateManifestGasLimit(manifest, parent.Header.Number.Uint64(), parent.Header.GasLimit)
+}
+
+func validateManifestTimestamps(
+	manifest shastaSourceManifest,
+	parentTimestamp uint64,
+	proposalTimestamp uint64,
+	forkTimestamp uint64,
+	chainID uint64,
+) bool {
+	parentTime := parentTimestamp
+	for _, block := range manifest.Blocks {
+		lower := manifestTimestampLowerBound(parentTime, proposalTimestamp, forkTimestamp, chainID)
+		if lower > proposalTimestamp {
+			return false
+		}
+		if block.Timestamp < lower || block.Timestamp > proposalTimestamp {
+			return false
+		}
+		parentTime = block.Timestamp
+	}
+	return true
+}
+
+func validateManifestAnchorNumbers(
+	manifest shastaSourceManifest,
+	originBlockNumber uint64,
+	parentAnchorBlockNumber uint64,
+	isForcedInclusion bool,
+	chainID uint64,
+) bool {
+	parentAnchor := parentAnchorBlockNumber
+	highestAnchor := parentAnchorBlockNumber
+	maxOffset := uint64(shastaMaxAnchorOffset)
+	if chainID == shastaManifestMainnetChain {
+		maxOffset = shastaMaxAnchorOffsetMainnet
+	}
+
+	for _, block := range manifest.Blocks {
+		anchor := block.AnchorBlockNumber
+		if anchor < parentAnchor || anchor > originBlockNumber {
+			return false
+		}
+		if originBlockNumber > maxOffset && anchor < originBlockNumber-maxOffset {
+			return false
+		}
+		if anchor > highestAnchor {
+			highestAnchor = anchor
+		}
+		parentAnchor = anchor
+	}
+
+	return isForcedInclusion || highestAnchor > parentAnchorBlockNumber
+}
+
+func validateManifestGasLimit(
+	manifest shastaSourceManifest,
+	parentBlockNumber uint64,
+	parentGasLimit uint64,
+) bool {
+	effectiveParentGasLimit := effectiveManifestParentGasLimit(parentBlockNumber, parentGasLimit)
+	for _, block := range manifest.Blocks {
+		lower, upper := manifestGasLimitBounds(effectiveParentGasLimit)
+		if block.GasLimit < lower || block.GasLimit > upper {
+			return false
+		}
+		effectiveParentGasLimit = block.GasLimit
+	}
+	return true
+}
+
+func manifestGasLimitBounds(parentGasLimit uint64) (uint64, uint64) {
+	denominator := new(big.Int).SetUint64(shastaGasLimitDenominator)
+	upperMultiplier := new(big.Int).SetUint64(shastaGasLimitDenominator + shastaBlockGasLimitMaxChange)
+	upper := new(big.Int).Mul(new(big.Int).SetUint64(parentGasLimit), upperMultiplier)
+	upper.Div(upper, denominator)
+	maxGas := new(big.Int).SetUint64(shastaMaxBlockGasLimit)
+	if upper.Cmp(maxGas) > 0 {
+		upper = maxGas
+	}
+
+	lowerMultiplier := new(big.Int).SetUint64(shastaGasLimitDenominator - shastaBlockGasLimitMaxChange)
+	lower := new(big.Int).Mul(new(big.Int).SetUint64(parentGasLimit), lowerMultiplier)
+	lower.Div(lower, denominator)
+	minGas := new(big.Int).SetUint64(shastaMinBlockGasLimit)
+	if lower.Cmp(minGas) < 0 {
+		lower = minGas
+	}
+	if lower.Cmp(upper) > 0 {
+		lower = upper
+	}
+	return lower.Uint64(), upper.Uint64()
+}
+
+func decodeWitnessForkTimestamp(view *GuestInputView, forkName string) (uint64, error) {
+	raw, ok, err := lookupWitnessFork(view, forkName)
+	if err != nil || !ok {
+		return 0, err
+	}
+	fields, ok, err := decodeForkConditionObject(raw)
+	if err != nil || !ok {
+		return 0, err
+	}
+	timestamp, err := optionalUint64Ptr(fields, "Timestamp", "timestamp")
+	if err != nil {
+		return 0, fmt.Errorf("parse witness.chain_spec.hard_forks.%s.Timestamp: %w", forkName, err)
+	}
+	if timestamp == nil {
+		return 0, nil
+	}
+	return *timestamp, nil
+}
+
+func derivationSourceMaxBlocks(view *GuestInputView, proposal shastaProposalView) (int, error) {
+	active, err := witnessForkActiveAt(view, "UNZEN", proposal.Timestamp)
+	if err != nil {
+		return 0, err
+	}
+	if active {
+		return shastaUnzenDerivationSourceLimit, nil
+	}
+	return shastaDerivationSourceMaxBlocks, nil
+}
+
+func witnessForkActiveAt(view *GuestInputView, forkName string, timestamp uint64) (bool, error) {
+	raw, ok, err := lookupWitnessFork(view, forkName)
+	if err != nil || !ok {
+		return false, err
+	}
+	fields, ok, err := decodeForkConditionObject(raw)
+	if err != nil || !ok {
+		return false, err
+	}
+	forkTimestamp, err := optionalUint64Ptr(fields, "Timestamp", "timestamp")
+	if err != nil {
+		return false, fmt.Errorf("parse witness.chain_spec.hard_forks.%s.Timestamp: %w", forkName, err)
+	}
+	if forkTimestamp != nil {
+		return timestamp >= *forkTimestamp, nil
+	}
+	block, err := optionalUint64Ptr(fields, "Block", "block")
+	if err != nil {
+		return false, fmt.Errorf("parse witness.chain_spec.hard_forks.%s.Block: %w", forkName, err)
+	}
+	return block != nil && *block == 0, nil
+}
+
+func lookupWitnessFork(view *GuestInputView, forkName string) (json.RawMessage, bool, error) {
+	if view == nil || len(view.Witnesses) == 0 {
+		return nil, false, fmt.Errorf("guest input must include at least one witness")
+	}
+	fields, err := decodeJSONObject(view.Witnesses[0].ChainSpecRaw)
+	if err != nil {
+		return nil, false, fmt.Errorf("unmarshal witness.chain_spec: %w", err)
+	}
+	rawHardForks, ok := lookupField(fields, "hard_forks", "hardForks")
+	if !ok {
+		return nil, false, nil
+	}
+	hardForks, err := decodeJSONObject(rawHardForks)
+	if err != nil {
+		return nil, false, fmt.Errorf("unmarshal witness.chain_spec.hard_forks: %w", err)
+	}
+	rawFork, ok := lookupForkCaseInsensitive(hardForks, forkName)
+	return rawFork, ok, nil
+}
+
+func decodeForkConditionObject(raw json.RawMessage) (map[string]json.RawMessage, bool, error) {
+	var text string
+	if err := json.Unmarshal(raw, &text); err == nil {
+		if strings.EqualFold(text, "Tbd") {
+			return nil, false, nil
+		}
+		return nil, false, fmt.Errorf("unknown hard fork string %q", text)
+	}
+	fields, err := decodeJSONObject(raw)
+	if err != nil {
+		return nil, false, err
+	}
+	return fields, true, nil
 }
 
 func validateManifestBlockBinding(

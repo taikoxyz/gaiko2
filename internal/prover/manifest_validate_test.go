@@ -27,6 +27,19 @@ func TestValidateManifestBindingAcceptsInlineCalldataSource(t *testing.T) {
 	}
 }
 
+func TestValidateManifestBindingAcceptsBlobBackedSource(t *testing.T) {
+	fixture := newManifestBindingFixture(t)
+	fixture.blobBacked = true
+	view := fixture.view(t)
+
+	if err := ValidateGuestInputBlobSources(view); err != nil {
+		t.Fatalf("validate blob source hashes: %v", err)
+	}
+	if err := ValidateGuestInputManifestBinding(view); err != nil {
+		t.Fatalf("validate blob-backed manifest binding: %v", err)
+	}
+}
+
 func TestValidateManifestBindingRejectsMismatches(t *testing.T) {
 	cases := []struct {
 		name    string
@@ -104,6 +117,37 @@ func TestValidateManifestBindingRejectsMismatches(t *testing.T) {
 			},
 			wantErr: "anchor checkpoint block number mismatch",
 		},
+		{
+			name: "invalid blob encoding",
+			mutate: func(f *manifestBindingFixture) {
+				f.blobBacked = true
+				f.corruptBlobEncoding = true
+			},
+			wantErr: "invalid blob encoding",
+		},
+		{
+			name: "invalid manifest metadata defaults instead of binding malicious metadata",
+			mutate: func(f *manifestBindingFixture) {
+				f.manifestTimestamp = f.parentHeader.Time
+				f.manifestCoinbase = common.HexToAddress(testAddress("99"))
+				f.anchorBlockNumber = 899
+				f.blockCoinbase = f.proposer
+				f.omitUserTx = true
+			},
+			wantErr: "",
+		},
+		{
+			name: "forced inclusion inherits metadata and preserves transactions",
+			mutate: func(f *manifestBindingFixture) {
+				f.isForcedInclusion = true
+				f.manifestTimestamp = 1
+				f.manifestCoinbase = common.HexToAddress(testAddress("88"))
+				f.manifestGasLimit = 10_000_000
+				f.anchorBlockNumber = 899
+				f.blockCoinbase = f.proposer
+			},
+			wantErr: "",
+		},
 	}
 
 	for _, tc := range cases {
@@ -113,6 +157,12 @@ func TestValidateManifestBindingRejectsMismatches(t *testing.T) {
 			view := fixture.view(t)
 
 			err := ValidateGuestInputManifestBinding(view)
+			if tc.wantErr == "" {
+				if err != nil {
+					t.Fatalf("unexpected error: %v", err)
+				}
+				return
+			}
 			if err == nil {
 				t.Fatalf("expected error containing %q", tc.wantErr)
 			}
@@ -132,27 +182,32 @@ func TestValidateGuestInputBlobSourcesAcceptsInlineCalldataSource(t *testing.T) 
 }
 
 type manifestBindingFixture struct {
-	chainID            uint64
-	proposalID         uint64
-	proposalTimestamp  uint64
-	parentHeader       *types.Header
-	manifestTimestamp  uint64
-	manifestCoinbase   common.Address
-	manifestGasLimit   uint64
-	manifestUserTxJSON json.RawMessage
-	blockUserTxJSON    json.RawMessage
-	blockTimestamp     uint64
-	blockCoinbase      common.Address
-	blockGasLimit      uint64
-	blockExtra         []byte
-	blockMixDigest     common.Hash
-	blockBaseFee       uint64
-	l2Contract         common.Address
-	anchorTo           common.Address
-	anchorBlockNumber  uint64
-	omitAnchorTx       bool
-	omitUserTx         bool
-	addManifestBlock   bool
+	chainID             uint64
+	proposalID          uint64
+	proposalTimestamp   uint64
+	proposer            common.Address
+	originBlockNumber   uint64
+	parentHeader        *types.Header
+	manifestTimestamp   uint64
+	manifestCoinbase    common.Address
+	manifestGasLimit    uint64
+	manifestUserTxJSON  json.RawMessage
+	blockUserTxJSON     json.RawMessage
+	blockTimestamp      uint64
+	blockCoinbase       common.Address
+	blockGasLimit       uint64
+	blockExtra          []byte
+	blockMixDigest      common.Hash
+	blockBaseFee        uint64
+	l2Contract          common.Address
+	anchorTo            common.Address
+	anchorBlockNumber   uint64
+	omitAnchorTx        bool
+	omitUserTx          bool
+	addManifestBlock    bool
+	blobBacked          bool
+	corruptBlobEncoding bool
+	isForcedInclusion   bool
 }
 
 func newManifestBindingFixture(t *testing.T) *manifestBindingFixture {
@@ -187,6 +242,8 @@ func newManifestBindingFixture(t *testing.T) *manifestBindingFixture {
 		chainID:            chainID,
 		proposalID:         proposalID,
 		proposalTimestamp:  1_100,
+		proposer:           common.HexToAddress("0x1234567890abcdef1234567890abcdef12345678"),
+		originBlockNumber:  1_000,
 		parentHeader:       parentHeader,
 		manifestTimestamp:  1_001,
 		manifestCoinbase:   common.HexToAddress(testAddress("22")),
@@ -209,6 +266,7 @@ func (f *manifestBindingFixture) view(t *testing.T) *GuestInputView {
 	t.Helper()
 
 	manifestPayload := f.manifestPayload(t)
+	dataSourceJSON, sourceJSON := f.dataSourceAndSourceJSON(t, manifestPayload)
 	block := f.blockJSON(t)
 	blockHash := replayBlockHash(t, block)
 	parentHash := f.parentHeader.Hash().Hex()
@@ -231,10 +289,8 @@ func (f *manifestBindingFixture) view(t *testing.T) *GuestInputView {
 				"actual_prover": %q,
 				"last_anchor_block_number": 899
 			},
-			"data_sources": [{
-				"tx_data_from_calldata": %q
-			}]
-		}`, f.chainID, f.proposalID, f.proposalJSON(t), testAddress("77"), "0x"+hex.EncodeToString(manifestPayload))),
+			"data_sources": [%s]
+		}`, f.chainID, f.proposalID, f.proposalJSON(t, sourceJSON), testAddress("77"), dataSourceJSON)),
 		ProposalAncestorHeaders: []json.RawMessage{mustRawMessage(t, f.parentWitnessHeaderJSON(t))},
 		ProofCarryData: sampleCarryData(
 			t,
@@ -251,6 +307,37 @@ func (f *manifestBindingFixture) view(t *testing.T) *GuestInputView {
 		t.Fatalf("decode guest input: %v", err)
 	}
 	return view
+}
+
+func (f *manifestBindingFixture) dataSourceAndSourceJSON(t *testing.T, manifestPayload []byte) (string, string) {
+	t.Helper()
+
+	if !f.blobBacked {
+		return fmt.Sprintf(`{"tx_data_from_calldata": %q}`, "0x"+hex.EncodeToString(manifestPayload)),
+			fmt.Sprintf(`{
+				"isForcedInclusion": %t,
+				"blobSlice": {
+					"blobHashes": [],
+					"offset": 0,
+					"timestamp": %d
+				}
+			}`, f.isForcedInclusion, f.proposalTimestamp)
+	}
+
+	blob := encodeTestKonaBlob(t, manifestPayload)
+	if f.corruptBlobEncoding {
+		blob[len(blob)-1] = 0x01
+	}
+	_, blobHash := testBlobCommitmentAndHash(t, blob)
+	return fmt.Sprintf(`{"tx_data_from_blob": [%s]}`, hexStringJSON(blob)),
+		fmt.Sprintf(`{
+			"isForcedInclusion": %t,
+			"blobSlice": {
+				"blobHashes": [%q],
+				"offset": 0,
+				"timestamp": %d
+			}
+		}`, f.isForcedInclusion, blobHash, f.proposalTimestamp)
 }
 
 func (f *manifestBindingFixture) manifestPayload(t *testing.T) []byte {
@@ -370,16 +457,28 @@ func (f *manifestBindingFixture) parentWitnessHeaderJSON(t *testing.T) string {
 	return fmt.Sprintf(`{"header": %s, "hash": %q}`, header, f.parentHeader.Hash().Hex())
 }
 
-func (f *manifestBindingFixture) proposalJSON(t *testing.T) json.RawMessage {
+func (f *manifestBindingFixture) proposalJSON(t *testing.T, sourceJSON string) json.RawMessage {
 	t.Helper()
-	return proposalJSONWithSources(t, fmt.Sprintf(`[{
-		"isForcedInclusion": false,
-		"blobSlice": {
-			"blobHashes": [],
-			"offset": 0,
-			"timestamp": %d
-		}
-	}]`, f.proposalTimestamp))
+	return mustRawMessage(t, fmt.Sprintf(`{
+		"id": %d,
+		"timestamp": %d,
+		"endOfSubmissionWindowTimestamp": %d,
+		"proposer": %q,
+		"parentProposalHash": %q,
+		"originBlockNumber": %d,
+		"originBlockHash": %q,
+		"basefeeSharingPctg": 42,
+		"sources": [%s]
+	}`,
+		f.proposalID,
+		f.proposalTimestamp,
+		f.proposalTimestamp+1_000,
+		f.proposer.Hex(),
+		testHash("ab"),
+		f.originBlockNumber,
+		testHash("cd"),
+		sourceJSON,
+	))
 }
 
 type testDerivationSourceManifest struct {
@@ -530,4 +629,98 @@ func headerJSON(t *testing.T, header *types.Header) string {
 		baseFee,
 	)
 	return raw
+}
+
+func encodeTestKonaBlob(t *testing.T, payload []byte) []byte {
+	t.Helper()
+
+	const (
+		testBytesPerBlob       = 131072
+		testBlobEncodingRounds = 1024
+		testBlobMaxDataSize    = (4*31+3)*1024 - 4
+	)
+	if len(payload) > testBlobMaxDataSize {
+		t.Fatalf("test payload too large for one blob: %d", len(payload))
+	}
+
+	blob := make([]byte, testBytesPerBlob)
+	readOffset := 0
+	writeOffset := 0
+
+	write1 := func(value byte) {
+		if value&0xc0 != 0 {
+			t.Fatalf("test encoder invalid 6-bit value: %x", value)
+		}
+		if writeOffset%32 != 0 {
+			t.Fatalf("test encoder write1 at offset %d", writeOffset)
+		}
+		blob[writeOffset] = value
+		writeOffset++
+	}
+	write31 := func(buf [31]byte) {
+		if writeOffset%32 != 1 {
+			t.Fatalf("test encoder write31 at offset %d", writeOffset)
+		}
+		copy(blob[writeOffset:writeOffset+31], buf[:])
+		writeOffset += 31
+	}
+	read1 := func() byte {
+		if readOffset >= len(payload) {
+			return 0
+		}
+		value := payload[readOffset]
+		readOffset++
+		return value
+	}
+	read31 := func() [31]byte {
+		var out [31]byte
+		if readOffset >= len(payload) {
+			return out
+		}
+		n := copy(out[:], payload[readOffset:])
+		readOffset += n
+		return out
+	}
+
+	for round := 0; round < testBlobEncodingRounds; round++ {
+		if readOffset >= len(payload) {
+			break
+		}
+
+		var buf31 [31]byte
+		if round == 0 {
+			length := uint32(len(payload))
+			buf31[0] = 0
+			buf31[1] = byte(length >> 16)
+			buf31[2] = byte(length >> 8)
+			buf31[3] = byte(length)
+			toCopy := min(len(payload)-readOffset, 27)
+			copy(buf31[4:4+toCopy], payload[readOffset:readOffset+toCopy])
+			readOffset += toCopy
+		} else {
+			buf31 = read31()
+		}
+
+		x := read1()
+		write1(x & 0x3f)
+		write31(buf31)
+
+		buf31 = read31()
+		y := read1()
+		write1((y & 0x0f) | ((x & 0xc0) >> 2))
+		write31(buf31)
+
+		buf31 = read31()
+		z := read1()
+		write1(z & 0x3f)
+		write31(buf31)
+
+		buf31 = read31()
+		write1(((z & 0xc0) >> 2) | ((y & 0xf0) >> 4))
+		write31(buf31)
+	}
+	if readOffset < len(payload) {
+		t.Fatalf("test payload did not fit into one blob")
+	}
+	return blob
 }
