@@ -6,9 +6,12 @@ import (
 	"io"
 	"net"
 	"net/http"
+	"net/http/httptest"
 	"os"
 	"strings"
 	"testing"
+
+	"github.com/taikoxyz/gaiko2/internal/prover"
 )
 
 func TestRunServerPrintsStartupSummary(t *testing.T) {
@@ -113,6 +116,50 @@ func TestRunServerUsesPortFromEnv(t *testing.T) {
 	}
 	if !strings.Contains(stdout.String(), "listening on 127.0.0.1:19090") {
 		t.Fatalf("expected startup log, got %q", stdout.String())
+	}
+}
+
+func TestRunServerRejectsV1WithoutGuestInput(t *testing.T) {
+	prevListen := listenFn
+	prevServe := serveFn
+	prevNewReplayService := newReplayServiceFn
+	t.Cleanup(func() {
+		listenFn = prevListen
+		serveFn = prevServe
+		newReplayServiceFn = prevNewReplayService
+	})
+
+	setEnv(t, "GAIKO2_INSTANCE_ID", "11")
+
+	listenFn = func(network, addr string) (net.Listener, error) {
+		return fakeListener{addr: fakeAddr("127.0.0.1:18080")}, nil
+	}
+	newReplayServiceFn = func(cfg prover.ServiceConfig, runner prover.Runner) (prover.Service, error) {
+		return prover.StubService{}, nil
+	}
+	serveFn = func(_ net.Listener, handler http.Handler) error {
+		req := httptest.NewRequest(http.MethodPost, "/prove/shasta", bytes.NewBufferString(`{
+			"schema":"raiko2-shasta-request-v1",
+			"payload":{}
+		}`))
+		recorder := httptest.NewRecorder()
+
+		handler.ServeHTTP(recorder, req)
+
+		if recorder.Code != http.StatusBadRequest {
+			t.Fatalf("unexpected status: %d", recorder.Code)
+		}
+		body := recorder.Body.String()
+		if !strings.Contains(body, "guest_input") {
+			t.Fatalf("expected missing guest_input response, got %q", body)
+		}
+		return errors.New("stop server")
+	}
+
+	var stdout bytes.Buffer
+	err := run([]string{"server", ":18080"}, &stdout)
+	if err == nil || err.Error() != "stop server" {
+		t.Fatalf("unexpected error: %v", err)
 	}
 }
 

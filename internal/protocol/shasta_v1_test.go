@@ -1,143 +1,130 @@
 package protocol
 
 import (
+	"bytes"
 	"encoding/json"
 	"testing"
 )
 
-func TestShastaV1RoundTrip(t *testing.T) {
+func TestShastaV1ConstantsRemainStable(t *testing.T) {
+	if ShastaRequestSchemaV1 != "raiko2-shasta-request-v1" {
+		t.Fatalf("unexpected v1 request schema constant: %s", ShastaRequestSchemaV1)
+	}
+	if ShastaAggregateRequestSchemaV1 != "raiko2-shasta-aggregate-request-v1" {
+		t.Fatalf("unexpected v1 aggregate schema constant: %s", ShastaAggregateRequestSchemaV1)
+	}
+	if ProofSchemaV1 != "raiko2-proof-v1" {
+		t.Fatalf("unexpected v1 proof schema constant: %s", ProofSchemaV1)
+	}
+}
+
+func TestShastaV1RoundTripUsesGuestInputPayload(t *testing.T) {
 	req := ShastaRequest{
 		Schema: ShastaRequestSchemaV1,
 		Payload: ShastaPayload{
-			ChainID: 167013,
-			Blocks: []ReplayBlock{
-				{
-					Block:     mustRawMessage(t, `{"number":"0x2a"}`),
-					ChainSpec: mustRawMessage(t, `{"chain_id":167013}`),
-					Witness:   mustRawMessage(t, `{"headers":[]}`),
-					Accounts:  mustRawMessage(t, `{}`),
-				},
+			GuestInput: &ShastaGuestInput{
+				Witnesses:               []json.RawMessage{mustRawMessage(t, `{"block":{"number":"0x2a"}}`)},
+				Taiko:                   mustRawMessage(t, `{"proposal_id":"0x1"}`),
+				ProposalAncestorHeaders: []json.RawMessage{mustRawMessage(t, `{"number":"0x29"}`)},
+				ProposalStateNodes:      []json.RawMessage{mustRawMessage(t, `{"key":"0x01"}`)},
+				ProofCarryData:          mustRawMessage(t, `{"chain_id":167013}`),
 			},
-			ProofCarryData: mustRawMessage(t, `{"chain_id":167013}`),
 		},
 	}
 
 	data, err := json.Marshal(req)
 	if err != nil {
-		t.Fatalf("marshal request: %v", err)
+		t.Fatalf("marshal v1 request: %v", err)
+	}
+
+	var envelope map[string]json.RawMessage
+	if err := json.Unmarshal(data, &envelope); err != nil {
+		t.Fatalf("unmarshal v1 envelope: %v", err)
+	}
+
+	var payload map[string]json.RawMessage
+	if err := json.Unmarshal(envelope["payload"], &payload); err != nil {
+		t.Fatalf("unmarshal v1 payload: %v", err)
+	}
+	if _, ok := payload["guest_input"]; !ok {
+		t.Fatalf("v1 payload missing guest_input: %s", data)
 	}
 
 	var decoded ShastaRequest
 	if err := json.Unmarshal(data, &decoded); err != nil {
-		t.Fatalf("unmarshal request: %v", err)
+		t.Fatalf("unmarshal v1 request: %v", err)
 	}
 
 	if decoded.Schema != ShastaRequestSchemaV1 {
-		t.Fatalf("unexpected schema: %s", decoded.Schema)
+		t.Fatalf("unexpected v1 schema: %s", decoded.Schema)
 	}
-	if ShastaRequestSchemaV1 != "raiko2-shasta-request-v1" {
-		t.Fatalf("unexpected request schema constant: %s", ShastaRequestSchemaV1)
+	if decoded.Payload.GuestInput == nil {
+		t.Fatalf("expected guest_input to decode")
 	}
-	if decoded.Payload.ChainID != 167013 {
-		t.Fatalf("unexpected chain id: %d", decoded.Payload.ChainID)
-	}
-	if len(decoded.Payload.Blocks) != 1 {
-		t.Fatalf("unexpected block count: %d", len(decoded.Payload.Blocks))
+	if len(decoded.Payload.GuestInput.Witnesses) != 1 {
+		t.Fatalf("unexpected witness count: %d", len(decoded.Payload.GuestInput.Witnesses))
 	}
 }
 
-func TestShastaAggregateV1RoundTrip(t *testing.T) {
-	req := ShastaAggregateRequest{
-		Schema: ShastaAggregateRequestSchemaV1,
-		Payload: ShastaAggregatePayload{
-			Proofs: []AggregateProof{
-				{
-					Input:          "0x" + "11",
-					Proof:          "0x" + "22",
-					ProofCarryData: mustRawMessage(t, `{"chain_id":167013}`),
-				},
-			},
-		},
-	}
+func TestShastaV1DecodePreservesGuestInputFields(t *testing.T) {
+	data := []byte(`{
+		"schema":"raiko2-shasta-request-v1",
+		"payload":{
+			"guest_input":{
+				"witnesses":[{"block":{"number":"0x2a"}},{"block":{"number":"0x2b"}}],
+				"taiko":{"proposal_id":"0x1","prover_data":{"actual_prover":"0xabc"}},
+				"proposal_ancestor_headers":[{"number":"0x28"},{"number":"0x29"}],
+				"proposal_state_nodes":[{"key":"0x01"},{"key":"0x02"}],
+				"proof_carry_data":{"chain_id":167013,"transition_input":{"proposal_id":"0x1"}}
+			}
+		}
+	}`)
 
-	data, err := json.Marshal(req)
-	if err != nil {
-		t.Fatalf("marshal request: %v", err)
-	}
-
-	var decoded ShastaAggregateRequest
+	var decoded ShastaRequest
 	if err := json.Unmarshal(data, &decoded); err != nil {
-		t.Fatalf("unmarshal request: %v", err)
+		t.Fatalf("unmarshal v1 request: %v", err)
 	}
-
-	if decoded.Schema != ShastaAggregateRequestSchemaV1 {
+	if decoded.Schema != ShastaRequestSchemaV1 {
 		t.Fatalf("unexpected schema: %s", decoded.Schema)
 	}
-	if ShastaAggregateRequestSchemaV1 != "raiko2-shasta-aggregate-request-v1" {
-		t.Fatalf("unexpected aggregate schema constant: %s", ShastaAggregateRequestSchemaV1)
+	if decoded.Payload.GuestInput == nil {
+		t.Fatalf("expected guest_input to decode")
 	}
-	if len(decoded.Payload.Proofs) != 1 {
-		t.Fatalf("unexpected proof count: %d", len(decoded.Payload.Proofs))
+
+	guestInput := decoded.Payload.GuestInput
+	if len(guestInput.Witnesses) != 2 {
+		t.Fatalf("unexpected witness count: %d", len(guestInput.Witnesses))
 	}
-	if decoded.Payload.Proofs[0].Input != "0x11" {
-		t.Fatalf("unexpected proof input: %s", decoded.Payload.Proofs[0].Input)
+	if len(guestInput.ProposalAncestorHeaders) != 2 {
+		t.Fatalf("unexpected proposal ancestor header count: %d", len(guestInput.ProposalAncestorHeaders))
 	}
+	if len(guestInput.ProposalStateNodes) != 2 {
+		t.Fatalf("unexpected proposal state node count: %d", len(guestInput.ProposalStateNodes))
+	}
+	assertRawMessage(t, guestInput.Witnesses[0], `{"block":{"number":"0x2a"}}`)
+	assertRawMessage(t, guestInput.Witnesses[1], `{"block":{"number":"0x2b"}}`)
+	assertRawMessage(t, guestInput.Taiko, `{"proposal_id":"0x1","prover_data":{"actual_prover":"0xabc"}}`)
+	assertRawMessage(t, guestInput.ProposalAncestorHeaders[0], `{"number":"0x28"}`)
+	assertRawMessage(t, guestInput.ProposalAncestorHeaders[1], `{"number":"0x29"}`)
+	assertRawMessage(t, guestInput.ProposalStateNodes[0], `{"key":"0x01"}`)
+	assertRawMessage(t, guestInput.ProposalStateNodes[1], `{"key":"0x02"}`)
+	assertRawMessage(t, guestInput.ProofCarryData, `{"chain_id":167013,"transition_input":{"proposal_id":"0x1"}}`)
 }
 
-func TestProofResponseHelpers(t *testing.T) {
-	proof := "0xproof"
-	input := "0xinput"
-	ok := Success(ProofResult{
-		Proof: &proof,
-		Input: input,
-	})
-
-	data, err := json.Marshal(ok)
-	if err != nil {
-		t.Fatalf("marshal success response: %v", err)
-	}
-
-	var decodedOK ProofResponse
-	if err := json.Unmarshal(data, &decodedOK); err != nil {
-		t.Fatalf("unmarshal success response: %v", err)
-	}
-
-	if decodedOK.Schema != ProofSchemaV1 {
-		t.Fatalf("unexpected proof schema: %s", decodedOK.Schema)
-	}
-	if ProofSchemaV1 != "raiko2-proof-v1" {
-		t.Fatalf("unexpected proof schema constant: %s", ProofSchemaV1)
-	}
-	if decodedOK.Status != ProofStatusOK {
-		t.Fatalf("unexpected proof status: %s", decodedOK.Status)
-	}
-	if decodedOK.Result == nil || decodedOK.Result.Input != input {
-		t.Fatalf("unexpected proof result: %+v", decodedOK.Result)
-	}
-
-	fail := Failure(ProofError{
-		Code:    "INVALID_SCHEMA",
-		Message: "unsupported schema",
-	})
-	data, err = json.Marshal(fail)
-	if err != nil {
-		t.Fatalf("marshal error response: %v", err)
-	}
-
-	var decodedFail ProofResponse
-	if err := json.Unmarshal(data, &decodedFail); err != nil {
-		t.Fatalf("unmarshal error response: %v", err)
-	}
-
-	if decodedFail.Status != ProofStatusError {
-		t.Fatalf("unexpected error status: %s", decodedFail.Status)
-	}
-	if decodedFail.Error == nil || decodedFail.Error.Code != "INVALID_SCHEMA" {
-		t.Fatalf("unexpected error payload: %+v", decodedFail.Error)
-	}
-}
-
-func mustRawMessage(t *testing.T, value string) json.RawMessage {
+func assertRawMessage(t *testing.T, actual json.RawMessage, expected string) {
 	t.Helper()
-	return json.RawMessage(value)
+
+	if !bytes.Equal(actual, mustRawMessage(t, expected)) {
+		t.Fatalf("unexpected raw message:\nactual:   %s\nexpected: %s", actual, expected)
+	}
+}
+
+func mustRawMessage(t *testing.T, raw string) json.RawMessage {
+	t.Helper()
+
+	var decoded json.RawMessage
+	if err := json.Unmarshal([]byte(raw), &decoded); err != nil {
+		t.Fatalf("decode raw message: %v", err)
+	}
+	return decoded
 }

@@ -26,11 +26,11 @@ func TestSharedShastaFixtureMetadata(t *testing.T) {
 	if req.Schema != protocol.ShastaRequestSchemaV1 {
 		t.Fatalf("unexpected schema: %s", req.Schema)
 	}
-	if req.Payload.ChainID != 167000 {
-		t.Fatalf("unexpected chain id: %d", req.Payload.ChainID)
+	if validated.Request.Payload.ChainID != 167000 {
+		t.Fatalf("unexpected chain id: %d", validated.Request.Payload.ChainID)
 	}
-	if len(req.Payload.Blocks) != 192 {
-		t.Fatalf("unexpected block count: %d", len(req.Payload.Blocks))
+	if len(validated.Request.Payload.Blocks) != 192 {
+		t.Fatalf("unexpected block count: %d", len(validated.Request.Payload.Blocks))
 	}
 	if validated.Carry.ChainID != 167000 {
 		t.Fatalf("unexpected carry chain id: %d", validated.Carry.ChainID)
@@ -65,8 +65,12 @@ func TestSharedShastaFixtureReplaysStateless(t *testing.T) {
 
 func TestSharedShastaFixtureFirstAnchorTransactionDecodes(t *testing.T) {
 	req := loadSharedShastaFixture(t)
+	validated, err := ValidateRequest(req)
+	if err != nil {
+		t.Fatalf("validate request: %v", err)
+	}
 
-	block, _, err := decodeReplayBlock(req.Payload.Blocks[0])
+	block, _, err := decodeReplayBlock(validated.Request.Payload.Blocks[0])
 	if err != nil {
 		t.Fatalf("decode replay block: %v", err)
 	}
@@ -74,7 +78,7 @@ func TestSharedShastaFixtureFirstAnchorTransactionDecodes(t *testing.T) {
 		t.Fatalf("unexpected transaction count: %d", len(block.Transactions()))
 	}
 
-	cfg, err := chainConfigFor(req.Payload.ChainID)
+	cfg, err := chainConfigFor(validated.Request.Payload.ChainID)
 	if err != nil {
 		t.Fatalf("chain config: %v", err)
 	}

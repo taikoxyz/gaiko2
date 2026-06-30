@@ -25,6 +25,14 @@ type ShastaPayload struct {
 	GuestInput     *ShastaGuestInput `json:"guest_input,omitempty"`
 }
 
+type ShastaGuestInput struct {
+	Witnesses               []json.RawMessage `json:"witnesses"`
+	Taiko                   json.RawMessage   `json:"taiko"`
+	ProposalAncestorHeaders []json.RawMessage `json:"proposal_ancestor_headers"`
+	ProposalStateNodes      []json.RawMessage `json:"proposal_state_nodes"`
+	ProofCarryData          json.RawMessage   `json:"proof_carry_data"`
+}
+
 type ShastaAggregatePayload struct {
 	Proofs []AggregateProof `json:"proofs"`
 }

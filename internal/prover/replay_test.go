@@ -231,10 +231,7 @@ func TestReplayServiceReturnsSignedProofResult(t *testing.T) {
 			}`, blockHash)),
 		},
 	}
-	validated, err := ValidateRequest(req)
-	if err != nil {
-		t.Fatalf("validate request: %v", err)
-	}
+	validated := validatedReplayRequestForTest(t, req)
 
 	service := NewReplayService(fakeRunner{
 		stateRoot:   common.HexToHash("0x2222222222222222222222222222222222222222222222222222222222222222"),
@@ -342,10 +339,7 @@ func TestReplayServiceAllowsEmptyRequestsHash(t *testing.T) {
 			}`, parentHash, blockHash)),
 		},
 	}
-	validated, err := ValidateRequest(req)
-	if err != nil {
-		t.Fatalf("validate request: %v", err)
-	}
+	validated := validatedReplayRequestForTest(t, req)
 
 	service := NewReplayService(fakeRunner{
 		stateRoot:   common.HexToHash("0x2222222222222222222222222222222222222222222222222222222222222222"),
@@ -459,16 +453,13 @@ func TestReplayServiceRejectsWitnessParentMismatch(t *testing.T) {
 			}`, blockHash)),
 		},
 	}
-	validated, err := ValidateRequest(req)
-	if err != nil {
-		t.Fatalf("validate request: %v", err)
-	}
+	validated := validatedReplayRequestForTest(t, req)
 
 	service := NewReplayService(fakeRunner{
 		stateRoot:   common.HexToHash("0x2222222222222222222222222222222222222222222222222222222222222222"),
 		receiptRoot: common.HexToHash("0x3333333333333333333333333333333333333333333333333333333333333333"),
 	})
-	_, err = service.Prove(context.Background(), validated)
+	_, err := service.Prove(context.Background(), validated)
 	if err == nil || err.Error() == "" {
 		t.Fatalf("expected witness parent mismatch error, got %v", err)
 	}
@@ -553,16 +544,13 @@ func TestReplayServiceRejectsTransactionRootMismatch(t *testing.T) {
 			}`, parentHash, blockHash)),
 		},
 	}
-	validated, err := ValidateRequest(req)
-	if err != nil {
-		t.Fatalf("validate request: %v", err)
-	}
+	validated := validatedReplayRequestForTest(t, req)
 
 	service := NewReplayService(fakeRunner{
 		stateRoot:   common.HexToHash("0x2222222222222222222222222222222222222222222222222222222222222222"),
 		receiptRoot: common.HexToHash("0x3333333333333333333333333333333333333333333333333333333333333333"),
 	})
-	_, err = service.Prove(context.Background(), validated)
+	_, err := service.Prove(context.Background(), validated)
 	if err == nil || err.Error() == "" {
 		t.Fatalf("expected transaction root mismatch error, got %v", err)
 	}
@@ -602,6 +590,30 @@ func TestChainConfigForMasayaEnablesBlobForkAtUnzen(t *testing.T) {
 	}
 	if !cfg.IsUnzen(unzenTime) {
 		t.Fatalf("expected unzen activation at unzen")
+	}
+}
+
+func validatedReplayRequestForTest(t *testing.T, req protocol.ShastaRequest) *ValidatedRequest {
+	t.Helper()
+
+	carry, err := decodeCarry(req.Payload.ProofCarryData)
+	if err != nil {
+		t.Fatalf("decode carry: %v", err)
+	}
+
+	blocks := make([]BlockView, 0, len(req.Payload.Blocks))
+	for index, block := range req.Payload.Blocks {
+		view, err := decodeBlock(block)
+		if err != nil {
+			t.Fatalf("decode replay block %d: %v", index, err)
+		}
+		blocks = append(blocks, view)
+	}
+
+	return &ValidatedRequest{
+		Request: req,
+		Carry:   carry,
+		Blocks:  blocks,
 	}
 }
 

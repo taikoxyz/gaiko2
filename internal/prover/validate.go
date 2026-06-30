@@ -37,72 +37,15 @@ type rawCheckpoint struct {
 func ValidateRequest(req protocol.ShastaRequest) (*ValidatedRequest, error) {
 	switch req.Schema {
 	case protocol.ShastaRequestSchemaV1:
-		return validateReplayRequest(req)
-	case protocol.ShastaRequestSchemaV2:
 		return validateGuestInputRequest(req)
 	default:
 		return nil, fmt.Errorf("unsupported schema %q", req.Schema)
 	}
 }
 
-func validateReplayRequest(req protocol.ShastaRequest) (*ValidatedRequest, error) {
-	if len(req.Payload.Blocks) == 0 {
-		return nil, fmt.Errorf("request must include at least one replay block")
-	}
-
-	carry, err := decodeCarry(req.Payload.ProofCarryData)
-	if err != nil {
-		return nil, err
-	}
-	if carry.ChainID != req.Payload.ChainID {
-		return nil, fmt.Errorf(
-			"chain_id mismatch: payload=%d proof_carry_data=%d",
-			req.Payload.ChainID,
-			carry.ChainID,
-		)
-	}
-
-	blocks := make([]BlockView, 0, len(req.Payload.Blocks))
-	for index, block := range req.Payload.Blocks {
-		view, err := decodeBlock(block)
-		if err != nil {
-			return nil, fmt.Errorf("decode replay block %d: %w", index, err)
-		}
-		if index > 0 {
-			prev := blocks[index-1]
-			if view.Number != prev.Number+1 {
-				return nil, fmt.Errorf(
-					"block numbers must be contiguous: got %d after %d",
-					view.Number,
-					prev.Number,
-				)
-			}
-			if view.ParentHash != prev.Hash {
-				return nil, fmt.Errorf(
-					"block parent hash mismatch at index %d: got %s expected %s",
-					index,
-					view.ParentHash.Hex(),
-					prev.Hash.Hex(),
-				)
-			}
-		}
-		blocks = append(blocks, view)
-	}
-
-	if err := validateBlockViews(blocks, carry); err != nil {
-		return nil, err
-	}
-
-	return &ValidatedRequest{
-		Request: req,
-		Carry:   carry,
-		Blocks:  blocks,
-	}, nil
-}
-
 func validateGuestInputRequest(req protocol.ShastaRequest) (*ValidatedRequest, error) {
 	if req.Payload.GuestInput == nil {
-		return nil, fmt.Errorf("v2 request must include guest_input")
+		return nil, fmt.Errorf("request must include guest_input")
 	}
 
 	view, err := DecodeGuestInput(*req.Payload.GuestInput)
