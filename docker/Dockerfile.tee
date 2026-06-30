@@ -11,9 +11,21 @@ COPY scripts/write-attestation-metadata.sh ./scripts/write-attestation-metadata.
 RUN ego-go build -o gaiko2-ego ./cmd/gaiko2
 
 COPY ego/enclave.json .
-COPY docker/enclave-key.pem private.pem
+ARG ENCLAVE_KEY_PUBLIC_SHA256
 
-RUN mkdir -p /opt/gaiko2/etc && \
+RUN --mount=type=secret,id=enclave_key,target=/run/secrets/enclave-key.pem \
+    set -e; \
+    trap 'rm -f private.pem' EXIT; \
+    if [ -s /run/secrets/enclave-key.pem ]; then \
+        if [ -n "${ENCLAVE_KEY_PUBLIC_SHA256}" ]; then \
+            test "$(openssl rsa -in /run/secrets/enclave-key.pem -pubout 2>/dev/null | openssl sha256 | awk '{print $2}')" = "${ENCLAVE_KEY_PUBLIC_SHA256}"; \
+        fi; \
+        cp /run/secrets/enclave-key.pem private.pem; \
+    else \
+        test -z "${ENCLAVE_KEY_PUBLIC_SHA256}"; \
+        openssl genrsa -3 -out private.pem 3072; \
+    fi; \
+    mkdir -p /opt/gaiko2/etc && \
     chmod +x ./scripts/write-attestation-metadata.sh && \
     ego sign && \
     ./scripts/write-attestation-metadata.sh gaiko2-ego enclave.json /opt/gaiko2/etc/attestation.json && \

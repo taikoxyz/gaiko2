@@ -6,9 +6,15 @@ with `taiko-geth` and producing a TEE proof envelope.
 ## Baseline
 
 - `GET /healthz` returns a minimal liveness response.
-- `/prove/shasta` is implemented with request `schema: "raiko2-shasta-request-v1"`.
+- `/prove/shasta` accepts the soundness-oriented request
+  `schema: "raiko2-shasta-request-v2"` with `payload.guest_input`.
+- `/prove/shasta` still accepts replay-only `schema: "raiko2-shasta-request-v1"`
+  as a compatibility path; it is not soundness-equivalent to v2.
 - `gaiko2` can decode `raiko2`-adapted execution packets and replay them with
   native `taiko-geth` stateless execution.
+- For v2 requests, `gaiko2` validates `GuestInput` carry data, raw blob hashes,
+  Shasta source manifests, canonical transaction lists, and block metadata before
+  replaying the witness blocks.
 - `gaiko2` validates replay continuity against `proof_carry_data`.
 - proof output now supports two signer modes behind one envelope:
   - `native`: sign the final input hash with the fixed GoldenTouch key.
@@ -30,6 +36,13 @@ The main replay regression uses:
 
 - [testdata/shasta_request_taiko_mainnet_proposal_2222_l2_5412225_5412416.json](testdata/shasta_request_taiko_mainnet_proposal_2222_l2_5412225_5412416.json)
 - [internal/prover/replay_fixture_test.go](internal/prover/replay_fixture_test.go)
+
+The v2 GuestInput soundness checks are covered by:
+
+- [internal/prover/guestinput_carry_test.go](internal/prover/guestinput_carry_test.go)
+- [internal/prover/blob_validate_test.go](internal/prover/blob_validate_test.go)
+- [internal/prover/manifest_validate_test.go](internal/prover/manifest_validate_test.go)
+- [internal/prover/validate_test.go](internal/prover/validate_test.go)
 
 ## Server
 
@@ -104,11 +117,30 @@ cd gaiko2
 ./scripts/build-image.sh tee latest
 ```
 
+By default, `tee` image builds generate a disposable local enclave signing key
+inside the Docker build and delete it after `ego sign`. That is useful for local
+compile and smoke testing, but the resulting `signer_id` is not stable.
+
+For release builds, fetch the MRSIGNER key from GCP Secret Manager and pass it to
+Docker through a BuildKit secret:
+
+```bash
+GCP_ENCLAVE_KEY_SECRET=gaiko2-enclave-key \
+GCP_ENCLAVE_KEY_VERSION=latest \
+GCP_ENCLAVE_KEY_PROJECT=<gcp-project> \
+ENCLAVE_KEY_PUBLIC_SHA256=<expected-public-key-sha256> \
+  ./scripts/build-image.sh tee v1.0.0
+```
+
+`ENCLAVE_KEY_PUBLIC_SHA256` is optional, but should be set for release builds so
+the Docker signing step rejects an unexpected MRSIGNER key. Do not place a PEM
+file under `docker/`; local key files are ignored by the Docker build context.
+
 Or directly:
 
 ```bash
-docker build -f docker/Dockerfile.native -t gaiko2-native:latest .
-docker build -f docker/Dockerfile.tee -t gaiko2-tee:latest .
+docker buildx build . -f docker/Dockerfile.native --load --platform linux/amd64 -t gaiko2-native:latest
+DOCKER_BUILDKIT=1 docker buildx build . -f docker/Dockerfile.tee --load --platform linux/amd64 -t gaiko2-tee:latest
 ```
 
 Or use Compose profiles:
