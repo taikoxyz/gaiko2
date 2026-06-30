@@ -40,6 +40,18 @@ func TestValidateManifestBindingAcceptsBlobBackedSource(t *testing.T) {
 	}
 }
 
+func TestValidateManifestBindingDerivesMixHashFromParentDifficulty(t *testing.T) {
+	fixture := newManifestBindingFixture(t)
+	fixture.parentHeader.Difficulty = big.NewInt(0x11b626)
+	fixture.parentHeader.MixDigest = common.HexToHash(testHash("99"))
+	fixture.blockMixDigest = manifestMixHash(common.BigToHash(fixture.parentHeader.Difficulty), 42)
+	view := fixture.view(t)
+
+	if err := ValidateGuestInputManifestBinding(view); err != nil {
+		t.Fatalf("validate manifest binding: %v", err)
+	}
+}
+
 func TestValidateManifestBindingRejectsMismatches(t *testing.T) {
 	cases := []struct {
 		name    string
@@ -216,6 +228,7 @@ func newManifestBindingFixture(t *testing.T) *manifestBindingFixture {
 	chainID := uint64(167013)
 	proposalID := uint64(12345)
 	parentMixDigest := common.HexToHash(testHash("91"))
+	parentDifficulty := big.NewInt(0x11b626)
 	parentHeader := &types.Header{
 		ParentHash:  common.HexToHash(testHash("90")),
 		UncleHash:   types.EmptyUncleHash,
@@ -224,7 +237,7 @@ func newManifestBindingFixture(t *testing.T) *manifestBindingFixture {
 		TxHash:      types.EmptyTxsHash,
 		ReceiptHash: types.EmptyReceiptsHash,
 		Bloom:       types.Bloom{},
-		Difficulty:  big.NewInt(0),
+		Difficulty:  parentDifficulty,
 		Number:      big.NewInt(41),
 		GasLimit:    31_000_000,
 		GasUsed:     0,
@@ -254,7 +267,7 @@ func newManifestBindingFixture(t *testing.T) *manifestBindingFixture {
 		blockCoinbase:      common.HexToAddress(testAddress("22")),
 		blockGasLimit:      manifestGasLimit + 1_000_000,
 		blockExtra:         manifestExtraData(42, proposalID),
-		blockMixDigest:     manifestMixHash(parentMixDigest, blockNumber),
+		blockMixDigest:     manifestMixHash(common.BigToHash(parentDifficulty), blockNumber),
 		blockBaseFee:       1_000,
 		l2Contract:         common.HexToAddress(testAddress("44")),
 		anchorTo:           common.HexToAddress(testAddress("44")),

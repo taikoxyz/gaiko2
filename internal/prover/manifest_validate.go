@@ -591,7 +591,7 @@ func validateManifestBlockBinding(
 	if !bytes.Equal(header.Extra, expectedExtra) {
 		return fmt.Errorf("extra_data mismatch")
 	}
-	expectedMixHash := shastaManifestMixHash(parentHeader.MixDigest, header.Number.Uint64())
+	expectedMixHash := shastaManifestMixHash(shastaManifestParentDifficulty(parentHeader), header.Number.Uint64())
 	if header.MixDigest != expectedMixHash {
 		return fmt.Errorf("mix_hash mismatch: expected %s got %s", expectedMixHash.Hex(), header.MixDigest.Hex())
 	}
@@ -701,6 +701,13 @@ func shastaManifestMixHash(parentMixHash common.Hash, blockNumber uint64) common
 	data = append(data, parentMixHash.Bytes()...)
 	data = append(data, blockNumberWord[:]...)
 	return crypto.Keccak256Hash(data)
+}
+
+func shastaManifestParentDifficulty(parentHeader *types.Header) common.Hash {
+	if parentHeader == nil || parentHeader.Difficulty == nil {
+		return common.Hash{}
+	}
+	return common.BigToHash(parentHeader.Difficulty)
 }
 
 func decodeGuestInputLastAnchorBlockNumber(raw json.RawMessage) (uint64, error) {
