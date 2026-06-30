@@ -64,6 +64,33 @@ If you want a local image:
 ./scripts/build-image.sh tee latest
 ```
 
+Without any key environment variables, the local `tee` build generates a
+disposable enclave signing key inside the Docker build, uses it for `ego sign`,
+and removes it before the layer completes. This path is only for local compile
+and smoke testing because every build gets a different `signer_id`.
+
+For a release image with a stable MRSIGNER key, store the PEM in GCP Secret
+Manager and let the build script pass it through a BuildKit secret:
+
+```bash
+GCP_ENCLAVE_KEY_SECRET=gaiko2-enclave-key \
+GCP_ENCLAVE_KEY_VERSION=latest \
+GCP_ENCLAVE_KEY_PROJECT=<gcp-project> \
+ENCLAVE_KEY_PUBLIC_SHA256=<expected-public-key-sha256> \
+  ./scripts/build-image.sh tee v1.0.0
+```
+
+`ENCLAVE_KEY_PUBLIC_SHA256` is optional for development, but recommended for
+release builds. It is the SHA-256 of the PEM public key output, for example:
+
+```bash
+openssl rsa -in enclave-key.pem -pubout 2>/dev/null | openssl sha256 | awk '{print $2}'
+```
+
+Do not commit or copy the signing PEM into `docker/`; the Dockerfile no longer
+reads `docker/enclave-key.pem`, and `.dockerignore` excludes that path to keep
+local keys out of the build context.
+
 If you want a published image, note the tag and pass it to `init` with
 `--tee-image`, for example:
 

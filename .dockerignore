@@ -7,5 +7,6 @@ tmp
 coverage.out
 docs
 testdata
+docker/enclave-key.pem
 *.log
 *.out

@@ -117,11 +117,30 @@ cd gaiko2
 ./scripts/build-image.sh tee latest
 ```
 
+By default, `tee` image builds generate a disposable local enclave signing key
+inside the Docker build and delete it after `ego sign`. That is useful for local
+compile and smoke testing, but the resulting `signer_id` is not stable.
+
+For release builds, fetch the MRSIGNER key from GCP Secret Manager and pass it to
+Docker through a BuildKit secret:
+
+```bash
+GCP_ENCLAVE_KEY_SECRET=gaiko2-enclave-key \
+GCP_ENCLAVE_KEY_VERSION=latest \
+GCP_ENCLAVE_KEY_PROJECT=<gcp-project> \
+ENCLAVE_KEY_PUBLIC_SHA256=<expected-public-key-sha256> \
+  ./scripts/build-image.sh tee v1.0.0
+```
+
+`ENCLAVE_KEY_PUBLIC_SHA256` is optional, but should be set for release builds so
+the Docker signing step rejects an unexpected MRSIGNER key. Do not place a PEM
+file under `docker/`; local key files are ignored by the Docker build context.
+
 Or directly:
 
 ```bash
-docker build -f docker/Dockerfile.native -t gaiko2-native:latest .
-docker build -f docker/Dockerfile.tee -t gaiko2-tee:latest .
+docker buildx build . -f docker/Dockerfile.native --load --platform linux/amd64 -t gaiko2-native:latest
+DOCKER_BUILDKIT=1 docker buildx build . -f docker/Dockerfile.tee --load --platform linux/amd64 -t gaiko2-tee:latest
 ```
 
 Or use Compose profiles:
