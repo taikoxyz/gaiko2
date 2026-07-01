@@ -9,7 +9,7 @@ import (
 	"github.com/taikoxyz/gaiko2/internal/protocol"
 )
 
-func TestValidateRequestAcceptsContiguousPacket(t *testing.T) {
+func TestValidateRequestRejectsLegacyReplayPacketV1(t *testing.T) {
 	parentHash := testHash("11")
 	lastStateRoot := testHash("bb")
 	firstBlock := sampleReplayBlock(t, "0x2a", parentHash, testHash("aa"), testHash("de"))
@@ -32,26 +32,16 @@ func TestValidateRequestAcceptsContiguousPacket(t *testing.T) {
 		},
 	}
 
-	validated, err := ValidateRequest(req)
-	if err != nil {
-		t.Fatalf("validate request: %v", err)
-	}
-
-	if validated.Carry.ChainID != 167013 {
-		t.Fatalf("unexpected carry chain id: %d", validated.Carry.ChainID)
-	}
-	if len(validated.Blocks) != 2 {
-		t.Fatalf("unexpected block count: %d", len(validated.Blocks))
-	}
-	if validated.Blocks[1].Number != 43 {
-		t.Fatalf("unexpected last block number: %d", validated.Blocks[1].Number)
+	_, err := ValidateRequest(req)
+	if err == nil || err.Error() != "request must include guest_input" {
+		t.Fatalf("unexpected error: %v", err)
 	}
 }
 
-func TestValidateRequestAcceptsGuestInputV2(t *testing.T) {
+func TestValidateRequestAcceptsGuestInputV1(t *testing.T) {
 	input := newManifestBindingFixture(t).view(t).Raw
 	req := protocol.ShastaRequest{
-		Schema: protocol.ShastaRequestSchemaV2,
+		Schema: protocol.ShastaRequestSchemaV1,
 		Payload: protocol.ShastaPayload{
 			GuestInput: &input,
 		},
@@ -59,10 +49,10 @@ func TestValidateRequestAcceptsGuestInputV2(t *testing.T) {
 
 	validated, err := ValidateRequest(req)
 	if err != nil {
-		t.Fatalf("validate v2 guest input request: %v", err)
+		t.Fatalf("validate v1 guest input request: %v", err)
 	}
 
-	if validated.Request.Schema != protocol.ShastaRequestSchemaV2 {
+	if validated.Request.Schema != protocol.ShastaRequestSchemaV1 {
 		t.Fatalf("unexpected schema: %s", validated.Request.Schema)
 	}
 	if validated.Request.Payload.ChainID != 167013 {
@@ -76,12 +66,12 @@ func TestValidateRequestAcceptsGuestInputV2(t *testing.T) {
 	}
 }
 
-func TestValidateRequestV2RejectsManifestMismatch(t *testing.T) {
+func TestValidateRequestV1RejectsManifestMismatch(t *testing.T) {
 	fixture := newManifestBindingFixture(t)
 	fixture.blockTimestamp++
 	input := fixture.view(t).Raw
 	req := protocol.ShastaRequest{
-		Schema: protocol.ShastaRequestSchemaV2,
+		Schema: protocol.ShastaRequestSchemaV1,
 		Payload: protocol.ShastaPayload{
 			GuestInput: &input,
 		},
@@ -95,112 +85,105 @@ func TestValidateRequestV2RejectsManifestMismatch(t *testing.T) {
 
 func TestValidateRequestRejectsUnsupportedSchema(t *testing.T) {
 	_, err := ValidateRequest(protocol.ShastaRequest{
-		Schema: "v2",
+		Schema: "raiko2-shasta-request-v2",
 	})
-	if err == nil || err.Error() != `unsupported schema "v2"` {
+	if err == nil || err.Error() != `unsupported schema "raiko2-shasta-request-v2"` {
 		t.Fatalf("unexpected error: %v", err)
 	}
 }
 
-func TestValidateRequestRejectsNonContiguousBlocks(t *testing.T) {
+func TestValidateBlockViewsRejectsNonContiguousBlocks(t *testing.T) {
 	parentHash := testHash("11")
-	req := protocol.ShastaRequest{
-		Schema: protocol.ShastaRequestSchemaV1,
-		Payload: protocol.ShastaPayload{
-			ChainID: 1,
-			Blocks: []protocol.ReplayBlock{
-				{Block: sampleReplayBlock(t, "0x2a", parentHash, testHash("aa"), testHash("bb"))},
-				{Block: sampleReplayBlock(t, "0x2c", testHash("22"), testHash("cc"), testHash("dd"))},
-			},
-			ProofCarryData: sampleCarryData(t, 1, parentHash, "0x2c", testHash("44"), testHash("cc")),
+	err := validateReplayBlocksForTest(t,
+		[]json.RawMessage{
+			sampleReplayBlock(t, "0x2a", parentHash, testHash("aa"), testHash("bb")),
+			sampleReplayBlock(t, "0x2c", testHash("22"), testHash("cc"), testHash("dd")),
 		},
-	}
-
-	_, err := ValidateRequest(req)
+		sampleCarryData(t, 1, parentHash, "0x2c", testHash("44"), testHash("cc")),
+	)
 	if err == nil || err.Error() != "block numbers must be contiguous: got 44 after 42" {
 		t.Fatalf("unexpected error: %v", err)
 	}
 }
 
-func TestValidateRequestRejectsBrokenParentHashPropagation(t *testing.T) {
+func TestValidateBlockViewsRejectsBrokenParentHashPropagation(t *testing.T) {
 	firstBlock := sampleReplayBlock(t, "0x2a", testHash("11"), testHash("aa"), testHash("de"))
-	req := protocol.ShastaRequest{
-		Schema: protocol.ShastaRequestSchemaV1,
-		Payload: protocol.ShastaPayload{
-			ChainID: 167013,
-			Blocks: []protocol.ReplayBlock{
-				{Block: firstBlock},
-				{Block: sampleReplayBlock(t, "0x2b", testHash("22"), testHash("bb"), testHash("be"))},
-			},
-			ProofCarryData: sampleCarryData(t, 167013, testHash("11"), "0x2b", testHash("33"), testHash("bb")),
+	err := validateReplayBlocksForTest(t,
+		[]json.RawMessage{
+			firstBlock,
+			sampleReplayBlock(t, "0x2b", testHash("22"), testHash("bb"), testHash("be")),
 		},
-	}
-
-	_, err := ValidateRequest(req)
+		sampleCarryData(t, 167013, testHash("11"), "0x2b", testHash("33"), testHash("bb")),
+	)
 	if err == nil || !strings.Contains(err.Error(), "parent hash") {
 		t.Fatalf("unexpected error: %v", err)
 	}
 }
 
-func TestValidateRequestRejectsCheckpointBlockHashMismatch(t *testing.T) {
+func TestValidateBlockViewsRejectsCheckpointBlockHashMismatch(t *testing.T) {
 	firstBlock := sampleReplayBlock(t, "0x2a", testHash("11"), testHash("aa"), testHash("de"))
 	firstHash := replayBlockHash(t, firstBlock)
 	secondBlock := sampleReplayBlock(t, "0x2b", firstHash, testHash("bb"), testHash("be"))
-	req := protocol.ShastaRequest{
-		Schema: protocol.ShastaRequestSchemaV1,
-		Payload: protocol.ShastaPayload{
-			ChainID: 167013,
-			Blocks: []protocol.ReplayBlock{
-				{Block: firstBlock},
-				{Block: secondBlock},
-			},
-			ProofCarryData: sampleCarryData(t, 167013, testHash("11"), "0x2b", testHash("44"), testHash("bb")),
+	err := validateReplayBlocksForTest(t,
+		[]json.RawMessage{
+			firstBlock,
+			secondBlock,
 		},
-	}
-
-	_, err := ValidateRequest(req)
+		sampleCarryData(t, 167013, testHash("11"), "0x2b", testHash("44"), testHash("bb")),
+	)
 	if err == nil || !strings.Contains(err.Error(), "checkpoint block hash mismatch") {
 		t.Fatalf("unexpected error: %v", err)
 	}
 }
 
-func TestValidateRequestRejectsMalformedVerifier(t *testing.T) {
+func TestDecodeCarryRejectsMalformedVerifier(t *testing.T) {
 	block := sampleReplayBlock(t, "0x2a", testHash("11"), testHash("aa"), testHash("de"))
 	blockHash := replayBlockHash(t, block)
-	req := protocol.ShastaRequest{
-		Schema: protocol.ShastaRequestSchemaV1,
-		Payload: protocol.ShastaPayload{
-			ChainID: 167013,
-			Blocks: []protocol.ReplayBlock{
-				{Block: block},
+	_, err := decodeCarry(mustRawMessage(t, fmt.Sprintf(`{
+		"chain_id": 167013,
+		"verifier": "0x1234",
+		"transition_input": {
+			"proposal_id": 42,
+			"proposal_hash": %q,
+			"parent_proposal_hash": %q,
+			"parent_block_hash": %q,
+			"actual_prover": %q,
+			"transition": {
+				"proposer": %q,
+				"timestamp": 123
 			},
-			ProofCarryData: mustRawMessage(t, fmt.Sprintf(`{
-				"chain_id": 167013,
-				"verifier": "0x1234",
-				"transition_input": {
-					"proposal_id": 42,
-					"proposal_hash": %q,
-					"parent_proposal_hash": %q,
-					"parent_block_hash": %q,
-					"actual_prover": %q,
-					"transition": {
-						"proposer": %q,
-						"timestamp": 123
-					},
-					"checkpoint": {
-						"blockNumber": "0x2a",
-						"blockHash": %q,
-						"stateRoot": %q
-					}
-				}
-			}`, testHash("aa"), testHash("bb"), testHash("11"), testAddress("77"), testAddress("22"), blockHash, testHash("aa"))),
-		},
-	}
-
-	_, err := ValidateRequest(req)
+			"checkpoint": {
+				"blockNumber": "0x2a",
+				"blockHash": %q,
+				"stateRoot": %q
+			}
+		}
+	}`, testHash("aa"), testHash("bb"), testHash("11"), testAddress("77"), testAddress("22"), blockHash, testHash("aa"))))
 	if err == nil || !strings.Contains(err.Error(), "verifier") {
 		t.Fatalf("unexpected error: %v", err)
 	}
+}
+
+func validateReplayBlocksForTest(
+	t *testing.T,
+	rawBlocks []json.RawMessage,
+	rawCarry json.RawMessage,
+) error {
+	t.Helper()
+
+	carry, err := decodeCarry(rawCarry)
+	if err != nil {
+		t.Fatalf("decode carry: %v", err)
+	}
+	blocks := make([]BlockView, 0, len(rawBlocks))
+	for _, raw := range rawBlocks {
+		block, err := decodeBlock(protocol.ReplayBlock{Block: raw})
+		if err != nil {
+			t.Fatalf("decode replay block: %v", err)
+		}
+		blocks = append(blocks, block)
+	}
+	return validateBlockViews(blocks, carry)
 }
 
 func TestDecodeHeaderPreservesSlotNumber(t *testing.T) {

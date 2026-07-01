@@ -43,7 +43,6 @@ func NewServer(service prover.Service) http.Handler {
 			writeError(w, http.StatusBadRequest, "INVALID_JSON", err.Error())
 			return
 		}
-
 		validated, err := prover.ValidateRequest(req)
 		if err != nil {
 			log.Printf(

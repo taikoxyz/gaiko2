@@ -7,12 +7,12 @@ with `taiko-geth` and producing a TEE proof envelope.
 
 - `GET /healthz` returns a minimal liveness response.
 - `/prove/shasta` accepts the soundness-oriented request
-  `schema: "raiko2-shasta-request-v2"` with `payload.guest_input`.
-- `/prove/shasta` still accepts replay-only `schema: "raiko2-shasta-request-v1"`
-  as a compatibility path; it is not soundness-equivalent to v2.
+  `schema: "raiko2-shasta-request-v1"` with `payload.guest_input`.
+- `/prove/shasta` rejects replay-only v1 packets without `payload.guest_input`.
+  The legacy replay-packet wire shape is not a soundness-equivalent server API.
 - `gaiko2` can decode `raiko2`-adapted execution packets and replay them with
   native `taiko-geth` stateless execution.
-- For v2 requests, `gaiko2` validates `GuestInput` carry data, raw blob hashes,
+- For proposal requests, `gaiko2` validates `GuestInput` carry data, raw blob hashes,
   Shasta source manifests, canonical transaction lists, and block metadata before
   replaying the witness blocks.
 - `gaiko2` validates replay continuity against `proof_carry_data`.
@@ -37,7 +37,7 @@ The main replay regression uses:
 - [testdata/shasta_request_taiko_mainnet_proposal_2222_l2_5412225_5412416.json](testdata/shasta_request_taiko_mainnet_proposal_2222_l2_5412225_5412416.json)
 - [internal/prover/replay_fixture_test.go](internal/prover/replay_fixture_test.go)
 
-The v2 GuestInput soundness checks are covered by:
+The GuestInput soundness checks are covered by:
 
 - [internal/prover/guestinput_carry_test.go](internal/prover/guestinput_carry_test.go)
 - [internal/prover/blob_validate_test.go](internal/prover/blob_validate_test.go)

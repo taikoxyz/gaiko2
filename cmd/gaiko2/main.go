@@ -19,6 +19,9 @@ import (
 var (
 	listenFn           = net.Listen
 	serveFn            = http.Serve
+	newReplayServiceFn = func(cfg prover.ServiceConfig, runner prover.Runner) (prover.Service, error) {
+		return prover.NewConfiguredReplayService(cfg, runner)
+	}
 	bootstrapCommandFn = runBootstrapCommand
 	checkCommandFn     = runCheckCommand
 	metadataCommandFn  = runMetadataCommand
@@ -72,7 +75,7 @@ func run(args []string, stdout io.Writer) error {
 			cfg.SecretDir,
 			addr,
 		)
-		service, err := prover.NewConfiguredReplayService(cfg, nil)
+		service, err := newReplayServiceFn(cfg, nil)
 		if err != nil {
 			return err
 		}

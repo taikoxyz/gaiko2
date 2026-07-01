@@ -30,6 +30,21 @@ func (f fakeService) Aggregate(context.Context, *prover.ValidatedAggregateReques
 	return f.result, f.err
 }
 
+type recordingService struct {
+	proveCalls int
+	result     protocol.ProofResult
+	err        error
+}
+
+func (f *recordingService) Prove(context.Context, *prover.ValidatedRequest) (protocol.ProofResult, error) {
+	f.proveCalls++
+	return f.result, f.err
+}
+
+func (f *recordingService) Aggregate(context.Context, *prover.ValidatedAggregateRequest) (protocol.ProofResult, error) {
+	return f.result, f.err
+}
+
 func TestNewServerReturnsValidationErrorEnvelope(t *testing.T) {
 	server := NewServer(fakeService{})
 	req := httptest.NewRequest(http.MethodPost, "/prove/shasta", bytes.NewBufferString(`{
@@ -56,10 +71,10 @@ func TestNewServerReturnsValidationErrorEnvelope(t *testing.T) {
 	}
 }
 
-func TestNewServerRejectsV2WithoutGuestInput(t *testing.T) {
+func TestNewServerRejectsV1WithoutGuestInput(t *testing.T) {
 	server := NewServer(fakeService{})
 	req := httptest.NewRequest(http.MethodPost, "/prove/shasta", bytes.NewBufferString(`{
-		"schema":"raiko2-shasta-request-v2",
+		"schema":"raiko2-shasta-request-v1",
 		"payload":{}
 	}`))
 	recorder := httptest.NewRecorder()
@@ -113,6 +128,62 @@ func TestNewServerReturnsSuccessEnvelope(t *testing.T) {
 	}
 	if resp.Result == nil || resp.Result.Input != "0xinput" {
 		t.Fatalf("unexpected result payload: %+v", resp.Result)
+	}
+}
+
+func TestNewServerRejectsUnsupportedProposalV2(t *testing.T) {
+	service := &recordingService{}
+	server := NewServer(service)
+	req := httptest.NewRequest(http.MethodPost, "/prove/shasta", bytes.NewBufferString(`{
+		"schema":"raiko2-shasta-request-v2",
+		"payload":{}
+	}`))
+	recorder := httptest.NewRecorder()
+
+	server.ServeHTTP(recorder, req)
+
+	if recorder.Code != http.StatusBadRequest {
+		t.Fatalf("unexpected status: %d", recorder.Code)
+	}
+	if service.proveCalls != 0 {
+		t.Fatalf("legacy v1 request reached prover service %d time(s)", service.proveCalls)
+	}
+
+	var resp protocol.ProofResponse
+	if err := json.Unmarshal(recorder.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+	if resp.Error == nil || resp.Error.Code != "INVALID_REQUEST" {
+		t.Fatalf("unexpected error payload: %+v", resp.Error)
+	}
+	if resp.Error == nil ||
+		!strings.Contains(resp.Error.Message, `unsupported schema "raiko2-shasta-request-v2"`) {
+		t.Fatalf("expected unsupported v2 schema, got %+v", resp.Error)
+	}
+}
+
+func TestNewServerKeepsAggregateV1EnabledWhenProposalV1Disabled(t *testing.T) {
+	server := NewServer(fakeService{})
+	req := httptest.NewRequest(http.MethodPost, "/prove/shasta-aggregate", bytes.NewBufferString(`{
+		"schema":"raiko2-shasta-aggregate-request-v1",
+		"payload":{"proofs":[]}
+	}`))
+	recorder := httptest.NewRecorder()
+
+	server.ServeHTTP(recorder, req)
+
+	if recorder.Code != http.StatusBadRequest {
+		t.Fatalf("unexpected status: %d", recorder.Code)
+	}
+	var resp protocol.ProofResponse
+	if err := json.Unmarshal(recorder.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+	if resp.Error == nil || !strings.Contains(resp.Error.Message, "aggregate proof") {
+		t.Fatalf("expected aggregate validator response, got %+v", resp.Error)
+	}
+	if resp.Error != nil && strings.Contains(resp.Error.Message, "disabled") {
+		t.Fatalf("aggregate v1 should not be affected by proposal v1 policy: %+v", resp.Error)
 	}
 }
 

@@ -375,18 +375,18 @@ func resolveGuestInputVerifier(view *GuestInputView) (common.Address, error) {
 		if err != nil {
 			return common.Address{}, fmt.Errorf("unmarshal witness.chain_spec.verifier_address_forks.%s: %w", forkName, err)
 		}
-		rawVerifier, ok := lookupField(fork, "SgxGeth", "SGXGETH", "sgxgeth", "sgx_geth")
+		rawVerifier, ok := lookupField(fork, "Sgx", "SGX", "sgx", "SgxGeth", "SGXGETH", "sgxgeth", "sgx_geth")
 		if !ok {
 			continue
 		}
 		verifier, err := parseAddressJSON(rawVerifier)
 		if err != nil {
-			return common.Address{}, fmt.Errorf("parse witness.chain_spec.verifier_address_forks.%s.SgxGeth: %w", forkName, err)
+			return common.Address{}, fmt.Errorf("parse witness.chain_spec.verifier_address_forks.%s.Sgx: %w", forkName, err)
 		}
 		return verifier, nil
 	}
 
-	return common.Address{}, fmt.Errorf("missing verifier for active SgxGeth in witness.chain_spec.verifier_address_forks")
+	return common.Address{}, fmt.Errorf("missing verifier for active Sgx in witness.chain_spec.verifier_address_forks")
 }
 
 func decodeFirstWitnessHeader(view *GuestInputView) (*typesHeaderView, error) {
