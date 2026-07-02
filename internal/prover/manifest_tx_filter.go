@@ -160,6 +160,9 @@ func commitFilteredManifestTransactions(
 	if config.IsPrague(block.Number(), block.Time()) || config.IsVerkle(block.Number(), block.Time()) {
 		core.ProcessParentBlockHash(block.ParentHash(), evm)
 	}
+	if err := manifestWitnessStateError(statedb, "system calls"); err != nil {
+		return nil, err
+	}
 
 	committed := make(types.Transactions, 0, len(candidates))
 	for index, tx := range candidates {
@@ -195,6 +198,9 @@ func commitFilteredManifestTransactions(
 		}
 
 		_, err = core.ApplyTransactionWithEVM(msg, gp, statedb, blockNumber, blockHash, blockContext.Time, txCopy, evm)
+		if stateErr := manifestWitnessStateError(statedb, manifestTxLabel(index, txCopy)); stateErr != nil {
+			return nil, stateErr
+		}
 		if err != nil {
 			if isUnzen && errors.Is(err, vm.ErrZkGasLimitExceeded) && index > 0 {
 				cfg.ZkGasMeter.ResetTransaction()
@@ -218,6 +224,17 @@ func commitFilteredManifestTransactions(
 	}
 
 	return committed, nil
+}
+
+func manifestWitnessStateError(statedb *state.StateDB, phase string) error {
+	if err := statedb.Error(); err != nil {
+		return fmt.Errorf("witness state error during manifest transaction filtering (%s): %w", phase, err)
+	}
+	return nil
+}
+
+func manifestTxLabel(index int, tx *types.Transaction) string {
+	return fmt.Sprintf("tx %d [%s]", index, tx.Hash().Hex())
 }
 
 func cloneTransaction(tx *types.Transaction) (*types.Transaction, error) {

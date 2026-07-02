@@ -72,6 +72,26 @@ func TestValidateManifestBindingAcceptsTxListFilteredTransactions(t *testing.T) 
 	}
 }
 
+func TestValidateManifestBindingRejectsPartialWitnessStateDuringFiltering(t *testing.T) {
+	fixture := newManifestBindingFixture(t)
+	signer := manifestTestTxSigner(t)
+	witnessStateNodes, witnessStateRoot := witnessStateNodesWithBalances(t, map[common.Address]*big.Int{
+		signer:                                 new(big.Int).SetUint64(1_000_000_000_000_000_000),
+		common.HexToAddress(testAddress("66")): new(big.Int).SetUint64(1),
+	})
+	fixture.parentHeader.Root = witnessStateRoot
+	fixture.witnessStateNodes = []string{rootWitnessNode(t, witnessStateNodes, witnessStateRoot)}
+	view := fixture.view(t)
+
+	err := ValidateGuestInputManifestBinding(view)
+	if err == nil {
+		t.Fatalf("expected partial witness state error")
+	}
+	if !strings.Contains(err.Error(), "witness state") {
+		t.Fatalf("expected witness state error, got %v", err)
+	}
+}
+
 func TestValidateManifestBindingRejectsMismatches(t *testing.T) {
 	cases := []struct {
 		name    string
@@ -239,7 +259,7 @@ type manifestBindingFixture struct {
 	omitAnchorTx        bool
 	omitUserTx          bool
 	addManifestBlock    bool
-	witnessStateNodes []string
+	witnessStateNodes   []string
 	blobBacked          bool
 	corruptBlobEncoding bool
 	isForcedInclusion   bool
@@ -294,9 +314,9 @@ func newManifestBindingFixture(t *testing.T) *manifestBindingFixture {
 		blockMixDigest:     manifestMixHash(common.BigToHash(parentDifficulty), blockNumber),
 		blockBaseFee:       1_000,
 		l2Contract:         common.HexToAddress(testAddress("44")),
-		anchorTo:            common.HexToAddress(testAddress("44")),
-		anchorBlockNumber:   900,
-		witnessStateNodes:   witnessStateNodes,
+		anchorTo:           common.HexToAddress(testAddress("44")),
+		anchorBlockNumber:  900,
+		witnessStateNodes:  witnessStateNodes,
 	}
 }
 
@@ -867,6 +887,11 @@ func manifestTestTxSigner(t *testing.T) common.Address {
 
 func witnessStateNodesWithBalance(t *testing.T, address common.Address, balance *big.Int) ([]string, common.Hash) {
 	t.Helper()
+	return witnessStateNodesWithBalances(t, map[common.Address]*big.Int{address: balance})
+}
+
+func witnessStateNodesWithBalances(t *testing.T, balances map[common.Address]*big.Int) ([]string, common.Hash) {
+	t.Helper()
 
 	memdb := rawdb.NewMemoryDatabase()
 	tdb := triedb.NewDatabase(memdb, triedb.HashDefaults)
@@ -874,7 +899,9 @@ func witnessStateNodesWithBalance(t *testing.T, address common.Address, balance 
 	if err != nil {
 		t.Fatalf("open test state: %v", err)
 	}
-	statedb.AddBalance(address, uint256.MustFromBig(balance), 0)
+	for address, balance := range balances {
+		statedb.AddBalance(address, uint256.MustFromBig(balance), 0)
+	}
 
 	root, err := statedb.Commit(0, false, false)
 	if err != nil {
@@ -902,4 +929,19 @@ func witnessStateNodesWithBalance(t *testing.T, address common.Address, balance 
 		nodes = append(nodes, "0x"+hex.EncodeToString(blob))
 	}
 	return nodes, root
+}
+
+func rootWitnessNode(t *testing.T, nodes []string, root common.Hash) string {
+	t.Helper()
+	for _, node := range nodes {
+		blob, err := hex.DecodeString(strings.TrimPrefix(node, "0x"))
+		if err != nil {
+			t.Fatalf("decode witness node: %v", err)
+		}
+		if crypto.Keccak256Hash(blob) == root {
+			return node
+		}
+	}
+	t.Fatalf("root witness node %s not found", root.Hex())
+	return ""
 }
