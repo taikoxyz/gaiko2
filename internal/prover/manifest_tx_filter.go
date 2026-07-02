@@ -197,6 +197,8 @@ func commitFilteredManifestTransactions(
 			evm.ResetZkGasErr()
 		}
 
+		stateSnapshot := statedb.Snapshot()
+		gasSnapshot := *gp
 		_, err = core.ApplyTransactionWithEVM(msg, gp, statedb, blockNumber, blockHash, blockContext.Time, txCopy, evm)
 		if stateErr := manifestWitnessStateError(statedb, manifestTxLabel(index, txCopy)); stateErr != nil {
 			return nil, stateErr
@@ -205,17 +207,20 @@ func commitFilteredManifestTransactions(
 			if isUnzen && errors.Is(err, vm.ErrZkGasLimitExceeded) && index > 0 {
 				cfg.ZkGasMeter.ResetTransaction()
 				evm.ResetZkGasErr()
+				revertManifestCandidate(statedb, gp, stateSnapshot, gasSnapshot)
 				break
 			}
 			if index == 0 {
 				return nil, fmt.Errorf("anchor transaction failed: %w", err)
 			}
+			revertManifestCandidate(statedb, gp, stateSnapshot, gasSnapshot)
 			continue
 		}
 
 		if isUnzen {
 			if commitErr := cfg.ZkGasMeter.CommitTransaction(); commitErr != nil && index > 0 {
 				cfg.ZkGasMeter.ResetTransaction()
+				revertManifestCandidate(statedb, gp, stateSnapshot, gasSnapshot)
 				break
 			}
 		}
@@ -224,6 +229,11 @@ func commitFilteredManifestTransactions(
 	}
 
 	return committed, nil
+}
+
+func revertManifestCandidate(statedb *state.StateDB, gp *core.GasPool, stateSnapshot int, gasSnapshot core.GasPool) {
+	statedb.RevertToSnapshot(stateSnapshot)
+	*gp = gasSnapshot
 }
 
 func manifestWitnessStateError(statedb *state.StateDB, phase string) error {

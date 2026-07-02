@@ -72,6 +72,24 @@ func TestValidateManifestBindingAcceptsTxListFilteredTransactions(t *testing.T) 
 	}
 }
 
+func TestValidateManifestBindingRevertsFilteredApplyErrorState(t *testing.T) {
+	fixture := newManifestBindingFixture(t)
+	lowGas := manifestUserTxJSONWithGas(t, fixture.chainID, 0, testAddress("31"), 21_000)
+	included := manifestUserTxJSON(t, fixture.chainID, 0, testAddress("32"))
+	fixture.manifestUserTxJSONs = []json.RawMessage{lowGas, included}
+	fixture.blockUserTxJSONs = []json.RawMessage{included}
+
+	signer := manifestTestTxSigner(t)
+	witnessStateNodes, witnessStateRoot := witnessStateNodesWithBalance(t, signer, new(big.Int).SetUint64(48_000_000))
+	fixture.parentHeader.Root = witnessStateRoot
+	fixture.witnessStateNodes = witnessStateNodes
+
+	view := fixture.view(t)
+	if err := ValidateGuestInputManifestBinding(view); err != nil {
+		t.Fatalf("validate manifest binding with reverted filtered transaction: %v", err)
+	}
+}
+
 func TestValidateManifestBindingRejectsPartialWitnessStateDuringFiltering(t *testing.T) {
 	fixture := newManifestBindingFixture(t)
 	signer := manifestTestTxSigner(t)
@@ -648,6 +666,11 @@ func encodeTestManifestPayload(t *testing.T, manifest testDerivationSourceManife
 
 func manifestUserTxJSON(t *testing.T, chainID uint64, nonce uint64, to string) json.RawMessage {
 	t.Helper()
+	return manifestUserTxJSONWithGas(t, chainID, nonce, to, 24_000)
+}
+
+func manifestUserTxJSONWithGas(t *testing.T, chainID uint64, nonce uint64, to string, gas uint64) json.RawMessage {
+	t.Helper()
 	key, err := crypto.HexToECDSA(manifestTestTxPrivateKeyHex)
 	if err != nil {
 		t.Fatalf("parse test tx key: %v", err)
@@ -658,7 +681,7 @@ func manifestUserTxJSON(t *testing.T, chainID uint64, nonce uint64, to string) j
 		Nonce:     nonce,
 		GasTipCap: big.NewInt(1),
 		GasFeeCap: big.NewInt(2_000),
-		Gas:       24_000,
+		Gas:       gas,
 		To:        &toAddress,
 		Value:     big.NewInt(0),
 		Data:      []byte{0x12, 0x34},
@@ -676,14 +699,14 @@ func manifestUserTxJSON(t *testing.T, chainID uint64, nonce uint64, to string) j
 				"nonce": "0x%x",
 				"max_priority_fee_per_gas": "0x1",
 				"max_fee_per_gas": "0x7d0",
-				"gas": "0x5dc0",
+				"gas": "0x%x",
 				"to": %q,
 				"value": "0x0",
 				"input": "0x1234",
 				"access_list": []
 			}
 		}
-	}`, r.Text(16), s.Text(16), v.Text(16), chainID, nonce, to))
+	}`, r.Text(16), s.Text(16), v.Text(16), chainID, nonce, gas, to))
 }
 
 func decodeTestTransaction(t *testing.T, raw json.RawMessage) *types.Transaction {
