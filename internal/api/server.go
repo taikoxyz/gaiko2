@@ -45,12 +45,12 @@ func NewServer(service prover.Service) http.Handler {
 		}
 		validated, err := prover.ValidateRequestWithContext(r.Context(), req)
 		if err != nil {
-			metadata := proveShastaRequestLogMetadata(req)
+			metadata := proveShastaRequestLogMetadata(req, err)
 			log.Printf(
 				"failed prove/shasta request schema=%s chain_id=%d block_count=%d code=%s message=%q",
-				metadata.schema,
-				metadata.chainID,
-				metadata.blockCount,
+				metadata.Schema,
+				metadata.ChainID,
+				metadata.BlockCount,
 				"INVALID_REQUEST",
 				err.Error(),
 			)
@@ -155,30 +155,16 @@ func aggregateProposalIDSummary(proofs []prover.AggregateProofView) string {
 	return fmt.Sprintf("%d..%d", first, last)
 }
 
-type proveShastaLogMetadata struct {
-	schema     string
-	chainID    uint64
-	blockCount int
-}
-
-func proveShastaRequestLogMetadata(req protocol.ShastaRequest) proveShastaLogMetadata {
-	metadata := proveShastaLogMetadata{
-		schema:     req.Schema,
-		chainID:    req.Payload.ChainID,
-		blockCount: len(req.Payload.Blocks),
+func proveShastaRequestLogMetadata(req protocol.ShastaRequest, err error) prover.RequestLogMetadata {
+	metadata := prover.RequestLogMetadata{
+		Schema:     req.Schema,
+		ChainID:    req.Payload.ChainID,
+		BlockCount: len(req.Payload.Blocks),
 	}
-	if req.Payload.GuestInput == nil {
-		return metadata
+	var validationErr *prover.ValidationError
+	if errors.As(err, &validationErr) {
+		return validationErr.Metadata
 	}
-
-	view, err := prover.DecodeGuestInput(*req.Payload.GuestInput)
-	if err != nil {
-		return metadata
-	}
-	if view.GuestInputChainID != 0 {
-		metadata.chainID = view.GuestInputChainID
-	}
-	metadata.blockCount = len(view.Witnesses)
 	return metadata
 }
 

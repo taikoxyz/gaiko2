@@ -44,33 +44,32 @@ func ValidateRequestWithContext(ctx context.Context, req protocol.ShastaRequest)
 	case protocol.ShastaRequestSchemaV1:
 		return validateGuestInputRequest(ctx, req)
 	default:
-		return nil, fmt.Errorf("unsupported schema %q", req.Schema)
+		return nil, validationError(fmt.Errorf("unsupported schema %q", req.Schema), requestLogMetadata(req))
 	}
 }
 
 func validateGuestInputRequest(ctx context.Context, req protocol.ShastaRequest) (*ValidatedRequest, error) {
-	if err := ctx.Err(); err != nil {
-		return nil, err
-	}
+	metadata := requestLogMetadata(req)
 	if req.Payload.GuestInput == nil {
-		return nil, fmt.Errorf("request must include guest_input")
+		return nil, validationError(fmt.Errorf("request must include guest_input"), metadata)
 	}
 
 	view, err := DecodeGuestInput(*req.Payload.GuestInput)
 	if err != nil {
-		return nil, err
+		return nil, validationError(err, metadata)
 	}
+	metadata = requestLogMetadataFromView(req, view)
 	if err := ValidateGuestInputCarry(view); err != nil {
-		return nil, err
+		return nil, validationError(err, metadata)
 	}
 	if err := ValidateGuestInputBlobSources(view); err != nil {
-		return nil, err
+		return nil, validationError(err, metadata)
 	}
 	if err := ValidateGuestInputManifestBindingWithContext(ctx, view); err != nil {
-		return nil, err
+		return nil, validationError(err, metadata)
 	}
 	if err := validateBlockViews(view.Blocks, view.Carry); err != nil {
-		return nil, err
+		return nil, validationError(err, metadata)
 	}
 
 	blocks := make([]protocol.ReplayBlock, len(view.Witnesses))
@@ -88,10 +87,35 @@ func validateGuestInputRequest(ctx context.Context, req protocol.ShastaRequest) 
 	}
 
 	return &ValidatedRequest{
-		Request: normalized,
-		Carry:   view.Carry,
-		Blocks:  view.Blocks,
+		Request:     normalized,
+		Carry:       view.Carry,
+		Blocks:      view.Blocks,
+		LogMetadata: metadata,
 	}, nil
+}
+
+func requestLogMetadata(req protocol.ShastaRequest) RequestLogMetadata {
+	return RequestLogMetadata{
+		Schema:     req.Schema,
+		ChainID:    req.Payload.ChainID,
+		BlockCount: len(req.Payload.Blocks),
+	}
+}
+
+func requestLogMetadataFromView(req protocol.ShastaRequest, view *GuestInputView) RequestLogMetadata {
+	metadata := requestLogMetadata(req)
+	if view.GuestInputChainID != 0 {
+		metadata.ChainID = view.GuestInputChainID
+	}
+	metadata.BlockCount = len(view.Witnesses)
+	return metadata
+}
+
+func validationError(err error, metadata RequestLogMetadata) error {
+	if err == nil {
+		return nil
+	}
+	return &ValidationError{Err: err, Metadata: metadata}
 }
 
 func validateBlockViews(blocks []BlockView, carry CarryView) error {
