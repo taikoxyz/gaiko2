@@ -65,6 +65,23 @@ func TestTEEProofSignerOmitsQuoteDuringProving(t *testing.T) {
 	}
 }
 
+func TestTEEProofSignerAcceptsConfiguredInstanceIDZero(t *testing.T) {
+	privateKey, err := crypto.GenerateKey()
+	if err != nil {
+		t.Fatalf("generate key: %v", err)
+	}
+	signer := NewTEEProofSigner(privateKey, 0)
+	hash := crypto.Keccak256Hash([]byte("gaiko2-tee-zero-instance"))
+
+	output, err := signer.SignHash(hash)
+	if err != nil {
+		t.Fatalf("sign hash: %v", err)
+	}
+	if output.InstanceID != 0 {
+		t.Fatalf("unexpected instance id: %x", output.InstanceID)
+	}
+}
+
 func TestNewConfiguredReplayServiceRejectsUnknownMode(t *testing.T) {
 	_, err := NewConfiguredReplayService(ServiceConfig{
 		Mode: "wat",
