@@ -223,7 +223,7 @@ func TestValidateManifestBindingRejectsPartialWitnessStateDuringFiltering(t *tes
 }
 
 func TestDecodeManifestPayloadRejectsOversizedDecodedPayload(t *testing.T) {
-	payload := encodeCompressedManifestBytes(t, bytes.Repeat([]byte{0}, 16*1024*1024+1))
+	payload := encodeCompressedManifestBytes(t, bytes.Repeat([]byte{0}, shastaMaxManifestDecodedPayload+1))
 
 	_, err := decodeManifestPayload(payload, 0, 1)
 	if err == nil {
@@ -236,7 +236,7 @@ func TestDecodeManifestPayloadRejectsOversizedDecodedPayload(t *testing.T) {
 
 func TestDecodeManifestPayloadRejectsTooManyTransactionsInBlock(t *testing.T) {
 	tx := decodeTestTransaction(t, manifestUserTxJSON(t, 167001, 0, testAddress("31")))
-	txs := make(types.Transactions, int(shastaMaxBlockGasLimit/21_000)+1)
+	txs := make(types.Transactions, int(shastaMaxManifestTxsPerBlock)+1)
 	for index := range txs {
 		txs[index] = tx
 	}
