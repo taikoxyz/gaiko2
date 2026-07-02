@@ -18,12 +18,13 @@ const (
 )
 
 type ServiceConfig struct {
-	Mode       string
-	TeeType    string
-	SecretDir  string
-	ConfigDir  string
-	Fork       string
-	InstanceID uint32
+	Mode                 string
+	TeeType              string
+	SecretDir            string
+	ConfigDir            string
+	Fork                 string
+	InstanceID           uint32
+	InstanceIDConfigured bool
 }
 
 type ProofSigner interface {
@@ -50,8 +51,9 @@ type NativeProofSigner struct {
 }
 
 type TEEProofSigner struct {
-	privateKey *ecdsa.PrivateKey
-	instanceID uint32
+	privateKey           *ecdsa.PrivateKey
+	instanceID           uint32
+	instanceIDConfigured bool
 }
 
 var newTEEProviderFn = tee.NewProvider
@@ -62,8 +64,17 @@ func NewNativeProofSigner(instanceID uint32) *NativeProofSigner {
 
 func NewTEEProofSigner(privateKey *ecdsa.PrivateKey, instanceID uint32) *TEEProofSigner {
 	return &TEEProofSigner{
-		privateKey: privateKey,
-		instanceID: instanceID,
+		privateKey:           privateKey,
+		instanceID:           instanceID,
+		instanceIDConfigured: true,
+	}
+}
+
+func newTEEProofSignerFromConfig(privateKey *ecdsa.PrivateKey, cfg ServiceConfig) *TEEProofSigner {
+	return &TEEProofSigner{
+		privateKey:           privateKey,
+		instanceID:           cfg.InstanceID,
+		instanceIDConfigured: cfg.InstanceIDConfigured,
 	}
 }
 
@@ -89,7 +100,7 @@ func NewConfiguredReplayService(cfg ServiceConfig, runner Runner) (ReplayService
 		if err != nil {
 			return ReplayService{}, fmt.Errorf("tee bootstrap required: %w", err)
 		}
-		signer = NewTEEProofSigner(privateKey, cfg.InstanceID)
+		signer = newTEEProofSignerFromConfig(privateKey, cfg)
 	default:
 		return ReplayService{}, fmt.Errorf("unsupported proving mode %q", cfg.Mode)
 	}
@@ -114,14 +125,14 @@ func (s *NativeProofSigner) Identity() (SignerIdentity, error) {
 }
 
 func (s *TEEProofSigner) SignHash(hash common.Hash) (SignerOutput, error) {
-	if s.instanceID == 0 {
+	if !s.instanceIDConfigured {
 		return SignerOutput{}, fmt.Errorf("tee proving requires %s or a registered %s mapping", envInstanceID, envFork)
 	}
 	return buildSignerOutput(hash, s.privateKey, nil, s.instanceID)
 }
 
 func (s *TEEProofSigner) Identity() (SignerIdentity, error) {
-	if s.instanceID == 0 {
+	if !s.instanceIDConfigured {
 		return SignerIdentity{}, fmt.Errorf("tee proving requires %s or a registered %s mapping", envInstanceID, envFork)
 	}
 	return signerIdentity(s.privateKey, s.instanceID), nil

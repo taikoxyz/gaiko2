@@ -42,6 +42,7 @@ func ServiceConfigFromEnv() (ServiceConfig, error) {
 			return ServiceConfig{}, fmt.Errorf("registered instance id for fork %q overflows uint32", cfg.Fork)
 		}
 		cfg.InstanceID = uint32(resolved)
+		cfg.InstanceIDConfigured = true
 		return cfg, nil
 	}
 	if instanceID == "" {
@@ -53,6 +54,7 @@ func ServiceConfigFromEnv() (ServiceConfig, error) {
 		return ServiceConfig{}, fmt.Errorf("parse %s: %w", envInstanceID, err)
 	}
 	cfg.InstanceID = uint32(parsed)
+	cfg.InstanceIDConfigured = true
 	return cfg, nil
 }
 
