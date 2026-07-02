@@ -14,6 +14,7 @@ import (
 	"github.com/ethereum/go-ethereum/consensus/misc"
 	"github.com/ethereum/go-ethereum/core/types"
 	"github.com/ethereum/go-ethereum/crypto"
+	"github.com/ethereum/go-ethereum/params"
 	"github.com/ethereum/go-ethereum/rlp"
 )
 
@@ -30,6 +31,8 @@ const (
 	shastaDerivationSourceMaxBlocks  = 192
 	shastaUnzenDerivationSourceLimit = 768
 	shastaMaxManifestOffset          = shastaBytesPerBlob - 64
+	shastaMaxManifestDecodedPayload  = 16 * 1024 * 1024
+	shastaMaxManifestTxsPerBlock     = shastaMaxBlockGasLimit / params.TxGas
 )
 
 type shastaSourceManifest struct {
@@ -337,9 +340,12 @@ func decodeManifestPayload(payload []byte, offset uint64, maxBlocks int) (shasta
 		return shastaSourceManifest{}, fmt.Errorf("open manifest zlib stream: %w", err)
 	}
 	defer zr.Close()
-	decoded, err := io.ReadAll(zr)
+	decoded, err := io.ReadAll(io.LimitReader(zr, shastaMaxManifestDecodedPayload+1))
 	if err != nil {
 		return shastaSourceManifest{}, fmt.Errorf("decompress manifest payload: %w", err)
+	}
+	if len(decoded) > shastaMaxManifestDecodedPayload {
+		return shastaSourceManifest{}, fmt.Errorf("decompressed manifest payload exceeds %d bytes", shastaMaxManifestDecodedPayload)
 	}
 
 	var manifest shastaSourceManifest
@@ -348,6 +354,16 @@ func decodeManifestPayload(payload []byte, offset uint64, maxBlocks int) (shasta
 	}
 	if len(manifest.Blocks) > maxBlocks {
 		return shastaSourceManifest{}, fmt.Errorf("manifest block count %d exceeds max %d", len(manifest.Blocks), maxBlocks)
+	}
+	for index, block := range manifest.Blocks {
+		if len(block.Transactions) > int(shastaMaxManifestTxsPerBlock) {
+			return shastaSourceManifest{}, fmt.Errorf(
+				"manifest block %d transaction count %d exceeds max %d",
+				index,
+				len(block.Transactions),
+				shastaMaxManifestTxsPerBlock,
+			)
+		}
 	}
 	return manifest, nil
 }

@@ -128,6 +128,9 @@ func commitFilteredManifestTransactions(
 	if len(candidates) == 0 {
 		return nil, fmt.Errorf("missing anchor transaction")
 	}
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
 
 	var (
 		header      = block.Header()
@@ -166,6 +169,9 @@ func commitFilteredManifestTransactions(
 
 	committed := make(types.Transactions, 0, len(candidates))
 	for index, tx := range candidates {
+		if err := ctx.Err(); err != nil {
+			return nil, err
+		}
 		txCopy := tx
 		if index == 0 {
 			var err error
