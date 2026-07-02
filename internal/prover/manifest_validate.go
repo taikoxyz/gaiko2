@@ -557,25 +557,8 @@ func validateManifestBlockBinding(
 	if len(txs) == 0 {
 		return fmt.Errorf("missing anchor transaction")
 	}
-	if len(txs) != len(expected.Transactions)+1 {
-		return fmt.Errorf(
-			"transaction count mismatch: expected %d got %d",
-			len(expected.Transactions)+1,
-			len(txs),
-		)
-	}
-	for index, expectedTx := range expected.Transactions {
-		expectedBytes, err := expectedTx.MarshalBinary()
-		if err != nil {
-			return fmt.Errorf("encode expected transaction %d: %w", index+1, err)
-		}
-		actualBytes, err := txs[index+1].MarshalBinary()
-		if err != nil {
-			return fmt.Errorf("encode actual transaction %d: %w", index+1, err)
-		}
-		if !bytes.Equal(expectedBytes, actualBytes) {
-			return fmt.Errorf("transaction %d mismatch", index+1)
-		}
+	if err := validateManifestTransactionList(view, header, txs, expected.Transactions); err != nil {
+		return err
 	}
 
 	if header.Time != expected.Timestamp {
@@ -597,6 +580,71 @@ func validateManifestBlockBinding(
 	}
 
 	return validateManifestAnchorTransaction(view, txs[0], header, expected)
+}
+
+func validateManifestTransactionList(
+	view *GuestInputView,
+	header *types.Header,
+	txs types.Transactions,
+	expected types.Transactions,
+) error {
+	config, err := chainConfigFor(view.GuestInputChainID)
+	if err != nil {
+		return err
+	}
+	signer := types.MakeSigner(config, header.Number, header.Time)
+
+	actual := txs[1:]
+	for index, tx := range actual {
+		if tx.Type() == types.BlobTxType {
+			return fmt.Errorf("transaction %d type not allowed", index+1)
+		}
+		if _, err := types.Sender(signer, tx); err != nil {
+			return fmt.Errorf("transaction %d signer recovery failed: %w", index+1, err)
+		}
+	}
+
+	// Tx-list replay can drop non-anchor transactions in two phases:
+	// first while decoding unrecoverable/disallowed transactions, then during execution for
+	// state-dependent recoverable failures such as nonce, balance, block gas, or zk gas limits.
+	// Manifest binding therefore enforces that every executed non-anchor transaction is still
+	// present in the source manifest, in order, without requiring all manifest transactions to
+	// survive execution.
+	actualIndex := 0
+	for _, expectedTx := range expected {
+		if actualIndex == len(actual) {
+			break
+		}
+		if expectedTx.Type() == types.BlobTxType {
+			continue
+		}
+		if _, err := types.Sender(signer, expectedTx); err != nil {
+			continue
+		}
+		equal, err := transactionsEqual(expectedTx, actual[actualIndex])
+		if err != nil {
+			return err
+		}
+		if equal {
+			actualIndex++
+		}
+	}
+	if actualIndex != len(actual) {
+		return fmt.Errorf("transaction %d mismatch", actualIndex+1)
+	}
+	return nil
+}
+
+func transactionsEqual(expected *types.Transaction, actual *types.Transaction) (bool, error) {
+	expectedBytes, err := expected.MarshalBinary()
+	if err != nil {
+		return false, fmt.Errorf("encode expected transaction: %w", err)
+	}
+	actualBytes, err := actual.MarshalBinary()
+	if err != nil {
+		return false, fmt.Errorf("encode actual transaction: %w", err)
+	}
+	return bytes.Equal(expectedBytes, actualBytes), nil
 }
 
 func validateManifestAnchorTransaction(

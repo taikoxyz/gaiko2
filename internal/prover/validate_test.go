@@ -39,7 +39,8 @@ func TestValidateRequestRejectsLegacyReplayPacketV1(t *testing.T) {
 }
 
 func TestValidateRequestAcceptsGuestInputV1(t *testing.T) {
-	input := newManifestBindingFixture(t).view(t).Raw
+	fixture := newManifestBindingFixture(t)
+	input := fixture.view(t).Raw
 	req := protocol.ShastaRequest{
 		Schema: protocol.ShastaRequestSchemaV1,
 		Payload: protocol.ShastaPayload{
@@ -55,7 +56,7 @@ func TestValidateRequestAcceptsGuestInputV1(t *testing.T) {
 	if validated.Request.Schema != protocol.ShastaRequestSchemaV1 {
 		t.Fatalf("unexpected schema: %s", validated.Request.Schema)
 	}
-	if validated.Request.Payload.ChainID != 167013 {
+	if validated.Request.Payload.ChainID != fixture.chainID {
 		t.Fatalf("unexpected chain id: %d", validated.Request.Payload.ChainID)
 	}
 	if len(validated.Request.Payload.Blocks) != 1 {

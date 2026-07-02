@@ -52,6 +52,19 @@ func TestValidateManifestBindingDerivesMixHashFromParentDifficulty(t *testing.T)
 	}
 }
 
+func TestValidateManifestBindingAcceptsTxListFilteredTransactions(t *testing.T) {
+	fixture := newManifestBindingFixture(t)
+	filteredByExecution := manifestUserTxJSON(t, fixture.chainID, 7, testAddress("31"))
+	included := manifestUserTxJSON(t, fixture.chainID, 8, testAddress("32"))
+	fixture.manifestUserTxJSONs = []json.RawMessage{filteredByExecution, included}
+	fixture.blockUserTxJSONs = []json.RawMessage{included}
+	view := fixture.view(t)
+
+	if err := ValidateGuestInputManifestBinding(view); err != nil {
+		t.Fatalf("validate manifest binding with tx-list filtered transaction: %v", err)
+	}
+}
+
 func TestValidateManifestBindingRejectsMismatches(t *testing.T) {
 	cases := []struct {
 		name    string
@@ -204,7 +217,9 @@ type manifestBindingFixture struct {
 	manifestCoinbase    common.Address
 	manifestGasLimit    uint64
 	manifestUserTxJSON  json.RawMessage
+	manifestUserTxJSONs []json.RawMessage
 	blockUserTxJSON     json.RawMessage
+	blockUserTxJSONs    []json.RawMessage
 	blockTimestamp      uint64
 	blockCoinbase       common.Address
 	blockGasLimit       uint64
@@ -225,7 +240,7 @@ type manifestBindingFixture struct {
 func newManifestBindingFixture(t *testing.T) *manifestBindingFixture {
 	t.Helper()
 
-	chainID := uint64(167013)
+	chainID := uint64(167001)
 	proposalID := uint64(12345)
 	parentMixDigest := common.HexToHash(testHash("91"))
 	parentDifficulty := big.NewInt(0x11b626)
@@ -407,13 +422,20 @@ func (f *manifestBindingFixture) dataSourceAndSourceJSON(t *testing.T, manifestP
 func (f *manifestBindingFixture) manifestPayload(t *testing.T) []byte {
 	t.Helper()
 
-	userTx := decodeTestTransaction(t, f.manifestUserTxJSON)
+	rawUserTxs := f.manifestUserTxJSONs
+	if rawUserTxs == nil {
+		rawUserTxs = []json.RawMessage{f.manifestUserTxJSON}
+	}
+	userTxs := make(types.Transactions, 0, len(rawUserTxs))
+	for _, rawUserTx := range rawUserTxs {
+		userTxs = append(userTxs, decodeTestTransaction(t, rawUserTx))
+	}
 	blocks := []testManifestBlock{{
 		Timestamp:         f.manifestTimestamp,
 		Coinbase:          f.manifestCoinbase,
 		AnchorBlockNumber: 900,
 		GasLimit:          f.manifestGasLimit,
-		Transactions:      types.Transactions{userTx},
+		Transactions:      userTxs,
 	}}
 	if f.addManifestBlock {
 		blocks = append(blocks, testManifestBlock{
@@ -435,7 +457,11 @@ func (f *manifestBindingFixture) blockJSON(t *testing.T) json.RawMessage {
 		txs = append(txs, f.anchorTxJSON(t))
 	}
 	if !f.omitUserTx {
-		txs = append(txs, f.blockUserTxJSON)
+		rawUserTxs := f.blockUserTxJSONs
+		if rawUserTxs == nil {
+			rawUserTxs = []json.RawMessage{f.blockUserTxJSON}
+		}
+		txs = append(txs, rawUserTxs...)
 	}
 	rawTxs, err := json.Marshal(txs)
 	if err != nil {
@@ -582,14 +608,34 @@ func encodeTestManifestPayload(t *testing.T, manifest testDerivationSourceManife
 
 func manifestUserTxJSON(t *testing.T, chainID uint64, nonce uint64, to string) json.RawMessage {
 	t.Helper()
+	key, err := crypto.HexToECDSA("0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef")
+	if err != nil {
+		t.Fatalf("parse test tx key: %v", err)
+	}
+	toAddress := common.HexToAddress(to)
+	tx := types.NewTx(&types.DynamicFeeTx{
+		ChainID:   new(big.Int).SetUint64(chainID),
+		Nonce:     nonce,
+		GasTipCap: big.NewInt(1),
+		GasFeeCap: big.NewInt(2_000),
+		Gas:       21_000,
+		To:        &toAddress,
+		Value:     big.NewInt(0),
+		Data:      []byte{0x12, 0x34},
+	})
+	signedTx, err := types.SignTx(tx, types.NewLondonSigner(new(big.Int).SetUint64(chainID)), key)
+	if err != nil {
+		t.Fatalf("sign test tx: %v", err)
+	}
+	v, r, s := signedTx.RawSignatureValues()
 	return mustRawMessage(t, fmt.Sprintf(`{
-		"signature": {"r": "0x2", "s": "0x3", "yParity": "0x0"},
+		"signature": {"r": "0x%s", "s": "0x%s", "yParity": "0x%s"},
 		"transaction": {
 			"Eip1559": {
 				"chain_id": "0x%x",
 				"nonce": "0x%x",
 				"max_priority_fee_per_gas": "0x1",
-				"max_fee_per_gas": "0x2",
+				"max_fee_per_gas": "0x7d0",
 				"gas": "0x5208",
 				"to": %q,
 				"value": "0x0",
@@ -597,7 +643,7 @@ func manifestUserTxJSON(t *testing.T, chainID uint64, nonce uint64, to string) j
 				"access_list": []
 			}
 		}
-	}`, chainID, nonce, to))
+	}`, r.Text(16), s.Text(16), v.Text(16), chainID, nonce, to))
 }
 
 func decodeTestTransaction(t *testing.T, raw json.RawMessage) *types.Transaction {
