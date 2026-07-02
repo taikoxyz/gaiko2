@@ -11,6 +11,7 @@ import (
 	"strings"
 
 	"github.com/ethereum/go-ethereum/common"
+	"github.com/ethereum/go-ethereum/consensus/misc"
 	"github.com/ethereum/go-ethereum/core/types"
 	"github.com/ethereum/go-ethereum/crypto"
 	"github.com/ethereum/go-ethereum/rlp"
@@ -45,6 +46,7 @@ type shastaManifestBlock struct {
 
 type shastaManifestParentContext struct {
 	Header            *types.Header
+	GrandparentHeader *types.Header
 	AnchorBlockNumber uint64
 }
 
@@ -68,7 +70,7 @@ func ValidateGuestInputManifestBinding(view *GuestInputView) error {
 		)
 	}
 
-	parentHeader, err := decodeLastFullProposalAncestorHeader(view.Raw.ProposalAncestorHeaders)
+	parentHeader, grandparentHeader, err := decodeProposalAncestorHeaderContext(view.Raw.ProposalAncestorHeaders)
 	if err != nil {
 		return err
 	}
@@ -78,6 +80,7 @@ func ValidateGuestInputManifestBinding(view *GuestInputView) error {
 	}
 	parent := shastaManifestParentContext{
 		Header:            parentHeader,
+		GrandparentHeader: grandparentHeader,
 		AnchorBlockNumber: lastAnchor,
 	}
 	forkTimestamp, err := decodeWitnessForkTimestamp(view, "SHASTA")
@@ -131,24 +134,27 @@ func ValidateGuestInputManifestBinding(view *GuestInputView) error {
 	}
 
 	canonicalParent := parentHeader
+	canonicalGrandparent := grandparentHeader
 	for index, expectedBlock := range derived {
 		block, witness, err := decodeReplayBlock(view.Witnesses[index].ReplayBlock)
 		if err != nil {
 			return fmt.Errorf("decode witness block %d: %w", index, err)
 		}
-		if err := validateManifestBlockBinding(view, proposal, block, witness, expectedBlock, canonicalParent); err != nil {
+		if err := validateManifestBlockBinding(view, proposal, block, witness, expectedBlock, canonicalParent, canonicalGrandparent); err != nil {
 			return fmt.Errorf("manifest block %d: %w", index, err)
 		}
+		canonicalGrandparent = canonicalParent
 		canonicalParent = block.Header()
 	}
 
 	return nil
 }
 
-func decodeLastFullProposalAncestorHeader(raws []json.RawMessage) (*types.Header, error) {
-	for index := len(raws) - 1; index >= 0; index-- {
+func decodeProposalAncestorHeaderContext(raws []json.RawMessage) (*types.Header, *types.Header, error) {
+	headers := make([]*types.Header, 0, len(raws))
+	for index, raw := range raws {
 		var decoded rawWitnessHeader
-		if err := json.Unmarshal(raws[index], &decoded); err != nil {
+		if err := json.Unmarshal(raw, &decoded); err != nil {
 			continue
 		}
 		if isEmptyOrNullRawMessage(decoded.Header) {
@@ -156,11 +162,18 @@ func decodeLastFullProposalAncestorHeader(raws []json.RawMessage) (*types.Header
 		}
 		header, err := decodeHeader(decoded.Header)
 		if err != nil {
-			return nil, fmt.Errorf("decode proposal ancestor header %d: %w", index, err)
+			return nil, nil, fmt.Errorf("decode proposal ancestor header %d: %w", index, err)
 		}
-		return header, nil
+		headers = append(headers, header)
 	}
-	return nil, fmt.Errorf("missing full proposal ancestor header")
+	if len(headers) == 0 {
+		return nil, nil, fmt.Errorf("missing full proposal ancestor header")
+	}
+	parent := headers[len(headers)-1]
+	if len(headers) == 1 {
+		return parent, nil, nil
+	}
+	return parent, headers[len(headers)-2], nil
 }
 
 func prepareSourceManifest(
@@ -552,11 +565,15 @@ func validateManifestBlockBinding(
 	witness *ReplayWitness,
 	expected shastaManifestBlock,
 	parentHeader *types.Header,
+	grandparentHeader *types.Header,
 ) error {
 	header := block.Header()
 	txs := block.Transactions()
 	if len(txs) == 0 {
 		return fmt.Errorf("missing anchor transaction")
+	}
+	if err := validateManifestHeaderBaseFee(view.GuestInputChainID, header, parentHeader, grandparentHeader); err != nil {
+		return err
 	}
 	if err := validateManifestTransactionRoot(view, block, witness, expected.Transactions); err != nil {
 		return err
@@ -581,6 +598,57 @@ func validateManifestBlockBinding(
 	}
 
 	return validateManifestAnchorTransaction(view, txs[0], header, expected)
+}
+
+func validateManifestHeaderBaseFee(
+	chainID uint64,
+	header *types.Header,
+	parentHeader *types.Header,
+	grandparentHeader *types.Header,
+) error {
+	config, err := chainConfigFor(chainID)
+	if err != nil {
+		return err
+	}
+	if !config.IsShasta(header.Time) {
+		return nil
+	}
+	if header.BaseFee == nil {
+		return fmt.Errorf("missing base fee per gas in block header")
+	}
+	if parentHeader == nil {
+		return fmt.Errorf("missing parent header for base fee validation")
+	}
+	if parentHeader.Number == nil {
+		return fmt.Errorf("parent header is missing number for base fee validation")
+	}
+	if parentHeader.Number.Sign() != 0 && parentHeader.BaseFee == nil {
+		return fmt.Errorf("missing base fee per gas in parent block header")
+	}
+
+	parentBlockTime, err := manifestParentBlockTime(parentHeader, grandparentHeader)
+	if err != nil {
+		return err
+	}
+	if err := misc.VerifyEIP4396Header(config, parentHeader, parentBlockTime, header); err != nil {
+		return err
+	}
+	return nil
+}
+
+func manifestParentBlockTime(parentHeader *types.Header, grandparentHeader *types.Header) (uint64, error) {
+	const defaultShastaParentBlockTime = 2
+	if grandparentHeader == nil {
+		return defaultShastaParentBlockTime, nil
+	}
+	if parentHeader.Time < grandparentHeader.Time {
+		return 0, fmt.Errorf(
+			"parent header timestamp is before grandparent: parent=%d grandparent=%d",
+			parentHeader.Time,
+			grandparentHeader.Time,
+		)
+	}
+	return parentHeader.Time - grandparentHeader.Time, nil
 }
 
 func validateManifestAnchorTransaction(

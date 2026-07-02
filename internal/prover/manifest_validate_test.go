@@ -26,6 +26,12 @@ import (
 
 const manifestTestTxPrivateKeyHex = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
 
+const (
+	manifestTestBaseFee       = uint64(5_000_000)
+	manifestTestUserTxFeeCap  = uint64(10_000_000)
+	manifestTestLowGasBalance = uint64(250_000_000_000)
+)
+
 func TestValidateManifestBindingAcceptsInlineCalldataSource(t *testing.T) {
 	view := newManifestBindingFixture(t).view(t)
 
@@ -80,13 +86,45 @@ func TestValidateManifestBindingRevertsFilteredApplyErrorState(t *testing.T) {
 	fixture.blockUserTxJSONs = []json.RawMessage{included}
 
 	signer := manifestTestTxSigner(t)
-	witnessStateNodes, witnessStateRoot := witnessStateNodesWithBalance(t, signer, new(big.Int).SetUint64(48_000_000))
+	witnessStateNodes, witnessStateRoot := witnessStateNodesWithBalance(t, signer, new(big.Int).SetUint64(manifestTestLowGasBalance))
 	fixture.parentHeader.Root = witnessStateRoot
 	fixture.witnessStateNodes = witnessStateNodes
 
 	view := fixture.view(t)
 	if err := ValidateGuestInputManifestBinding(view); err != nil {
 		t.Fatalf("validate manifest binding with reverted filtered transaction: %v", err)
+	}
+}
+
+func TestValidateManifestBindingRejectsInvalidDerivedBaseFee(t *testing.T) {
+	fixture := newManifestBindingFixture(t)
+	fixture.omitUserTx = true
+	fixture.blockBaseFee = 1_000_000_000
+
+	err := ValidateGuestInputManifestBinding(fixture.view(t))
+	if err == nil {
+		t.Fatalf("expected invalid base fee error")
+	}
+	if !strings.Contains(err.Error(), "invalid baseFee") {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
+func TestValidateManifestBindingRejectsMissingBaseFeeBeforeFiltering(t *testing.T) {
+	fixture := newManifestBindingFixture(t)
+	fixture.omitBlockBaseFee = true
+
+	defer func() {
+		if recovered := recover(); recovered != nil {
+			t.Fatalf("expected clean missing base fee error, got panic: %v", recovered)
+		}
+	}()
+	err := ValidateGuestInputManifestBinding(fixture.view(t))
+	if err == nil {
+		t.Fatalf("expected missing base fee error")
+	}
+	if !strings.Contains(err.Error(), "missing base fee") {
+		t.Fatalf("unexpected error: %v", err)
 	}
 }
 
@@ -271,6 +309,7 @@ type manifestBindingFixture struct {
 	blockExtra          []byte
 	blockMixDigest      common.Hash
 	blockBaseFee        uint64
+	omitBlockBaseFee    bool
 	l2Contract          common.Address
 	anchorTo            common.Address
 	anchorBlockNumber   uint64
@@ -318,7 +357,7 @@ func newManifestBindingFixture(t *testing.T) *manifestBindingFixture {
 			Extra:       []byte{},
 			MixDigest:   parentMixDigest,
 			Nonce:       types.BlockNonce{},
-			BaseFee:     big.NewInt(1),
+			BaseFee:     new(big.Int).SetUint64(manifestTestBaseFee),
 		},
 		manifestTimestamp:  1_001,
 		manifestCoinbase:   common.HexToAddress(testAddress("22")),
@@ -330,7 +369,7 @@ func newManifestBindingFixture(t *testing.T) *manifestBindingFixture {
 		blockGasLimit:      manifestGasLimit + 1_000_000,
 		blockExtra:         manifestExtraData(42, proposalID),
 		blockMixDigest:     manifestMixHash(common.BigToHash(parentDifficulty), blockNumber),
-		blockBaseFee:       1_000,
+		blockBaseFee:       manifestTestBaseFee,
 		l2Contract:         common.HexToAddress(testAddress("44")),
 		anchorTo:           common.HexToAddress(testAddress("44")),
 		anchorBlockNumber:  900,
@@ -526,6 +565,11 @@ func (f *manifestBindingFixture) blockJSON(t *testing.T) json.RawMessage {
 	}
 	txRoot := types.DeriveSha(decodedTxs, trie.NewStackTrie(nil))
 
+	baseFeeJSON := "null"
+	if !f.omitBlockBaseFee {
+		baseFeeJSON = fmt.Sprintf("%q", fmt.Sprintf("0x%x", f.blockBaseFee))
+	}
+
 	header := fmt.Sprintf(`{
 		"parentHash": %q,
 		"sha3Uncles": %q,
@@ -542,7 +586,7 @@ func (f *manifestBindingFixture) blockJSON(t *testing.T) json.RawMessage {
 		"extraData": %q,
 		"mixHash": %q,
 		"nonce": "0x0000000000000000",
-		"baseFeePerGas": "0x%x"
+		"baseFeePerGas": %s
 	}`,
 		f.parentHeader.Hash().Hex(),
 		types.EmptyUncleHash.Hex(),
@@ -555,7 +599,7 @@ func (f *manifestBindingFixture) blockJSON(t *testing.T) json.RawMessage {
 		f.blockTimestamp,
 		"0x"+hex.EncodeToString(f.blockExtra),
 		f.blockMixDigest.Hex(),
-		f.blockBaseFee,
+		baseFeeJSON,
 	)
 
 	return mustRawMessage(t, fmt.Sprintf(`{
@@ -680,7 +724,7 @@ func manifestUserTxJSONWithGas(t *testing.T, chainID uint64, nonce uint64, to st
 		ChainID:   new(big.Int).SetUint64(chainID),
 		Nonce:     nonce,
 		GasTipCap: big.NewInt(1),
-		GasFeeCap: big.NewInt(2_000),
+		GasFeeCap: new(big.Int).SetUint64(manifestTestUserTxFeeCap),
 		Gas:       gas,
 		To:        &toAddress,
 		Value:     big.NewInt(0),
@@ -698,7 +742,7 @@ func manifestUserTxJSONWithGas(t *testing.T, chainID uint64, nonce uint64, to st
 				"chain_id": "0x%x",
 				"nonce": "0x%x",
 				"max_priority_fee_per_gas": "0x1",
-				"max_fee_per_gas": "0x7d0",
+				"max_fee_per_gas": "0x%x",
 				"gas": "0x%x",
 				"to": %q,
 				"value": "0x0",
@@ -706,7 +750,7 @@ func manifestUserTxJSONWithGas(t *testing.T, chainID uint64, nonce uint64, to st
 				"access_list": []
 			}
 		}
-	}`, r.Text(16), s.Text(16), v.Text(16), chainID, nonce, gas, to))
+	}`, r.Text(16), s.Text(16), v.Text(16), chainID, nonce, manifestTestUserTxFeeCap, gas, to))
 }
 
 func decodeTestTransaction(t *testing.T, raw json.RawMessage) *types.Transaction {
