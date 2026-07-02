@@ -17,6 +17,7 @@ import (
 	"github.com/ethereum/go-ethereum/core/state"
 	"github.com/ethereum/go-ethereum/core/types"
 	"github.com/ethereum/go-ethereum/crypto"
+	"github.com/ethereum/go-ethereum/params"
 	"github.com/ethereum/go-ethereum/rlp"
 	"github.com/ethereum/go-ethereum/trie"
 	"github.com/ethereum/go-ethereum/triedb"
@@ -124,6 +125,53 @@ func TestValidateManifestBindingRejectsMissingBaseFeeBeforeFiltering(t *testing.
 		t.Fatalf("expected missing base fee error")
 	}
 	if !strings.Contains(err.Error(), "missing base fee") {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
+func TestValidateManifestBindingAllowsFirstBlockWithoutGrandparentHeader(t *testing.T) {
+	fixture := newManifestBindingFixture(t)
+	userTx := manifestUserTxJSONWithGasAndFeeCap(t, fixture.chainID, 0, testAddress("33"), 24_000, params.ShastaInitialBaseFee)
+	fixture.blockNumber = 1
+	fixture.blockBaseFee = params.ShastaInitialBaseFee
+	fixture.manifestUserTxJSON = userTx
+	fixture.blockUserTxJSON = userTx
+	fixture.parentHeader.Number = common.Big0
+	fixture.parentHeader.ParentHash = common.Hash{}
+	fixture.parentHeader.BaseFee = nil
+	fixture.manifestGasLimit = fixture.parentHeader.GasLimit
+	fixture.blockGasLimit = fixture.manifestGasLimit + shastaAnchorGasLimit
+	fixture.grandparentHeader = nil
+	fixture.omitGrandparentHeader = true
+	fixture.blockMixDigest = manifestMixHash(common.BigToHash(fixture.parentHeader.Difficulty), fixture.blockNumber)
+
+	if err := ValidateGuestInputManifestBinding(fixture.view(t)); err != nil {
+		t.Fatalf("validate first block manifest binding without grandparent: %v", err)
+	}
+}
+
+func TestValidateManifestBindingRejectsMissingProposalParentHeader(t *testing.T) {
+	fixture := newManifestBindingFixture(t)
+	fixture.omitProposalAncestorHeaders = true
+
+	err := ValidateGuestInputManifestBinding(fixture.view(t))
+	if err == nil {
+		t.Fatalf("expected missing proposal ancestor header")
+	}
+	if !strings.Contains(err.Error(), "missing proposal ancestor header") {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
+func TestValidateManifestBindingRejectsMissingGrandparentHeader(t *testing.T) {
+	fixture := newManifestBindingFixture(t)
+	fixture.omitGrandparentHeader = true
+
+	err := ValidateGuestInputManifestBinding(fixture.view(t))
+	if err == nil {
+		t.Fatalf("expected missing grandparent header")
+	}
+	if !strings.Contains(err.Error(), "missing grandparent header") {
 		t.Fatalf("unexpected error: %v", err)
 	}
 }
@@ -316,37 +364,40 @@ func TestValidateGuestInputBlobSourcesAcceptsInlineCalldataSource(t *testing.T) 
 }
 
 type manifestBindingFixture struct {
-	chainID             uint64
-	proposalID          uint64
-	proposalTimestamp   uint64
-	proposer            common.Address
-	originBlockNumber   uint64
-	parentHeader        *types.Header
-	grandparentHeader   *types.Header
-	manifestTimestamp   uint64
-	manifestCoinbase    common.Address
-	manifestGasLimit    uint64
-	manifestUserTxJSON  json.RawMessage
-	manifestUserTxJSONs []json.RawMessage
-	blockUserTxJSON     json.RawMessage
-	blockUserTxJSONs    []json.RawMessage
-	blockTimestamp      uint64
-	blockCoinbase       common.Address
-	blockGasLimit       uint64
-	blockExtra          []byte
-	blockMixDigest      common.Hash
-	blockBaseFee        uint64
-	omitBlockBaseFee    bool
-	l2Contract          common.Address
-	anchorTo            common.Address
-	anchorBlockNumber   uint64
-	omitAnchorTx        bool
-	omitUserTx          bool
-	addManifestBlock    bool
-	witnessStateNodes   []string
-	blobBacked          bool
-	corruptBlobEncoding bool
-	isForcedInclusion   bool
+	chainID                     uint64
+	proposalID                  uint64
+	proposalTimestamp           uint64
+	proposer                    common.Address
+	originBlockNumber           uint64
+	parentHeader                *types.Header
+	grandparentHeader           *types.Header
+	manifestTimestamp           uint64
+	manifestCoinbase            common.Address
+	manifestGasLimit            uint64
+	manifestUserTxJSON          json.RawMessage
+	manifestUserTxJSONs         []json.RawMessage
+	blockUserTxJSON             json.RawMessage
+	blockUserTxJSONs            []json.RawMessage
+	blockTimestamp              uint64
+	blockCoinbase               common.Address
+	blockNumber                 uint64
+	blockGasLimit               uint64
+	blockExtra                  []byte
+	blockMixDigest              common.Hash
+	blockBaseFee                uint64
+	omitBlockBaseFee            bool
+	l2Contract                  common.Address
+	anchorTo                    common.Address
+	anchorBlockNumber           uint64
+	omitAnchorTx                bool
+	omitUserTx                  bool
+	addManifestBlock            bool
+	witnessStateNodes           []string
+	omitProposalAncestorHeaders bool
+	omitGrandparentHeader       bool
+	blobBacked                  bool
+	corruptBlobEncoding         bool
+	isForcedInclusion           bool
 }
 
 func newManifestBindingFixture(t *testing.T) *manifestBindingFixture {
@@ -410,6 +461,7 @@ func newManifestBindingFixture(t *testing.T) *manifestBindingFixture {
 		blockUserTxJSON:    manifestTx,
 		blockTimestamp:     1_001,
 		blockCoinbase:      common.HexToAddress(testAddress("22")),
+		blockNumber:        blockNumber,
 		blockGasLimit:      manifestGasLimit + 1_000_000,
 		blockExtra:         manifestExtraData(42, proposalID),
 		blockMixDigest:     manifestMixHash(common.BigToHash(parentDifficulty), blockNumber),
@@ -438,6 +490,15 @@ func (f *manifestBindingFixture) view(t *testing.T) *GuestInputView {
 		t.Fatalf("marshal witness state nodes: %v", err)
 	}
 
+	proposalAncestorHeaders := []json.RawMessage{}
+	if !f.omitGrandparentHeader && f.grandparentHeader != nil {
+		proposalAncestorHeaders = append(proposalAncestorHeaders, mustRawMessage(t, f.witnessHeaderJSON(t, f.grandparentHeader)))
+	}
+	proposalAncestorHeaders = append(proposalAncestorHeaders, mustRawMessage(t, f.witnessHeaderJSON(t, f.parentHeader)))
+	if f.omitProposalAncestorHeaders {
+		proposalAncestorHeaders = nil
+	}
+
 	input := protocol.ShastaGuestInput{
 		Witnesses: []json.RawMessage{
 			mustRawMessage(t, fmt.Sprintf(`{
@@ -457,10 +518,7 @@ func (f *manifestBindingFixture) view(t *testing.T) *GuestInputView {
 			},
 			"data_sources": [%s]
 		}`, f.chainID, f.proposalID, proposalJSON, testAddress("77"), dataSourceJSON)),
-		ProposalAncestorHeaders: []json.RawMessage{
-			mustRawMessage(t, f.witnessHeaderJSON(t, f.grandparentHeader)),
-			mustRawMessage(t, f.witnessHeaderJSON(t, f.parentHeader)),
-		},
+		ProposalAncestorHeaders: proposalAncestorHeaders,
 		ProofCarryData: f.proofCarryData(
 			t,
 			parentHash,
@@ -508,7 +566,7 @@ func (f *manifestBindingFixture) proofCarryData(
 				"timestamp": %d
 			},
 			"checkpoint": {
-				"blockNumber": "0x2a",
+				"blockNumber": "0x%x",
 				"blockHash": %q,
 				"stateRoot": %q
 			}
@@ -523,6 +581,7 @@ func (f *manifestBindingFixture) proofCarryData(
 		testAddress("77"),
 		proposal.Proposer.Hex(),
 		proposal.Timestamp,
+		f.blockNumber,
 		blockHash,
 		stateRoot,
 	))
@@ -628,7 +687,7 @@ func (f *manifestBindingFixture) blockJSON(t *testing.T) json.RawMessage {
 		"receiptsRoot": %q,
 		"logsBloom": %q,
 		"difficulty": "0x0",
-		"number": "0x2a",
+		"number": "0x%x",
 		"gasLimit": "0x%x",
 		"gasUsed": "0x0",
 		"timestamp": "0x%x",
@@ -644,6 +703,7 @@ func (f *manifestBindingFixture) blockJSON(t *testing.T) json.RawMessage {
 		txRoot.Hex(),
 		testHash("57"),
 		testBloom(),
+		f.blockNumber,
 		f.blockGasLimit,
 		f.blockTimestamp,
 		"0x"+hex.EncodeToString(f.blockExtra),
@@ -769,6 +829,11 @@ func manifestUserTxJSON(t *testing.T, chainID uint64, nonce uint64, to string) j
 
 func manifestUserTxJSONWithGas(t *testing.T, chainID uint64, nonce uint64, to string, gas uint64) json.RawMessage {
 	t.Helper()
+	return manifestUserTxJSONWithGasAndFeeCap(t, chainID, nonce, to, gas, manifestTestUserTxFeeCap)
+}
+
+func manifestUserTxJSONWithGasAndFeeCap(t *testing.T, chainID uint64, nonce uint64, to string, gas uint64, feeCap uint64) json.RawMessage {
+	t.Helper()
 	key, err := crypto.HexToECDSA(manifestTestTxPrivateKeyHex)
 	if err != nil {
 		t.Fatalf("parse test tx key: %v", err)
@@ -778,7 +843,7 @@ func manifestUserTxJSONWithGas(t *testing.T, chainID uint64, nonce uint64, to st
 		ChainID:   new(big.Int).SetUint64(chainID),
 		Nonce:     nonce,
 		GasTipCap: big.NewInt(1),
-		GasFeeCap: new(big.Int).SetUint64(manifestTestUserTxFeeCap),
+		GasFeeCap: new(big.Int).SetUint64(feeCap),
 		Gas:       gas,
 		To:        &toAddress,
 		Value:     big.NewInt(0),
@@ -803,8 +868,8 @@ func manifestUserTxJSONWithGas(t *testing.T, chainID uint64, nonce uint64, to st
 				"input": "0x1234",
 				"access_list": []
 			}
-		}
-	}`, r.Text(16), s.Text(16), v.Text(16), chainID, nonce, manifestTestUserTxFeeCap, gas, to))
+			}
+		}`, r.Text(16), s.Text(16), v.Text(16), chainID, nonce, feeCap, gas, to))
 }
 
 func decodeTestTransaction(t *testing.T, raw json.RawMessage) *types.Transaction {
