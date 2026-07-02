@@ -221,8 +221,58 @@ func TestNewServerLogsProveSuccess(t *testing.T) {
 	if !strings.Contains(logs.String(), "proposal_id=2222") {
 		t.Fatalf("expected proposal id in success log, got %q", logs.String())
 	}
+	if !strings.Contains(logs.String(), "chain_id=167000") {
+		t.Fatalf("expected chain id in success log, got %q", logs.String())
+	}
+	if !strings.Contains(logs.String(), "block_count=192") {
+		t.Fatalf("expected block count in success log, got %q", logs.String())
+	}
 	if strings.Contains(logs.String(), "input_prefix=") || strings.Contains(logs.String(), "input=") {
 		t.Fatalf("expected input to be omitted from success log, got %q", logs.String())
+	}
+}
+
+func TestNewServerLogsGuestInputMetadataOnValidationFailure(t *testing.T) {
+	var logs bytes.Buffer
+	prevWriter := log.Writer()
+	prevFlags := log.Flags()
+	log.SetOutput(&logs)
+	log.SetFlags(0)
+	t.Cleanup(func() {
+		log.SetOutput(prevWriter)
+		log.SetFlags(prevFlags)
+	})
+
+	var request map[string]any
+	if err := json.Unmarshal(loadSharedShastaRequestJSON(t), &request); err != nil {
+		t.Fatalf("decode shared request: %v", err)
+	}
+	payload := request["payload"].(map[string]any)
+	guestInput := payload["guest_input"].(map[string]any)
+	taiko := guestInput["taiko"].(map[string]any)
+	taiko["data_sources"] = []any{}
+	body, err := json.Marshal(request)
+	if err != nil {
+		t.Fatalf("marshal mutated request: %v", err)
+	}
+
+	server := NewServer(fakeService{})
+	req := httptest.NewRequest(http.MethodPost, "/prove/shasta", bytes.NewReader(body))
+	recorder := httptest.NewRecorder()
+
+	server.ServeHTTP(recorder, req)
+
+	if recorder.Code != http.StatusBadRequest {
+		t.Fatalf("unexpected status: %d", recorder.Code)
+	}
+	if !strings.Contains(logs.String(), "failed prove/shasta request") {
+		t.Fatalf("expected failure log, got %q", logs.String())
+	}
+	if !strings.Contains(logs.String(), "chain_id=167000") {
+		t.Fatalf("expected guest_input chain id in failure log, got %q", logs.String())
+	}
+	if !strings.Contains(logs.String(), "block_count=192") {
+		t.Fatalf("expected guest_input block count in failure log, got %q", logs.String())
 	}
 }
 

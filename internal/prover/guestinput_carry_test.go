@@ -206,8 +206,8 @@ func TestGuestInputCarryRejectsMissingVerifier(t *testing.T) {
 	}
 }
 
-func TestGuestInputCarryAcceptsSgxVerifierSpellings(t *testing.T) {
-	cases := []string{"Sgx", "SGX", "sgx", "SgxGeth", "SGXGETH", "sgxgeth", "sgx_geth"}
+func TestGuestInputCarryAcceptsSgxGethVerifierSpellings(t *testing.T) {
+	cases := []string{"SgxGeth", "SGXGETH", "sgxgeth", "sgx_geth"}
 
 	for _, verifierKey := range cases {
 		t.Run(verifierKey, func(t *testing.T) {
@@ -225,11 +225,11 @@ func TestGuestInputCarryAcceptsSgxVerifierSpellings(t *testing.T) {
 	}
 }
 
-func TestGuestInputCarryRejectsMissingSgxVerifierLane(t *testing.T) {
+func TestGuestInputCarryRejectsPlainSgxVerifierLane(t *testing.T) {
 	fixture := newGuestInputCarryFixture(t)
 	fixture.witnessChainSpec = guestInputChainSpec(t,
 		`{"SHASTA": {"Block": 0}}`,
-		`{"SHASTA": {"Sp1": "0x1111111111111111111111111111111111111111"}}`,
+		fmt.Sprintf(`{"SHASTA": {"Sgx": %q}}`, fixture.verifier),
 	)
 	view := decodeGuestInputCarryView(t, fixture)
 
@@ -343,7 +343,7 @@ func TestGuestInputCarryRejectsMalformedActiveVerifierInsteadOfFallback(t *testi
 			view := decodeGuestInputCarryView(t, fixture)
 
 			err := ValidateGuestInputCarry(view)
-			if err == nil || !strings.Contains(err.Error(), "parse witness.chain_spec.verifier_address_forks.UNZEN.Sgx") {
+			if err == nil || !strings.Contains(err.Error(), "parse witness.chain_spec.verifier_address_forks.UNZEN.SgxGeth") {
 				t.Fatalf("unexpected error: %v", err)
 			}
 		})

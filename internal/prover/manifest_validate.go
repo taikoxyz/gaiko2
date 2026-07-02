@@ -132,11 +132,11 @@ func ValidateGuestInputManifestBinding(view *GuestInputView) error {
 
 	canonicalParent := parentHeader
 	for index, expectedBlock := range derived {
-		block, _, err := decodeReplayBlock(view.Witnesses[index].ReplayBlock)
+		block, witness, err := decodeReplayBlock(view.Witnesses[index].ReplayBlock)
 		if err != nil {
 			return fmt.Errorf("decode witness block %d: %w", index, err)
 		}
-		if err := validateManifestBlockBinding(view, proposal, block, expectedBlock, canonicalParent); err != nil {
+		if err := validateManifestBlockBinding(view, proposal, block, witness, expectedBlock, canonicalParent); err != nil {
 			return fmt.Errorf("manifest block %d: %w", index, err)
 		}
 		canonicalParent = block.Header()
@@ -549,6 +549,7 @@ func validateManifestBlockBinding(
 	view *GuestInputView,
 	proposal shastaProposalView,
 	block *types.Block,
+	witness *ReplayWitness,
 	expected shastaManifestBlock,
 	parentHeader *types.Header,
 ) error {
@@ -557,25 +558,8 @@ func validateManifestBlockBinding(
 	if len(txs) == 0 {
 		return fmt.Errorf("missing anchor transaction")
 	}
-	if len(txs) != len(expected.Transactions)+1 {
-		return fmt.Errorf(
-			"transaction count mismatch: expected %d got %d",
-			len(expected.Transactions)+1,
-			len(txs),
-		)
-	}
-	for index, expectedTx := range expected.Transactions {
-		expectedBytes, err := expectedTx.MarshalBinary()
-		if err != nil {
-			return fmt.Errorf("encode expected transaction %d: %w", index+1, err)
-		}
-		actualBytes, err := txs[index+1].MarshalBinary()
-		if err != nil {
-			return fmt.Errorf("encode actual transaction %d: %w", index+1, err)
-		}
-		if !bytes.Equal(expectedBytes, actualBytes) {
-			return fmt.Errorf("transaction %d mismatch", index+1)
-		}
+	if err := validateManifestTransactionRoot(view, block, witness, expected.Transactions); err != nil {
+		return err
 	}
 
 	if header.Time != expected.Timestamp {

@@ -45,11 +45,12 @@ func NewServer(service prover.Service) http.Handler {
 		}
 		validated, err := prover.ValidateRequest(req)
 		if err != nil {
+			metadata := proveShastaRequestLogMetadata(req)
 			log.Printf(
 				"failed prove/shasta request schema=%s chain_id=%d block_count=%d code=%s message=%q",
-				req.Schema,
-				req.Payload.ChainID,
-				len(req.Payload.Blocks),
+				metadata.schema,
+				metadata.chainID,
+				metadata.blockCount,
 				"INVALID_REQUEST",
 				err.Error(),
 			)
@@ -67,9 +68,9 @@ func NewServer(service prover.Service) http.Handler {
 			}
 			log.Printf(
 				"failed prove/shasta request schema=%s chain_id=%d block_count=%d code=%s message=%q",
-				req.Schema,
-				req.Payload.ChainID,
-				len(req.Payload.Blocks),
+				validated.Request.Schema,
+				validated.Request.Payload.ChainID,
+				len(validated.Request.Payload.Blocks),
 				code,
 				err.Error(),
 			)
@@ -79,10 +80,10 @@ func NewServer(service prover.Service) http.Handler {
 
 		log.Printf(
 			"completed prove/shasta request schema=%s proposal_id=%d chain_id=%d block_count=%d",
-			req.Schema,
+			validated.Request.Schema,
 			validated.Carry.TransitionInput.ProposalID,
-			req.Payload.ChainID,
-			len(req.Payload.Blocks),
+			validated.Request.Payload.ChainID,
+			len(validated.Request.Payload.Blocks),
 		)
 		writeJSON(w, http.StatusOK, protocol.Success(result))
 	})
@@ -152,6 +153,33 @@ func aggregateProposalIDSummary(proofs []prover.AggregateProofView) string {
 		return fmt.Sprintf("%d", first)
 	}
 	return fmt.Sprintf("%d..%d", first, last)
+}
+
+type proveShastaLogMetadata struct {
+	schema     string
+	chainID    uint64
+	blockCount int
+}
+
+func proveShastaRequestLogMetadata(req protocol.ShastaRequest) proveShastaLogMetadata {
+	metadata := proveShastaLogMetadata{
+		schema:     req.Schema,
+		chainID:    req.Payload.ChainID,
+		blockCount: len(req.Payload.Blocks),
+	}
+	if req.Payload.GuestInput == nil {
+		return metadata
+	}
+
+	view, err := prover.DecodeGuestInput(*req.Payload.GuestInput)
+	if err != nil {
+		return metadata
+	}
+	if view.GuestInputChainID != 0 {
+		metadata.chainID = view.GuestInputChainID
+	}
+	metadata.blockCount = len(view.Witnesses)
+	return metadata
 }
 
 func writeError(w http.ResponseWriter, statusCode int, code, message string) {
