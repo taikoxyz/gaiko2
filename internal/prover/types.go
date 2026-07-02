@@ -10,14 +10,34 @@ import (
 )
 
 type ValidatedRequest struct {
-	Request protocol.ShastaRequest
-	Carry   CarryView
-	Blocks  []BlockView
+	Request     protocol.ShastaRequest
+	Carry       CarryView
+	Blocks      []BlockView
+	LogMetadata RequestLogMetadata
 }
 
 type ValidatedAggregateRequest struct {
 	Request protocol.ShastaAggregateRequest
 	Proofs  []AggregateProofView
+}
+
+type RequestLogMetadata struct {
+	Schema     string
+	ChainID    uint64
+	BlockCount int
+}
+
+type ValidationError struct {
+	Err      error
+	Metadata RequestLogMetadata
+}
+
+func (e *ValidationError) Error() string {
+	return e.Err.Error()
+}
+
+func (e *ValidationError) Unwrap() error {
+	return e.Err
 }
 
 type CarryView struct {

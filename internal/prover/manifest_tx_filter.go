@@ -97,14 +97,9 @@ func manifestCandidateTransactions(
 	anchor *types.Transaction,
 	manifestTxs types.Transactions,
 ) (types.Transactions, error) {
-	anchorCopy, err := cloneTransaction(anchor)
-	if err != nil {
-		return nil, fmt.Errorf("clone anchor transaction: %w", err)
-	}
-
 	signer := types.MakeSigner(config, header.Number, header.Time)
 	candidates := make(types.Transactions, 0, 1+len(manifestTxs))
-	candidates = append(candidates, anchorCopy)
+	candidates = append(candidates, anchor)
 	for _, tx := range manifestTxs {
 		if tx.Type() == types.BlobTxType {
 			continue
@@ -153,9 +148,6 @@ func commitFilteredManifestTransactions(
 
 	blockContext := core.NewEVMBlockContext(header, chain, nil)
 	evm := vm.NewEVM(blockContext, tracingStateDB, config, cfg)
-	if isUnzen {
-		evm.SetZkGasMeter(cfg.ZkGasMeter)
-	}
 
 	if beaconRoot := block.BeaconRoot(); beaconRoot != nil {
 		core.ProcessBeaconBlockRoot(*beaconRoot, evm)
