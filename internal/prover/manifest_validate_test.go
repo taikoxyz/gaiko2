@@ -128,6 +128,32 @@ func TestValidateManifestBindingRejectsMissingBaseFeeBeforeFiltering(t *testing.
 	}
 }
 
+func TestValidateManifestBindingRejectsUnboundProposalParentHeader(t *testing.T) {
+	fixture := newManifestBindingFixture(t)
+	fixture.parentHeader.ParentHash = common.HexToHash(testHash("91"))
+
+	err := ValidateGuestInputManifestBinding(fixture.view(t))
+	if err == nil {
+		t.Fatalf("expected parent header hash mismatch")
+	}
+	if !strings.Contains(err.Error(), "parent header hash mismatch") {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
+func TestValidateManifestBindingRejectsUnlinkedGrandparentHeader(t *testing.T) {
+	fixture := newManifestBindingFixture(t)
+	fixture.grandparentHeader.Time = fixture.parentHeader.Time - 3
+
+	err := ValidateGuestInputManifestBinding(fixture.view(t))
+	if err == nil {
+		t.Fatalf("expected grandparent header hash mismatch")
+	}
+	if !strings.Contains(err.Error(), "grandparent header hash mismatch") {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
 func TestValidateManifestBindingRejectsPartialWitnessStateDuringFiltering(t *testing.T) {
 	fixture := newManifestBindingFixture(t)
 	signer := manifestTestTxSigner(t)
@@ -296,6 +322,7 @@ type manifestBindingFixture struct {
 	proposer            common.Address
 	originBlockNumber   uint64
 	parentHeader        *types.Header
+	grandparentHeader   *types.Header
 	manifestTimestamp   uint64
 	manifestCoinbase    common.Address
 	manifestGasLimit    uint64
@@ -335,14 +362,31 @@ func newManifestBindingFixture(t *testing.T) *manifestBindingFixture {
 	signer := manifestTestTxSigner(t)
 	witnessStateNodes, witnessStateRoot := witnessStateNodesWithBalance(t, signer, new(big.Int).SetUint64(1_000_000_000_000_000_000))
 
-	return &manifestBindingFixture{
+	fixture := &manifestBindingFixture{
 		chainID:           chainID,
 		proposalID:        proposalID,
 		proposalTimestamp: 1_100,
 		proposer:          common.HexToAddress("0x1234567890abcdef1234567890abcdef12345678"),
 		originBlockNumber: 1_000,
+		grandparentHeader: &types.Header{
+			ParentHash:  common.HexToHash(testHash("89")),
+			UncleHash:   types.EmptyUncleHash,
+			Coinbase:    common.HexToAddress(testAddress("09")),
+			Root:        common.HexToHash(testHash("88")),
+			TxHash:      types.EmptyTxsHash,
+			ReceiptHash: types.EmptyReceiptsHash,
+			Bloom:       types.Bloom{},
+			Difficulty:  big.NewInt(0),
+			Number:      big.NewInt(40),
+			GasLimit:    31_000_000,
+			GasUsed:     0,
+			Time:        998,
+			Extra:       []byte{},
+			MixDigest:   common.HexToHash(testHash("90")),
+			Nonce:       types.BlockNonce{},
+			BaseFee:     new(big.Int).SetUint64(manifestTestBaseFee),
+		},
 		parentHeader: &types.Header{
-			ParentHash:  common.HexToHash(testHash("90")),
 			UncleHash:   types.EmptyUncleHash,
 			Coinbase:    common.HexToAddress(testAddress("10")),
 			Root:        witnessStateRoot,
@@ -375,6 +419,8 @@ func newManifestBindingFixture(t *testing.T) *manifestBindingFixture {
 		anchorBlockNumber:  900,
 		witnessStateNodes:  witnessStateNodes,
 	}
+	fixture.parentHeader.ParentHash = fixture.grandparentHeader.Hash()
+	return fixture
 }
 
 func (f *manifestBindingFixture) view(t *testing.T) *GuestInputView {
@@ -411,7 +457,10 @@ func (f *manifestBindingFixture) view(t *testing.T) *GuestInputView {
 			},
 			"data_sources": [%s]
 		}`, f.chainID, f.proposalID, proposalJSON, testAddress("77"), dataSourceJSON)),
-		ProposalAncestorHeaders: []json.RawMessage{mustRawMessage(t, f.parentWitnessHeaderJSON(t))},
+		ProposalAncestorHeaders: []json.RawMessage{
+			mustRawMessage(t, f.witnessHeaderJSON(t, f.grandparentHeader)),
+			mustRawMessage(t, f.witnessHeaderJSON(t, f.parentHeader)),
+		},
 		ProofCarryData: f.proofCarryData(
 			t,
 			parentHash,
@@ -645,8 +694,13 @@ func (f *manifestBindingFixture) chainSpecJSON(t *testing.T) json.RawMessage {
 
 func (f *manifestBindingFixture) parentWitnessHeaderJSON(t *testing.T) string {
 	t.Helper()
-	header := headerJSON(t, f.parentHeader)
-	return fmt.Sprintf(`{"header": %s, "hash": %q}`, header, f.parentHeader.Hash().Hex())
+	return f.witnessHeaderJSON(t, f.parentHeader)
+}
+
+func (f *manifestBindingFixture) witnessHeaderJSON(t *testing.T, header *types.Header) string {
+	t.Helper()
+	headerJSON := headerJSON(t, header)
+	return fmt.Sprintf(`{"header": %s, "hash": %q}`, headerJSON, header.Hash().Hex())
 }
 
 func (f *manifestBindingFixture) proposalJSON(t *testing.T, sourceJSON string) json.RawMessage {
