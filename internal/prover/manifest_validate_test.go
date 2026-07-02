@@ -13,11 +13,18 @@ import (
 
 	"github.com/ethereum/go-ethereum/accounts/abi"
 	"github.com/ethereum/go-ethereum/common"
+	"github.com/ethereum/go-ethereum/core/rawdb"
+	"github.com/ethereum/go-ethereum/core/state"
 	"github.com/ethereum/go-ethereum/core/types"
 	"github.com/ethereum/go-ethereum/crypto"
 	"github.com/ethereum/go-ethereum/rlp"
+	"github.com/ethereum/go-ethereum/trie"
+	"github.com/ethereum/go-ethereum/triedb"
+	"github.com/holiman/uint256"
 	"github.com/taikoxyz/gaiko2/internal/protocol"
 )
+
+const manifestTestTxPrivateKeyHex = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
 
 func TestValidateManifestBindingAcceptsInlineCalldataSource(t *testing.T) {
 	view := newManifestBindingFixture(t).view(t)
@@ -55,7 +62,7 @@ func TestValidateManifestBindingDerivesMixHashFromParentDifficulty(t *testing.T)
 func TestValidateManifestBindingAcceptsTxListFilteredTransactions(t *testing.T) {
 	fixture := newManifestBindingFixture(t)
 	filteredByExecution := manifestUserTxJSON(t, fixture.chainID, 7, testAddress("31"))
-	included := manifestUserTxJSON(t, fixture.chainID, 8, testAddress("32"))
+	included := manifestUserTxJSON(t, fixture.chainID, 0, testAddress("32"))
 	fixture.manifestUserTxJSONs = []json.RawMessage{filteredByExecution, included}
 	fixture.blockUserTxJSONs = []json.RawMessage{included}
 	view := fixture.view(t)
@@ -83,7 +90,7 @@ func TestValidateManifestBindingRejectsMismatches(t *testing.T) {
 			mutate: func(f *manifestBindingFixture) {
 				f.blockUserTxJSON = manifestUserTxJSON(t, f.chainID, 8, testAddress("77"))
 			},
-			wantErr: "transaction 1 mismatch",
+			wantErr: "transaction root mismatch",
 		},
 		{
 			name: "missing anchor transaction",
@@ -232,6 +239,7 @@ type manifestBindingFixture struct {
 	omitAnchorTx        bool
 	omitUserTx          bool
 	addManifestBlock    bool
+	witnessStateNodes []string
 	blobBacked          bool
 	corruptBlobEncoding bool
 	isForcedInclusion   bool
@@ -244,35 +252,36 @@ func newManifestBindingFixture(t *testing.T) *manifestBindingFixture {
 	proposalID := uint64(12345)
 	parentMixDigest := common.HexToHash(testHash("91"))
 	parentDifficulty := big.NewInt(0x11b626)
-	parentHeader := &types.Header{
-		ParentHash:  common.HexToHash(testHash("90")),
-		UncleHash:   types.EmptyUncleHash,
-		Coinbase:    common.HexToAddress(testAddress("10")),
-		Root:        common.HexToHash(testHash("11")),
-		TxHash:      types.EmptyTxsHash,
-		ReceiptHash: types.EmptyReceiptsHash,
-		Bloom:       types.Bloom{},
-		Difficulty:  parentDifficulty,
-		Number:      big.NewInt(41),
-		GasLimit:    31_000_000,
-		GasUsed:     0,
-		Time:        1_000,
-		Extra:       []byte{},
-		MixDigest:   parentMixDigest,
-		Nonce:       types.BlockNonce{},
-		BaseFee:     big.NewInt(1),
-	}
-	manifestTx := manifestUserTxJSON(t, chainID, 7, testAddress("33"))
+	manifestTx := manifestUserTxJSON(t, chainID, 0, testAddress("33"))
 	manifestGasLimit := uint64(30_000_000)
 	blockNumber := uint64(42)
+	signer := manifestTestTxSigner(t)
+	witnessStateNodes, witnessStateRoot := witnessStateNodesWithBalance(t, signer, new(big.Int).SetUint64(1_000_000_000_000_000_000))
 
 	return &manifestBindingFixture{
-		chainID:            chainID,
-		proposalID:         proposalID,
-		proposalTimestamp:  1_100,
-		proposer:           common.HexToAddress("0x1234567890abcdef1234567890abcdef12345678"),
-		originBlockNumber:  1_000,
-		parentHeader:       parentHeader,
+		chainID:           chainID,
+		proposalID:        proposalID,
+		proposalTimestamp: 1_100,
+		proposer:          common.HexToAddress("0x1234567890abcdef1234567890abcdef12345678"),
+		originBlockNumber: 1_000,
+		parentHeader: &types.Header{
+			ParentHash:  common.HexToHash(testHash("90")),
+			UncleHash:   types.EmptyUncleHash,
+			Coinbase:    common.HexToAddress(testAddress("10")),
+			Root:        witnessStateRoot,
+			TxHash:      types.EmptyTxsHash,
+			ReceiptHash: types.EmptyReceiptsHash,
+			Bloom:       types.Bloom{},
+			Difficulty:  parentDifficulty,
+			Number:      big.NewInt(41),
+			GasLimit:    31_000_000,
+			GasUsed:     0,
+			Time:        1_000,
+			Extra:       []byte{},
+			MixDigest:   parentMixDigest,
+			Nonce:       types.BlockNonce{},
+			BaseFee:     big.NewInt(1),
+		},
 		manifestTimestamp:  1_001,
 		manifestCoinbase:   common.HexToAddress(testAddress("22")),
 		manifestGasLimit:   manifestGasLimit,
@@ -285,8 +294,9 @@ func newManifestBindingFixture(t *testing.T) *manifestBindingFixture {
 		blockMixDigest:     manifestMixHash(common.BigToHash(parentDifficulty), blockNumber),
 		blockBaseFee:       1_000,
 		l2Contract:         common.HexToAddress(testAddress("44")),
-		anchorTo:           common.HexToAddress(testAddress("44")),
-		anchorBlockNumber:  900,
+		anchorTo:            common.HexToAddress(testAddress("44")),
+		anchorBlockNumber:   900,
+		witnessStateNodes:   witnessStateNodes,
 	}
 }
 
@@ -300,15 +310,19 @@ func (f *manifestBindingFixture) view(t *testing.T) *GuestInputView {
 	blockHash := replayBlockHash(t, block)
 	parentHash := f.parentHeader.Hash().Hex()
 	stateRoot := common.HexToHash(testHash("55")).Hex()
+	witnessStateJSON, err := json.Marshal(f.witnessStateNodes)
+	if err != nil {
+		t.Fatalf("marshal witness state nodes: %v", err)
+	}
 
 	input := protocol.ShastaGuestInput{
 		Witnesses: []json.RawMessage{
 			mustRawMessage(t, fmt.Sprintf(`{
 				"block": %s,
 				"chain_spec": %s,
-				"witness": {"state": [], "state_indices": [], "codes": [], "headers": [%s]},
+				"witness": {"state": %s, "state_indices": [], "codes": [], "headers": [%s]},
 				"accounts": {}
-			}`, block, f.chainSpecJSON(t), f.parentWitnessHeaderJSON(t))),
+			}`, block, f.chainSpecJSON(t), witnessStateJSON, f.parentWitnessHeaderJSON(t))),
 		},
 		Taiko: mustRawMessage(t, fmt.Sprintf(`{
 			"chain_spec": {"chain_id": %d},
@@ -468,6 +482,12 @@ func (f *manifestBindingFixture) blockJSON(t *testing.T) json.RawMessage {
 		t.Fatalf("marshal transactions: %v", err)
 	}
 
+	decodedTxs := make(types.Transactions, 0, len(txs))
+	for _, rawTx := range txs {
+		decodedTxs = append(decodedTxs, decodeTestTransaction(t, rawTx))
+	}
+	txRoot := types.DeriveSha(decodedTxs, trie.NewStackTrie(nil))
+
 	header := fmt.Sprintf(`{
 		"parentHash": %q,
 		"sha3Uncles": %q,
@@ -490,7 +510,7 @@ func (f *manifestBindingFixture) blockJSON(t *testing.T) json.RawMessage {
 		types.EmptyUncleHash.Hex(),
 		f.blockCoinbase.Hex(),
 		testHash("55"),
-		testHash("56"),
+		txRoot.Hex(),
 		testHash("57"),
 		testBloom(),
 		f.blockGasLimit,
@@ -608,7 +628,7 @@ func encodeTestManifestPayload(t *testing.T, manifest testDerivationSourceManife
 
 func manifestUserTxJSON(t *testing.T, chainID uint64, nonce uint64, to string) json.RawMessage {
 	t.Helper()
-	key, err := crypto.HexToECDSA("0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef")
+	key, err := crypto.HexToECDSA(manifestTestTxPrivateKeyHex)
 	if err != nil {
 		t.Fatalf("parse test tx key: %v", err)
 	}
@@ -618,7 +638,7 @@ func manifestUserTxJSON(t *testing.T, chainID uint64, nonce uint64, to string) j
 		Nonce:     nonce,
 		GasTipCap: big.NewInt(1),
 		GasFeeCap: big.NewInt(2_000),
-		Gas:       21_000,
+		Gas:       24_000,
 		To:        &toAddress,
 		Value:     big.NewInt(0),
 		Data:      []byte{0x12, 0x34},
@@ -636,7 +656,7 @@ func manifestUserTxJSON(t *testing.T, chainID uint64, nonce uint64, to string) j
 				"nonce": "0x%x",
 				"max_priority_fee_per_gas": "0x1",
 				"max_fee_per_gas": "0x7d0",
-				"gas": "0x5208",
+				"gas": "0x5dc0",
 				"to": %q,
 				"value": "0x0",
 				"input": "0x1234",
@@ -833,4 +853,53 @@ func encodeTestKonaBlob(t *testing.T, payload []byte) []byte {
 		t.Fatalf("test payload did not fit into one blob")
 	}
 	return blob
+}
+
+func manifestTestTxSigner(t *testing.T) common.Address {
+	t.Helper()
+
+	key, err := crypto.HexToECDSA(manifestTestTxPrivateKeyHex)
+	if err != nil {
+		t.Fatalf("parse manifest test tx key: %v", err)
+	}
+	return crypto.PubkeyToAddress(key.PublicKey)
+}
+
+func witnessStateNodesWithBalance(t *testing.T, address common.Address, balance *big.Int) ([]string, common.Hash) {
+	t.Helper()
+
+	memdb := rawdb.NewMemoryDatabase()
+	tdb := triedb.NewDatabase(memdb, triedb.HashDefaults)
+	statedb, err := state.New(types.EmptyRootHash, state.NewDatabase(tdb, nil))
+	if err != nil {
+		t.Fatalf("open test state: %v", err)
+	}
+	statedb.AddBalance(address, uint256.MustFromBig(balance), 0)
+
+	root, err := statedb.Commit(0, false, false)
+	if err != nil {
+		t.Fatalf("commit test state: %v", err)
+	}
+
+	stateTrie, err := trie.NewStateTrie(trie.StateTrieID(root), tdb)
+	if err != nil {
+		t.Fatalf("open test state trie: %v", err)
+	}
+	it, err := stateTrie.NodeIterator(nil)
+	if err != nil {
+		t.Fatalf("iterate test state trie: %v", err)
+	}
+
+	nodes := make([]string, 0, 4)
+	for it.Next(true) {
+		if it.Hash() == (common.Hash{}) {
+			continue
+		}
+		blob := it.NodeBlob()
+		if len(blob) == 0 {
+			continue
+		}
+		nodes = append(nodes, "0x"+hex.EncodeToString(blob))
+	}
+	return nodes, root
 }
