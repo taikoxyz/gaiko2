@@ -43,7 +43,7 @@ func NewServer(service prover.Service) http.Handler {
 			writeError(w, http.StatusBadRequest, "INVALID_JSON", err.Error())
 			return
 		}
-		validated, err := prover.ValidateRequest(req)
+		validated, err := prover.ValidateRequestWithContext(r.Context(), req)
 		if err != nil {
 			metadata := proveShastaRequestLogMetadata(req)
 			log.Printf(

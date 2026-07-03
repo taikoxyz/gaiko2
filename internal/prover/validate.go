@@ -1,6 +1,7 @@
 package prover
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 
@@ -35,15 +36,22 @@ type rawCheckpoint struct {
 }
 
 func ValidateRequest(req protocol.ShastaRequest) (*ValidatedRequest, error) {
+	return ValidateRequestWithContext(context.Background(), req)
+}
+
+func ValidateRequestWithContext(ctx context.Context, req protocol.ShastaRequest) (*ValidatedRequest, error) {
 	switch req.Schema {
 	case protocol.ShastaRequestSchemaV1:
-		return validateGuestInputRequest(req)
+		return validateGuestInputRequest(ctx, req)
 	default:
 		return nil, fmt.Errorf("unsupported schema %q", req.Schema)
 	}
 }
 
-func validateGuestInputRequest(req protocol.ShastaRequest) (*ValidatedRequest, error) {
+func validateGuestInputRequest(ctx context.Context, req protocol.ShastaRequest) (*ValidatedRequest, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
 	if req.Payload.GuestInput == nil {
 		return nil, fmt.Errorf("request must include guest_input")
 	}
@@ -58,7 +66,7 @@ func validateGuestInputRequest(req protocol.ShastaRequest) (*ValidatedRequest, e
 	if err := ValidateGuestInputBlobSources(view); err != nil {
 		return nil, err
 	}
-	if err := ValidateGuestInputManifestBinding(view); err != nil {
+	if err := ValidateGuestInputManifestBindingWithContext(ctx, view); err != nil {
 		return nil, err
 	}
 	if err := validateBlockViews(view.Blocks, view.Carry); err != nil {

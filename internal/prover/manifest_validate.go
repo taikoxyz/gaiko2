@@ -3,6 +3,7 @@ package prover
 import (
 	"bytes"
 	"compress/zlib"
+	"context"
 	"encoding/binary"
 	"encoding/json"
 	"fmt"
@@ -59,8 +60,15 @@ type shastaProposalAncestorHeader struct {
 }
 
 func ValidateGuestInputManifestBinding(view *GuestInputView) error {
+	return ValidateGuestInputManifestBindingWithContext(context.Background(), view)
+}
+
+func ValidateGuestInputManifestBindingWithContext(ctx context.Context, view *GuestInputView) error {
 	if view == nil {
 		return fmt.Errorf("guest input view is nil")
+	}
+	if err := ctx.Err(); err != nil {
+		return err
 	}
 
 	proposal, err := decodeGuestInputTaikoProposal(view.TaikoRaw)
@@ -109,6 +117,9 @@ func ValidateGuestInputManifestBinding(view *GuestInputView) error {
 
 	derived := make([]shastaManifestBlock, 0, len(view.Witnesses))
 	for sourceIndex, source := range proposal.Sources {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
 		dataSource, err := decodeBlobSourceData(view.DataSourcesRaw[sourceIndex])
 		if err != nil {
 			return fmt.Errorf("decode data_sources[%d]: %w", sourceIndex, err)
@@ -151,11 +162,14 @@ func ValidateGuestInputManifestBinding(view *GuestInputView) error {
 	canonicalParent := parentHeader
 	canonicalGrandparent := grandparentHeader
 	for index, expectedBlock := range derived {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
 		block, witness, err := decodeReplayBlock(view.Witnesses[index].ReplayBlock)
 		if err != nil {
 			return fmt.Errorf("decode witness block %d: %w", index, err)
 		}
-		if err := validateManifestBlockBinding(view, proposal, block, witness, expectedBlock, canonicalParent, canonicalGrandparent); err != nil {
+		if err := validateManifestBlockBinding(ctx, view, proposal, block, witness, expectedBlock, canonicalParent, canonicalGrandparent); err != nil {
 			return fmt.Errorf("manifest block %d: %w", index, err)
 		}
 		rolledGrandparent := compactAncestorFromHeader(canonicalParent)
@@ -640,6 +654,7 @@ func decodeForkConditionObject(raw json.RawMessage) (map[string]json.RawMessage,
 }
 
 func validateManifestBlockBinding(
+	ctx context.Context,
 	view *GuestInputView,
 	proposal shastaProposalView,
 	block *types.Block,
@@ -656,7 +671,7 @@ func validateManifestBlockBinding(
 	if err := validateManifestHeaderBaseFee(view.GuestInputChainID, header, parentHeader, grandparentHeader); err != nil {
 		return err
 	}
-	if err := validateManifestTransactionRoot(view, block, witness, expected.Transactions); err != nil {
+	if err := validateManifestTransactionRoot(ctx, view, block, witness, expected.Transactions); err != nil {
 		return err
 	}
 
