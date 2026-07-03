@@ -79,6 +79,13 @@ func ValidateGuestInputManifestBinding(view *GuestInputView) error {
 	if err != nil {
 		return err
 	}
+	if parentHeader.Hash() != view.Carry.TransitionInput.ParentBlockHash {
+		return fmt.Errorf(
+			"proposal parent header hash mismatch: got %s expected %s",
+			parentHeader.Hash().Hex(),
+			view.Carry.TransitionInput.ParentBlockHash.Hex(),
+		)
+	}
 	lastAnchor, err := decodeGuestInputLastAnchorBlockNumber(view.TaikoRaw)
 	if err != nil {
 		return err
@@ -188,7 +195,11 @@ func decodeProposalAncestorHeaderContext(raws []json.RawMessage) (*types.Header,
 	if len(headers) == 1 {
 		return parent, nil, nil
 	}
-	grandparent := headers[len(headers)-2].Compact
+	grandparentHeader := headers[len(headers)-2].Full
+	if grandparentHeader == nil {
+		return nil, nil, fmt.Errorf("missing full grandparent header in proposal ancestor headers")
+	}
+	grandparent := compactAncestorFromHeader(grandparentHeader)
 	return parent, &grandparent, nil
 }
 

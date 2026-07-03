@@ -163,6 +163,20 @@ func TestValidateManifestBindingRejectsMissingProposalParentHeader(t *testing.T)
 	}
 }
 
+func TestValidateManifestBindingRejectsParentHeaderUnlinkedFromCarry(t *testing.T) {
+	fixture := newManifestBindingFixture(t)
+	view := fixture.view(t)
+	view.Carry.TransitionInput.ParentBlockHash = common.HexToHash(testHash("fe"))
+
+	err := ValidateGuestInputManifestBinding(view)
+	if err == nil {
+		t.Fatalf("expected parent header carry mismatch")
+	}
+	if !strings.Contains(err.Error(), "proposal parent header hash mismatch") {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
 func TestValidateManifestBindingRejectsMissingGrandparentHeader(t *testing.T) {
 	fixture := newManifestBindingFixture(t)
 	fixture.omitGrandparentHeader = true
@@ -172,6 +186,30 @@ func TestValidateManifestBindingRejectsMissingGrandparentHeader(t *testing.T) {
 		t.Fatalf("expected missing grandparent header")
 	}
 	if !strings.Contains(err.Error(), "missing grandparent header") {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
+func TestValidateManifestBindingRejectsCompactGrandparentHeader(t *testing.T) {
+	fixture := newManifestBindingFixture(t)
+	view := fixture.view(t)
+	view.Raw.ProposalAncestorHeaders[0] = mustRawMessage(t, fmt.Sprintf(`{
+		"number": %d,
+		"hash": %q,
+		"parent_hash": %q,
+		"timestamp": %d
+	}`,
+		fixture.grandparentHeader.Number.Uint64(),
+		fixture.grandparentHeader.Hash().Hex(),
+		fixture.grandparentHeader.ParentHash.Hex(),
+		fixture.grandparentHeader.Time+1,
+	))
+
+	err := ValidateGuestInputManifestBinding(view)
+	if err == nil {
+		t.Fatalf("expected compact grandparent header rejection")
+	}
+	if !strings.Contains(err.Error(), "missing full grandparent header") {
 		t.Fatalf("unexpected error: %v", err)
 	}
 }
