@@ -17,6 +17,7 @@ import (
 	"github.com/ethereum/go-ethereum/core/state"
 	"github.com/ethereum/go-ethereum/core/types"
 	"github.com/ethereum/go-ethereum/crypto"
+	"github.com/ethereum/go-ethereum/params"
 	"github.com/ethereum/go-ethereum/rlp"
 	"github.com/ethereum/go-ethereum/trie"
 	"github.com/ethereum/go-ethereum/triedb"
@@ -25,6 +26,12 @@ import (
 )
 
 const manifestTestTxPrivateKeyHex = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+
+const (
+	manifestTestBaseFee       = uint64(5_000_000)
+	manifestTestUserTxFeeCap  = uint64(10_000_000)
+	manifestTestLowGasBalance = uint64(250_000_000_000)
+)
 
 func TestValidateManifestBindingAcceptsInlineCalldataSource(t *testing.T) {
 	view := newManifestBindingFixture(t).view(t)
@@ -80,13 +87,156 @@ func TestValidateManifestBindingRevertsFilteredApplyErrorState(t *testing.T) {
 	fixture.blockUserTxJSONs = []json.RawMessage{included}
 
 	signer := manifestTestTxSigner(t)
-	witnessStateNodes, witnessStateRoot := witnessStateNodesWithBalance(t, signer, new(big.Int).SetUint64(48_000_000))
+	witnessStateNodes, witnessStateRoot := witnessStateNodesWithBalance(t, signer, new(big.Int).SetUint64(manifestTestLowGasBalance))
 	fixture.parentHeader.Root = witnessStateRoot
 	fixture.witnessStateNodes = witnessStateNodes
 
 	view := fixture.view(t)
 	if err := ValidateGuestInputManifestBinding(view); err != nil {
 		t.Fatalf("validate manifest binding with reverted filtered transaction: %v", err)
+	}
+}
+
+func TestValidateManifestBindingRejectsInvalidDerivedBaseFee(t *testing.T) {
+	fixture := newManifestBindingFixture(t)
+	fixture.omitUserTx = true
+	fixture.blockBaseFee = 1_000_000_000
+
+	err := ValidateGuestInputManifestBinding(fixture.view(t))
+	if err == nil {
+		t.Fatalf("expected invalid base fee error")
+	}
+	if !strings.Contains(err.Error(), "invalid baseFee") {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
+func TestValidateManifestBindingRejectsMissingBaseFeeBeforeFiltering(t *testing.T) {
+	fixture := newManifestBindingFixture(t)
+	fixture.omitBlockBaseFee = true
+
+	defer func() {
+		if recovered := recover(); recovered != nil {
+			t.Fatalf("expected clean missing base fee error, got panic: %v", recovered)
+		}
+	}()
+	err := ValidateGuestInputManifestBinding(fixture.view(t))
+	if err == nil {
+		t.Fatalf("expected missing base fee error")
+	}
+	if !strings.Contains(err.Error(), "missing base fee") {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
+func TestValidateManifestBindingAllowsFirstBlockWithoutGrandparentHeader(t *testing.T) {
+	fixture := newManifestBindingFixture(t)
+	userTx := manifestUserTxJSONWithGasAndFeeCap(t, fixture.chainID, 0, testAddress("33"), 24_000, params.ShastaInitialBaseFee)
+	fixture.blockNumber = 1
+	fixture.blockBaseFee = params.ShastaInitialBaseFee
+	fixture.manifestUserTxJSON = userTx
+	fixture.blockUserTxJSON = userTx
+	fixture.parentHeader.Number = common.Big0
+	fixture.parentHeader.ParentHash = common.Hash{}
+	fixture.parentHeader.BaseFee = nil
+	fixture.manifestGasLimit = fixture.parentHeader.GasLimit
+	fixture.blockGasLimit = fixture.manifestGasLimit + shastaAnchorGasLimit
+	fixture.grandparentHeader = nil
+	fixture.omitGrandparentHeader = true
+	fixture.blockMixDigest = manifestMixHash(common.BigToHash(fixture.parentHeader.Difficulty), fixture.blockNumber)
+
+	if err := ValidateGuestInputManifestBinding(fixture.view(t)); err != nil {
+		t.Fatalf("validate first block manifest binding without grandparent: %v", err)
+	}
+}
+
+func TestValidateManifestBindingRejectsMissingProposalParentHeader(t *testing.T) {
+	fixture := newManifestBindingFixture(t)
+	fixture.omitProposalAncestorHeaders = true
+
+	err := ValidateGuestInputManifestBinding(fixture.view(t))
+	if err == nil {
+		t.Fatalf("expected missing proposal ancestor header")
+	}
+	if !strings.Contains(err.Error(), "missing proposal ancestor header") {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
+func TestValidateManifestBindingRejectsParentHeaderUnlinkedFromCarry(t *testing.T) {
+	fixture := newManifestBindingFixture(t)
+	view := fixture.view(t)
+	view.Carry.TransitionInput.ParentBlockHash = common.HexToHash(testHash("fe"))
+
+	err := ValidateGuestInputManifestBinding(view)
+	if err == nil {
+		t.Fatalf("expected parent header carry mismatch")
+	}
+	if !strings.Contains(err.Error(), "proposal parent header hash mismatch") {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
+func TestValidateManifestBindingRejectsMissingGrandparentHeader(t *testing.T) {
+	fixture := newManifestBindingFixture(t)
+	fixture.omitGrandparentHeader = true
+
+	err := ValidateGuestInputManifestBinding(fixture.view(t))
+	if err == nil {
+		t.Fatalf("expected missing grandparent header")
+	}
+	if !strings.Contains(err.Error(), "missing grandparent header") {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
+func TestValidateManifestBindingRejectsCompactGrandparentHeader(t *testing.T) {
+	fixture := newManifestBindingFixture(t)
+	view := fixture.view(t)
+	view.Raw.ProposalAncestorHeaders[0] = mustRawMessage(t, fmt.Sprintf(`{
+		"number": %d,
+		"hash": %q,
+		"parent_hash": %q,
+		"timestamp": %d
+	}`,
+		fixture.grandparentHeader.Number.Uint64(),
+		fixture.grandparentHeader.Hash().Hex(),
+		fixture.grandparentHeader.ParentHash.Hex(),
+		fixture.grandparentHeader.Time+1,
+	))
+
+	err := ValidateGuestInputManifestBinding(view)
+	if err == nil {
+		t.Fatalf("expected compact grandparent header rejection")
+	}
+	if !strings.Contains(err.Error(), "missing full grandparent header") {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
+func TestValidateManifestBindingRejectsUnboundProposalParentHeader(t *testing.T) {
+	fixture := newManifestBindingFixture(t)
+	fixture.parentHeader.ParentHash = common.HexToHash(testHash("91"))
+
+	err := ValidateGuestInputManifestBinding(fixture.view(t))
+	if err == nil {
+		t.Fatalf("expected parent header hash mismatch")
+	}
+	if !strings.Contains(err.Error(), "parent header hash mismatch") {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
+func TestValidateManifestBindingRejectsUnlinkedGrandparentHeader(t *testing.T) {
+	fixture := newManifestBindingFixture(t)
+	fixture.grandparentHeader.Time = fixture.parentHeader.Time - 3
+
+	err := ValidateGuestInputManifestBinding(fixture.view(t))
+	if err == nil {
+		t.Fatalf("expected grandparent header hash mismatch")
+	}
+	if !strings.Contains(err.Error(), "grandparent header hash mismatch") {
+		t.Fatalf("unexpected error: %v", err)
 	}
 }
 
@@ -107,6 +257,37 @@ func TestValidateManifestBindingRejectsPartialWitnessStateDuringFiltering(t *tes
 	}
 	if !strings.Contains(err.Error(), "witness state") {
 		t.Fatalf("expected witness state error, got %v", err)
+	}
+}
+
+func TestDecodeManifestPayloadRejectsOversizedDecodedPayload(t *testing.T) {
+	payload := encodeCompressedManifestBytes(t, bytes.Repeat([]byte{0}, shastaMaxManifestDecodedPayload+1))
+
+	_, err := decodeManifestPayload(payload, 0, 1)
+	if err == nil {
+		t.Fatalf("expected decoded payload size error")
+	}
+	if !strings.Contains(err.Error(), "decompressed manifest payload exceeds") {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
+func TestDecodeManifestPayloadRejectsTooManyTransactionsInBlock(t *testing.T) {
+	tx := decodeTestTransaction(t, manifestUserTxJSON(t, 167001, 0, testAddress("31")))
+	txs := make(types.Transactions, int(shastaMaxManifestTxsPerBlock)+1)
+	for index := range txs {
+		txs[index] = tx
+	}
+	payload := encodeTestManifestPayload(t, testDerivationSourceManifest{
+		Blocks: []testManifestBlock{{Transactions: txs}},
+	})
+
+	_, err := decodeManifestPayload(payload, 0, 1)
+	if err == nil {
+		t.Fatalf("expected transaction count error")
+	}
+	if !strings.Contains(err.Error(), "transaction count") {
+		t.Fatalf("unexpected error: %v", err)
 	}
 }
 
@@ -252,35 +433,40 @@ func TestValidateGuestInputBlobSourcesAcceptsInlineCalldataSource(t *testing.T) 
 }
 
 type manifestBindingFixture struct {
-	chainID             uint64
-	proposalID          uint64
-	proposalTimestamp   uint64
-	proposer            common.Address
-	originBlockNumber   uint64
-	parentHeader        *types.Header
-	manifestTimestamp   uint64
-	manifestCoinbase    common.Address
-	manifestGasLimit    uint64
-	manifestUserTxJSON  json.RawMessage
-	manifestUserTxJSONs []json.RawMessage
-	blockUserTxJSON     json.RawMessage
-	blockUserTxJSONs    []json.RawMessage
-	blockTimestamp      uint64
-	blockCoinbase       common.Address
-	blockGasLimit       uint64
-	blockExtra          []byte
-	blockMixDigest      common.Hash
-	blockBaseFee        uint64
-	l2Contract          common.Address
-	anchorTo            common.Address
-	anchorBlockNumber   uint64
-	omitAnchorTx        bool
-	omitUserTx          bool
-	addManifestBlock    bool
-	witnessStateNodes   []string
-	blobBacked          bool
-	corruptBlobEncoding bool
-	isForcedInclusion   bool
+	chainID                     uint64
+	proposalID                  uint64
+	proposalTimestamp           uint64
+	proposer                    common.Address
+	originBlockNumber           uint64
+	parentHeader                *types.Header
+	grandparentHeader           *types.Header
+	manifestTimestamp           uint64
+	manifestCoinbase            common.Address
+	manifestGasLimit            uint64
+	manifestUserTxJSON          json.RawMessage
+	manifestUserTxJSONs         []json.RawMessage
+	blockUserTxJSON             json.RawMessage
+	blockUserTxJSONs            []json.RawMessage
+	blockTimestamp              uint64
+	blockCoinbase               common.Address
+	blockNumber                 uint64
+	blockGasLimit               uint64
+	blockExtra                  []byte
+	blockMixDigest              common.Hash
+	blockBaseFee                uint64
+	omitBlockBaseFee            bool
+	l2Contract                  common.Address
+	anchorTo                    common.Address
+	anchorBlockNumber           uint64
+	omitAnchorTx                bool
+	omitUserTx                  bool
+	addManifestBlock            bool
+	witnessStateNodes           []string
+	omitProposalAncestorHeaders bool
+	omitGrandparentHeader       bool
+	blobBacked                  bool
+	corruptBlobEncoding         bool
+	isForcedInclusion           bool
 }
 
 func newManifestBindingFixture(t *testing.T) *manifestBindingFixture {
@@ -296,14 +482,31 @@ func newManifestBindingFixture(t *testing.T) *manifestBindingFixture {
 	signer := manifestTestTxSigner(t)
 	witnessStateNodes, witnessStateRoot := witnessStateNodesWithBalance(t, signer, new(big.Int).SetUint64(1_000_000_000_000_000_000))
 
-	return &manifestBindingFixture{
+	fixture := &manifestBindingFixture{
 		chainID:           chainID,
 		proposalID:        proposalID,
 		proposalTimestamp: 1_100,
 		proposer:          common.HexToAddress("0x1234567890abcdef1234567890abcdef12345678"),
 		originBlockNumber: 1_000,
+		grandparentHeader: &types.Header{
+			ParentHash:  common.HexToHash(testHash("89")),
+			UncleHash:   types.EmptyUncleHash,
+			Coinbase:    common.HexToAddress(testAddress("09")),
+			Root:        common.HexToHash(testHash("88")),
+			TxHash:      types.EmptyTxsHash,
+			ReceiptHash: types.EmptyReceiptsHash,
+			Bloom:       types.Bloom{},
+			Difficulty:  big.NewInt(0),
+			Number:      big.NewInt(40),
+			GasLimit:    31_000_000,
+			GasUsed:     0,
+			Time:        998,
+			Extra:       []byte{},
+			MixDigest:   common.HexToHash(testHash("90")),
+			Nonce:       types.BlockNonce{},
+			BaseFee:     new(big.Int).SetUint64(manifestTestBaseFee),
+		},
 		parentHeader: &types.Header{
-			ParentHash:  common.HexToHash(testHash("90")),
 			UncleHash:   types.EmptyUncleHash,
 			Coinbase:    common.HexToAddress(testAddress("10")),
 			Root:        witnessStateRoot,
@@ -318,7 +521,7 @@ func newManifestBindingFixture(t *testing.T) *manifestBindingFixture {
 			Extra:       []byte{},
 			MixDigest:   parentMixDigest,
 			Nonce:       types.BlockNonce{},
-			BaseFee:     big.NewInt(1),
+			BaseFee:     new(big.Int).SetUint64(manifestTestBaseFee),
 		},
 		manifestTimestamp:  1_001,
 		manifestCoinbase:   common.HexToAddress(testAddress("22")),
@@ -327,15 +530,18 @@ func newManifestBindingFixture(t *testing.T) *manifestBindingFixture {
 		blockUserTxJSON:    manifestTx,
 		blockTimestamp:     1_001,
 		blockCoinbase:      common.HexToAddress(testAddress("22")),
+		blockNumber:        blockNumber,
 		blockGasLimit:      manifestGasLimit + 1_000_000,
 		blockExtra:         manifestExtraData(42, proposalID),
 		blockMixDigest:     manifestMixHash(common.BigToHash(parentDifficulty), blockNumber),
-		blockBaseFee:       1_000,
+		blockBaseFee:       manifestTestBaseFee,
 		l2Contract:         common.HexToAddress(testAddress("44")),
 		anchorTo:           common.HexToAddress(testAddress("44")),
 		anchorBlockNumber:  900,
 		witnessStateNodes:  witnessStateNodes,
 	}
+	fixture.parentHeader.ParentHash = fixture.grandparentHeader.Hash()
+	return fixture
 }
 
 func (f *manifestBindingFixture) view(t *testing.T) *GuestInputView {
@@ -351,6 +557,15 @@ func (f *manifestBindingFixture) view(t *testing.T) *GuestInputView {
 	witnessStateJSON, err := json.Marshal(f.witnessStateNodes)
 	if err != nil {
 		t.Fatalf("marshal witness state nodes: %v", err)
+	}
+
+	proposalAncestorHeaders := []json.RawMessage{}
+	if !f.omitGrandparentHeader && f.grandparentHeader != nil {
+		proposalAncestorHeaders = append(proposalAncestorHeaders, mustRawMessage(t, f.witnessHeaderJSON(t, f.grandparentHeader)))
+	}
+	proposalAncestorHeaders = append(proposalAncestorHeaders, mustRawMessage(t, f.witnessHeaderJSON(t, f.parentHeader)))
+	if f.omitProposalAncestorHeaders {
+		proposalAncestorHeaders = nil
 	}
 
 	input := protocol.ShastaGuestInput{
@@ -372,7 +587,7 @@ func (f *manifestBindingFixture) view(t *testing.T) *GuestInputView {
 			},
 			"data_sources": [%s]
 		}`, f.chainID, f.proposalID, proposalJSON, testAddress("77"), dataSourceJSON)),
-		ProposalAncestorHeaders: []json.RawMessage{mustRawMessage(t, f.parentWitnessHeaderJSON(t))},
+		ProposalAncestorHeaders: proposalAncestorHeaders,
 		ProofCarryData: f.proofCarryData(
 			t,
 			parentHash,
@@ -420,7 +635,7 @@ func (f *manifestBindingFixture) proofCarryData(
 				"timestamp": %d
 			},
 			"checkpoint": {
-				"blockNumber": "0x2a",
+				"blockNumber": "0x%x",
 				"blockHash": %q,
 				"stateRoot": %q
 			}
@@ -435,6 +650,7 @@ func (f *manifestBindingFixture) proofCarryData(
 		testAddress("77"),
 		proposal.Proposer.Hex(),
 		proposal.Timestamp,
+		f.blockNumber,
 		blockHash,
 		stateRoot,
 	))
@@ -526,6 +742,11 @@ func (f *manifestBindingFixture) blockJSON(t *testing.T) json.RawMessage {
 	}
 	txRoot := types.DeriveSha(decodedTxs, trie.NewStackTrie(nil))
 
+	baseFeeJSON := "null"
+	if !f.omitBlockBaseFee {
+		baseFeeJSON = fmt.Sprintf("%q", fmt.Sprintf("0x%x", f.blockBaseFee))
+	}
+
 	header := fmt.Sprintf(`{
 		"parentHash": %q,
 		"sha3Uncles": %q,
@@ -535,14 +756,14 @@ func (f *manifestBindingFixture) blockJSON(t *testing.T) json.RawMessage {
 		"receiptsRoot": %q,
 		"logsBloom": %q,
 		"difficulty": "0x0",
-		"number": "0x2a",
+		"number": "0x%x",
 		"gasLimit": "0x%x",
 		"gasUsed": "0x0",
 		"timestamp": "0x%x",
 		"extraData": %q,
 		"mixHash": %q,
 		"nonce": "0x0000000000000000",
-		"baseFeePerGas": "0x%x"
+		"baseFeePerGas": %s
 	}`,
 		f.parentHeader.Hash().Hex(),
 		types.EmptyUncleHash.Hex(),
@@ -551,11 +772,12 @@ func (f *manifestBindingFixture) blockJSON(t *testing.T) json.RawMessage {
 		txRoot.Hex(),
 		testHash("57"),
 		testBloom(),
+		f.blockNumber,
 		f.blockGasLimit,
 		f.blockTimestamp,
 		"0x"+hex.EncodeToString(f.blockExtra),
 		f.blockMixDigest.Hex(),
-		f.blockBaseFee,
+		baseFeeJSON,
 	)
 
 	return mustRawMessage(t, fmt.Sprintf(`{
@@ -601,8 +823,13 @@ func (f *manifestBindingFixture) chainSpecJSON(t *testing.T) json.RawMessage {
 
 func (f *manifestBindingFixture) parentWitnessHeaderJSON(t *testing.T) string {
 	t.Helper()
-	header := headerJSON(t, f.parentHeader)
-	return fmt.Sprintf(`{"header": %s, "hash": %q}`, header, f.parentHeader.Hash().Hex())
+	return f.witnessHeaderJSON(t, f.parentHeader)
+}
+
+func (f *manifestBindingFixture) witnessHeaderJSON(t *testing.T, header *types.Header) string {
+	t.Helper()
+	headerJSON := headerJSON(t, header)
+	return fmt.Sprintf(`{"header": %s, "hash": %q}`, headerJSON, header.Hash().Hex())
 }
 
 func (f *manifestBindingFixture) proposalJSON(t *testing.T, sourceJSON string) json.RawMessage {
@@ -647,7 +874,11 @@ func encodeTestManifestPayload(t *testing.T, manifest testDerivationSourceManife
 	if err != nil {
 		t.Fatalf("rlp encode manifest: %v", err)
 	}
+	return encodeCompressedManifestBytes(t, encoded)
+}
 
+func encodeCompressedManifestBytes(t *testing.T, encoded []byte) []byte {
+	t.Helper()
 	var compressed bytes.Buffer
 	zw := zlib.NewWriter(&compressed)
 	if _, err := zw.Write(encoded); err != nil {
@@ -671,6 +902,11 @@ func manifestUserTxJSON(t *testing.T, chainID uint64, nonce uint64, to string) j
 
 func manifestUserTxJSONWithGas(t *testing.T, chainID uint64, nonce uint64, to string, gas uint64) json.RawMessage {
 	t.Helper()
+	return manifestUserTxJSONWithGasAndFeeCap(t, chainID, nonce, to, gas, manifestTestUserTxFeeCap)
+}
+
+func manifestUserTxJSONWithGasAndFeeCap(t *testing.T, chainID uint64, nonce uint64, to string, gas uint64, feeCap uint64) json.RawMessage {
+	t.Helper()
 	key, err := crypto.HexToECDSA(manifestTestTxPrivateKeyHex)
 	if err != nil {
 		t.Fatalf("parse test tx key: %v", err)
@@ -680,7 +916,7 @@ func manifestUserTxJSONWithGas(t *testing.T, chainID uint64, nonce uint64, to st
 		ChainID:   new(big.Int).SetUint64(chainID),
 		Nonce:     nonce,
 		GasTipCap: big.NewInt(1),
-		GasFeeCap: big.NewInt(2_000),
+		GasFeeCap: new(big.Int).SetUint64(feeCap),
 		Gas:       gas,
 		To:        &toAddress,
 		Value:     big.NewInt(0),
@@ -698,15 +934,15 @@ func manifestUserTxJSONWithGas(t *testing.T, chainID uint64, nonce uint64, to st
 				"chain_id": "0x%x",
 				"nonce": "0x%x",
 				"max_priority_fee_per_gas": "0x1",
-				"max_fee_per_gas": "0x7d0",
+				"max_fee_per_gas": "0x%x",
 				"gas": "0x%x",
 				"to": %q,
 				"value": "0x0",
 				"input": "0x1234",
 				"access_list": []
 			}
-		}
-	}`, r.Text(16), s.Text(16), v.Text(16), chainID, nonce, gas, to))
+			}
+		}`, r.Text(16), s.Text(16), v.Text(16), chainID, nonce, feeCap, gas, to))
 }
 
 func decodeTestTransaction(t *testing.T, raw json.RawMessage) *types.Transaction {
