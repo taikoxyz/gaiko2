@@ -81,7 +81,7 @@ func ValidateGuestInputManifestBindingWithContext(ctx context.Context, view *Gue
 		return err
 	}
 	if len(proposal.Sources) == 0 {
-		return nil
+		return fmt.Errorf("proposal sources must not be empty")
 	}
 	if len(view.DataSourcesRaw) != len(proposal.Sources) {
 		return fmt.Errorf(
@@ -539,12 +539,21 @@ func validateManifestAnchorNumbers(
 		return true
 	}
 
-	return validateManifestAnchorProgression(
+	if err := validateManifestAnchorProgression(
 		anchors,
 		parentAnchorBlockNumber,
 		originBlockNumber,
 		chainID,
-	) == nil
+	); err != nil {
+		return false
+	}
+	highestAnchorBlockNumber := parentAnchorBlockNumber
+	for _, anchor := range anchors {
+		if anchor > highestAnchorBlockNumber {
+			highestAnchorBlockNumber = anchor
+		}
+	}
+	return highestAnchorBlockNumber > parentAnchorBlockNumber
 }
 
 func validateSourceAwareManifestAnchors(
@@ -598,7 +607,7 @@ func validateSourceAwareManifestAnchors(
 		return fmt.Errorf("normal Shasta derivation source block count overflow")
 	}
 	if end != len(anchorBlockNumbers) {
-		return fmt.Errorf("source spans cover %d blocks but anchor block numbers has %d", end, len(anchorBlockNumbers))
+		return fmt.Errorf("source spans cover %d blocks but anchor block numbers have %d", end, len(anchorBlockNumbers))
 	}
 	return validateManifestAnchorProgression(
 		anchorBlockNumbers[cursor:end],

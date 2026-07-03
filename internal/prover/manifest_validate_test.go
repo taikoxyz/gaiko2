@@ -286,6 +286,47 @@ func TestValidateSourceAwareManifestAnchorsRejectsForcedSourceThatBumpsAnchor(t 
 	}
 }
 
+func TestValidateManifestAnchorNumbersRejectsNormalSourceThatDoesNotAdvance(t *testing.T) {
+	manifest := shastaSourceManifest{
+		Blocks: []shastaManifestBlock{{AnchorBlockNumber: 899}},
+	}
+
+	if validateManifestAnchorNumbers(manifest, 1_000, 899, false, 167001) {
+		t.Fatalf("expected normal source anchor advancement rejection")
+	}
+}
+
+func TestValidateManifestBindingRejectsEmptyProposalSources(t *testing.T) {
+	view := newManifestBindingFixture(t).view(t)
+	taikoFields, err := decodeJSONObject(view.TaikoRaw)
+	if err != nil {
+		t.Fatalf("decode taiko: %v", err)
+	}
+	eventFields, err := decodeJSONObject(taikoFields["proposal_event"])
+	if err != nil {
+		t.Fatalf("decode proposal event: %v", err)
+	}
+	proposalFields, err := decodeJSONObject(eventFields["proposal"])
+	if err != nil {
+		t.Fatalf("decode proposal: %v", err)
+	}
+	proposalFields["sources"] = mustRawMessage(t, `[]`)
+	eventFields["proposal"] = mustMarshalRawMessage(t, proposalFields)
+	taikoFields["proposal_event"] = mustMarshalRawMessage(t, eventFields)
+	taikoFields["data_sources"] = mustRawMessage(t, `[]`)
+	view.TaikoRaw = mustMarshalRawMessage(t, taikoFields)
+	view.Raw.Taiko = view.TaikoRaw
+	view.DataSourcesRaw = nil
+
+	err = ValidateGuestInputManifestBinding(view)
+	if err == nil {
+		t.Fatalf("expected empty proposal sources rejection")
+	}
+	if !strings.Contains(err.Error(), "proposal sources must not be empty") {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
 func TestValidateManifestBindingRejectsMissingProposalParentHeader(t *testing.T) {
 	fixture := newManifestBindingFixture(t)
 	fixture.omitProposalAncestorHeaders = true
@@ -995,6 +1036,15 @@ func (f *manifestBindingFixture) proposalJSON(t *testing.T, sourceJSON string) j
 		testHash("cd"),
 		sourceJSON,
 	))
+}
+
+func mustMarshalRawMessage(t *testing.T, value any) json.RawMessage {
+	t.Helper()
+	raw, err := json.Marshal(value)
+	if err != nil {
+		t.Fatalf("marshal raw message: %v", err)
+	}
+	return raw
 }
 
 type testDerivationSourceManifest struct {
