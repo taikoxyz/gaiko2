@@ -244,6 +244,48 @@ func TestValidateManifestBindingAllowsFirstBlockWithoutGrandparentHeader(t *test
 	}
 }
 
+func TestValidateSourceAwareManifestAnchorsAcceptsForcedPrefixThenNormalCatchup(t *testing.T) {
+	spans := []manifestAnchorSourceSpan{
+		{isForcedInclusion: true, blockCount: 1},
+		{isForcedInclusion: true, blockCount: 1},
+		{isForcedInclusion: true, blockCount: 1},
+		{isForcedInclusion: true, blockCount: 1},
+		{isForcedInclusion: false, blockCount: 1},
+	}
+
+	err := validateSourceAwareManifestAnchors(
+		[]uint64{13414, 13414, 13414, 13414, 14188},
+		spans,
+		13414,
+		14189,
+		167001,
+	)
+	if err != nil {
+		t.Fatalf("validate source-aware forced-prefix anchors: %v", err)
+	}
+}
+
+func TestValidateSourceAwareManifestAnchorsRejectsForcedSourceThatBumpsAnchor(t *testing.T) {
+	spans := []manifestAnchorSourceSpan{
+		{isForcedInclusion: true, blockCount: 1},
+		{isForcedInclusion: false, blockCount: 1},
+	}
+
+	err := validateSourceAwareManifestAnchors(
+		[]uint64{14188, 14189},
+		spans,
+		13414,
+		14189,
+		167001,
+	)
+	if err == nil {
+		t.Fatalf("expected forced source anchor bump rejection")
+	}
+	if !strings.Contains(err.Error(), "forced inclusion source") {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
 func TestValidateManifestBindingRejectsMissingProposalParentHeader(t *testing.T) {
 	fixture := newManifestBindingFixture(t)
 	fixture.omitProposalAncestorHeaders = true
@@ -482,7 +524,7 @@ func TestValidateManifestBindingRejectsMismatches(t *testing.T) {
 			wantErr: "",
 		},
 		{
-			name: "forced inclusion inherits metadata and preserves transactions",
+			name: "single forced inclusion source without final normal source",
 			mutate: func(f *manifestBindingFixture) {
 				f.isForcedInclusion = true
 				f.manifestTimestamp = 1
@@ -491,7 +533,7 @@ func TestValidateManifestBindingRejectsMismatches(t *testing.T) {
 				f.anchorBlockNumber = 899
 				f.blockCoinbase = f.proposer
 			},
-			wantErr: "",
+			wantErr: "last Shasta derivation source must be a normal source",
 		},
 	}
 
