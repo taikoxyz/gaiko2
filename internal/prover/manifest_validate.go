@@ -59,6 +59,11 @@ type shastaProposalAncestorHeader struct {
 	Compact CompactAncestor
 }
 
+type manifestAnchorSourceSpan struct {
+	isForcedInclusion bool
+	blockCount        int
+}
+
 func ValidateGuestInputManifestBinding(view *GuestInputView) error {
 	return ValidateGuestInputManifestBindingWithContext(context.Background(), view)
 }
@@ -76,7 +81,7 @@ func ValidateGuestInputManifestBindingWithContext(ctx context.Context, view *Gue
 		return err
 	}
 	if len(proposal.Sources) == 0 {
-		return nil
+		return fmt.Errorf("proposal sources must not be empty")
 	}
 	if len(view.DataSourcesRaw) != len(proposal.Sources) {
 		return fmt.Errorf(
@@ -116,6 +121,7 @@ func ValidateGuestInputManifestBindingWithContext(ctx context.Context, view *Gue
 	}
 
 	derived := make([]shastaManifestBlock, 0, len(view.Witnesses))
+	sourceSpans := make([]manifestAnchorSourceSpan, 0, len(proposal.Sources))
 	for sourceIndex, source := range proposal.Sources {
 		if err := ctx.Err(); err != nil {
 			return err
@@ -137,6 +143,10 @@ func ValidateGuestInputManifestBindingWithContext(ctx context.Context, view *Gue
 			return fmt.Errorf("prepare source manifest %d: %w", sourceIndex, err)
 		}
 
+		sourceSpans = append(sourceSpans, manifestAnchorSourceSpan{
+			isForcedInclusion: source.IsForcedInclusion,
+			blockCount:        len(manifest.Blocks),
+		})
 		for _, block := range manifest.Blocks {
 			derived = append(derived, block)
 			parent = shastaManifestParentContext{
@@ -157,6 +167,19 @@ func ValidateGuestInputManifestBindingWithContext(ctx context.Context, view *Gue
 			len(derived),
 			len(view.Witnesses),
 		)
+	}
+	anchorBlockNumbers := make([]uint64, 0, len(derived))
+	for _, block := range derived {
+		anchorBlockNumbers = append(anchorBlockNumbers, block.AnchorBlockNumber)
+	}
+	if err := validateSourceAwareManifestAnchors(
+		anchorBlockNumbers,
+		sourceSpans,
+		lastAnchor,
+		proposal.OriginBlockNumber,
+		view.GuestInputChainID,
+	); err != nil {
+		return err
 	}
 
 	canonicalParent := parentHeader
@@ -502,28 +525,134 @@ func validateManifestAnchorNumbers(
 	isForcedInclusion bool,
 	chainID uint64,
 ) bool {
-	parentAnchor := parentAnchorBlockNumber
-	highestAnchor := parentAnchorBlockNumber
-	maxOffset := uint64(shastaMaxAnchorOffset)
-	if chainID == shastaManifestMainnetChain {
-		maxOffset = shastaMaxAnchorOffsetMainnet
-	}
-
+	anchors := make([]uint64, 0, len(manifest.Blocks))
 	for _, block := range manifest.Blocks {
-		anchor := block.AnchorBlockNumber
-		if anchor < parentAnchor || anchor > originBlockNumber {
-			return false
-		}
-		if originBlockNumber > maxOffset && anchor < originBlockNumber-maxOffset {
-			return false
-		}
-		if anchor > highestAnchor {
-			highestAnchor = anchor
-		}
-		parentAnchor = anchor
+		anchors = append(anchors, block.AnchorBlockNumber)
 	}
 
-	return isForcedInclusion || highestAnchor > parentAnchorBlockNumber
+	if isForcedInclusion {
+		for _, anchor := range anchors {
+			if anchor != parentAnchorBlockNumber {
+				return false
+			}
+		}
+		return true
+	}
+
+	if err := validateManifestAnchorProgression(
+		anchors,
+		parentAnchorBlockNumber,
+		originBlockNumber,
+		chainID,
+	); err != nil {
+		return false
+	}
+	highestAnchorBlockNumber := parentAnchorBlockNumber
+	for _, anchor := range anchors {
+		if anchor > highestAnchorBlockNumber {
+			highestAnchorBlockNumber = anchor
+		}
+	}
+	return highestAnchorBlockNumber > parentAnchorBlockNumber
+}
+
+func validateSourceAwareManifestAnchors(
+	anchorBlockNumbers []uint64,
+	sourceSpans []manifestAnchorSourceSpan,
+	lastAnchorBlockNumber uint64,
+	originBlockNumber uint64,
+	chainID uint64,
+) error {
+	if len(anchorBlockNumbers) == 0 {
+		return fmt.Errorf("anchor block numbers must not be empty")
+	}
+	if len(sourceSpans) == 0 {
+		return fmt.Errorf("source spans must not be empty")
+	}
+	normalSource := sourceSpans[len(sourceSpans)-1]
+	if normalSource.isForcedInclusion {
+		return fmt.Errorf("last Shasta derivation source must be a normal source")
+	}
+	if normalSource.blockCount == 0 {
+		return fmt.Errorf("normal Shasta derivation source must contain at least one block")
+	}
+
+	cursor := 0
+	for sourceIndex, span := range sourceSpans[:len(sourceSpans)-1] {
+		if !span.isForcedInclusion {
+			return fmt.Errorf("Shasta derivation source %d must be forced inclusion; only the final source may be normal", sourceIndex)
+		}
+		if span.blockCount == 0 {
+			return fmt.Errorf("forced inclusion source %d must contain at least one block", sourceIndex)
+		}
+		end := cursor + span.blockCount
+		if end < cursor || end > len(anchorBlockNumbers) {
+			return fmt.Errorf("source spans cover more blocks than anchor block numbers at source %d", sourceIndex)
+		}
+		for _, anchor := range anchorBlockNumbers[cursor:end] {
+			if anchor != lastAnchorBlockNumber {
+				return fmt.Errorf(
+					"forced inclusion source %d anchor %d must equal parent anchor %d",
+					sourceIndex,
+					anchor,
+					lastAnchorBlockNumber,
+				)
+			}
+		}
+		cursor = end
+	}
+
+	end := cursor + normalSource.blockCount
+	if end < cursor {
+		return fmt.Errorf("normal Shasta derivation source block count overflow")
+	}
+	if end != len(anchorBlockNumbers) {
+		return fmt.Errorf("source spans cover %d blocks but anchor block numbers have %d", end, len(anchorBlockNumbers))
+	}
+	return validateManifestAnchorProgression(
+		anchorBlockNumbers[cursor:end],
+		lastAnchorBlockNumber,
+		originBlockNumber,
+		chainID,
+	)
+}
+
+func validateManifestAnchorProgression(
+	anchorBlockNumbers []uint64,
+	lastAnchorBlockNumber uint64,
+	originBlockNumber uint64,
+	chainID uint64,
+) error {
+	if len(anchorBlockNumbers) == 0 {
+		return fmt.Errorf("anchor block numbers must not be empty")
+	}
+	minAnchorBlockNumber := uint64(0)
+	if originBlockNumber > anchorMaxOffsetForChain(chainID) {
+		minAnchorBlockNumber = originBlockNumber - anchorMaxOffsetForChain(chainID)
+	}
+	var previousAnchorBlockNumber uint64
+	hasPreviousAnchorBlockNumber := false
+	for _, anchor := range anchorBlockNumbers {
+		if anchor < lastAnchorBlockNumber {
+			return fmt.Errorf("anchor %d is below last anchor block number %d", anchor, lastAnchorBlockNumber)
+		}
+		if anchor < minAnchorBlockNumber || anchor > originBlockNumber {
+			return fmt.Errorf("anchor %d is outside valid range [%d, %d]", anchor, minAnchorBlockNumber, originBlockNumber)
+		}
+		if hasPreviousAnchorBlockNumber && anchor < previousAnchorBlockNumber {
+			return fmt.Errorf("anchor %d regressed below previous anchor %d", anchor, previousAnchorBlockNumber)
+		}
+		previousAnchorBlockNumber = anchor
+		hasPreviousAnchorBlockNumber = true
+	}
+	return nil
+}
+
+func anchorMaxOffsetForChain(chainID uint64) uint64 {
+	if chainID == shastaManifestMainnetChain {
+		return shastaMaxAnchorOffsetMainnet
+	}
+	return shastaMaxAnchorOffset
 }
 
 func validateManifestGasLimit(
