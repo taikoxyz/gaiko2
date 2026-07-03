@@ -131,6 +131,37 @@ func TestNewServerReturnsSuccessEnvelope(t *testing.T) {
 	}
 }
 
+func TestNewServerStopsValidationOnCanceledContext(t *testing.T) {
+	service := &recordingService{
+		result: protocol.ProofResult{Input: "0xinput"},
+	}
+	server := NewServer(service)
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	req := httptest.NewRequest(
+		http.MethodPost,
+		"/prove/shasta",
+		bytes.NewReader(loadSharedShastaRequestJSON(t)),
+	).WithContext(ctx)
+	recorder := httptest.NewRecorder()
+
+	server.ServeHTTP(recorder, req)
+
+	if service.proveCalls != 0 {
+		t.Fatalf("canceled request reached prover service %d time(s)", service.proveCalls)
+	}
+	if recorder.Code != http.StatusBadRequest {
+		t.Fatalf("unexpected status: %d", recorder.Code)
+	}
+	var resp protocol.ProofResponse
+	if err := json.Unmarshal(recorder.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+	if resp.Error == nil || !strings.Contains(resp.Error.Message, context.Canceled.Error()) {
+		t.Fatalf("expected context cancellation response, got %+v", resp.Error)
+	}
+}
+
 func TestNewServerRejectsUnsupportedProposalV2(t *testing.T) {
 	service := &recordingService{}
 	server := NewServer(service)

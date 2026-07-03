@@ -260,6 +260,37 @@ func TestValidateManifestBindingRejectsPartialWitnessStateDuringFiltering(t *tes
 	}
 }
 
+func TestDecodeManifestPayloadRejectsOversizedDecodedPayload(t *testing.T) {
+	payload := encodeCompressedManifestBytes(t, bytes.Repeat([]byte{0}, shastaMaxManifestDecodedPayload+1))
+
+	_, err := decodeManifestPayload(payload, 0, 1)
+	if err == nil {
+		t.Fatalf("expected decoded payload size error")
+	}
+	if !strings.Contains(err.Error(), "decompressed manifest payload exceeds") {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
+func TestDecodeManifestPayloadRejectsTooManyTransactionsInBlock(t *testing.T) {
+	tx := decodeTestTransaction(t, manifestUserTxJSON(t, 167001, 0, testAddress("31")))
+	txs := make(types.Transactions, int(shastaMaxManifestTxsPerBlock)+1)
+	for index := range txs {
+		txs[index] = tx
+	}
+	payload := encodeTestManifestPayload(t, testDerivationSourceManifest{
+		Blocks: []testManifestBlock{{Transactions: txs}},
+	})
+
+	_, err := decodeManifestPayload(payload, 0, 1)
+	if err == nil {
+		t.Fatalf("expected transaction count error")
+	}
+	if !strings.Contains(err.Error(), "transaction count") {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
 func TestValidateManifestBindingRejectsMismatches(t *testing.T) {
 	cases := []struct {
 		name    string
@@ -843,7 +874,11 @@ func encodeTestManifestPayload(t *testing.T, manifest testDerivationSourceManife
 	if err != nil {
 		t.Fatalf("rlp encode manifest: %v", err)
 	}
+	return encodeCompressedManifestBytes(t, encoded)
+}
 
+func encodeCompressedManifestBytes(t *testing.T, encoded []byte) []byte {
+	t.Helper()
 	var compressed bytes.Buffer
 	zw := zlib.NewWriter(&compressed)
 	if _, err := zw.Write(encoded); err != nil {

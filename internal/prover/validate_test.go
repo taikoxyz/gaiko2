@@ -2,6 +2,7 @@ package prover
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"strings"
 	"testing"
@@ -81,6 +82,30 @@ func TestValidateRequestV1RejectsManifestMismatch(t *testing.T) {
 	_, err := ValidateRequest(req)
 	if err == nil || !strings.Contains(err.Error(), "manifest block 0") {
 		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
+func TestValidateRequestErrorCarriesGuestInputMetadata(t *testing.T) {
+	fixture := newManifestBindingFixture(t)
+	fixture.blockTimestamp++
+	input := fixture.view(t).Raw
+	req := protocol.ShastaRequest{
+		Schema: protocol.ShastaRequestSchemaV1,
+		Payload: protocol.ShastaPayload{
+			GuestInput: &input,
+		},
+	}
+
+	_, err := ValidateRequest(req)
+	var validationErr *ValidationError
+	if !errors.As(err, &validationErr) {
+		t.Fatalf("expected validation error with metadata, got %T %v", err, err)
+	}
+	if validationErr.Metadata.ChainID != fixture.chainID {
+		t.Fatalf("unexpected metadata chain id: %d", validationErr.Metadata.ChainID)
+	}
+	if validationErr.Metadata.BlockCount != 1 {
+		t.Fatalf("unexpected metadata block count: %d", validationErr.Metadata.BlockCount)
 	}
 }
 

@@ -16,13 +16,14 @@ import (
 )
 
 func validateManifestTransactionRoot(
+	ctx context.Context,
 	view *GuestInputView,
 	canonicalBlock *types.Block,
 	witness *ReplayWitness,
 	manifestTxs types.Transactions,
 ) error {
 	filteredTxs, err := filterManifestTransactions(
-		context.Background(),
+		ctx,
 		view.GuestInputChainID,
 		canonicalBlock,
 		manifestTxs,
@@ -75,7 +76,7 @@ func filterManifestTransactions(
 
 	executionBlock, _ := replayExecutionBlock(config, canonicalBlock)
 	chain := newReplayChainContext(config, executionBlock, witness)
-	candidates, err := manifestCandidateTransactions(config, executionBlock.Header(), canonicalTxs[0], manifestTxs)
+	candidates, err := manifestCandidateTransactions(ctx, config, executionBlock.Header(), canonicalTxs[0], manifestTxs)
 	if err != nil {
 		return nil, err
 	}
@@ -92,20 +93,19 @@ func filterManifestTransactions(
 }
 
 func manifestCandidateTransactions(
+	ctx context.Context,
 	config *params.ChainConfig,
 	header *types.Header,
 	anchor *types.Transaction,
 	manifestTxs types.Transactions,
 ) (types.Transactions, error) {
-	anchorCopy, err := cloneTransaction(anchor)
-	if err != nil {
-		return nil, fmt.Errorf("clone anchor transaction: %w", err)
-	}
-
 	signer := types.MakeSigner(config, header.Number, header.Time)
 	candidates := make(types.Transactions, 0, 1+len(manifestTxs))
-	candidates = append(candidates, anchorCopy)
+	candidates = append(candidates, anchor)
 	for _, tx := range manifestTxs {
+		if err := ctx.Err(); err != nil {
+			return nil, err
+		}
 		if tx.Type() == types.BlobTxType {
 			continue
 		}
@@ -127,6 +127,9 @@ func commitFilteredManifestTransactions(
 ) (types.Transactions, error) {
 	if len(candidates) == 0 {
 		return nil, fmt.Errorf("missing anchor transaction")
+	}
+	if err := ctx.Err(); err != nil {
+		return nil, err
 	}
 
 	var (
@@ -150,9 +153,6 @@ func commitFilteredManifestTransactions(
 
 	blockContext := core.NewEVMBlockContext(header, chain, nil)
 	evm := vm.NewEVM(blockContext, tracingStateDB, config, cfg)
-	if isUnzen {
-		evm.SetZkGasMeter(cfg.ZkGasMeter)
-	}
 
 	if beaconRoot := block.BeaconRoot(); beaconRoot != nil {
 		core.ProcessBeaconBlockRoot(*beaconRoot, evm)
@@ -166,6 +166,9 @@ func commitFilteredManifestTransactions(
 
 	committed := make(types.Transactions, 0, len(candidates))
 	for index, tx := range candidates {
+		if err := ctx.Err(); err != nil {
+			return nil, err
+		}
 		txCopy := tx
 		if index == 0 {
 			var err error

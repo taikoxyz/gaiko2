@@ -2,12 +2,10 @@ package prover
 
 import (
 	"context"
+	"errors"
 	"testing"
 
-	"github.com/ethereum/go-ethereum/core/state"
 	"github.com/ethereum/go-ethereum/core/types"
-	"github.com/ethereum/go-ethereum/params"
-	"github.com/ethereum/go-ethereum/triedb"
 )
 
 func TestFilterManifestTransactionsMatchesCanonicalBlock(t *testing.T) {
@@ -40,24 +38,25 @@ func TestFilterManifestTransactionsMatchesCanonicalBlock(t *testing.T) {
 	}
 }
 
-func mustChainConfig(t *testing.T, chainID uint64) *params.ChainConfig {
-	t.Helper()
-	config, err := chainConfigFor(chainID)
-	if err != nil {
-		t.Fatalf("chain config: %v", err)
-	}
-	return config
-}
+func TestFilterManifestTransactionsHonorsCanceledContext(t *testing.T) {
+	fixture := newManifestBindingFixture(t)
+	view := fixture.view(t)
 
-func mustWitnessStateDB(t *testing.T, witness *ReplayWitness) *state.StateDB {
-	t.Helper()
-	memdb := witness.Witness.MakeHashDB()
-	statedb, err := state.New(
-		witness.Witness.Root(),
-		state.NewDatabase(triedb.NewDatabase(memdb, triedb.HashDefaults), state.NewCodeDB(memdb)),
-	)
+	block, witness, err := decodeReplayBlock(view.Witnesses[0].ReplayBlock)
 	if err != nil {
-		t.Fatalf("open witness state: %v", err)
+		t.Fatalf("decode replay block: %v", err)
 	}
-	return statedb
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	_, err = filterManifestTransactions(
+		ctx,
+		fixture.chainID,
+		block,
+		types.Transactions{decodeTestTransaction(t, fixture.manifestUserTxJSON)},
+		witness,
+	)
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("expected context.Canceled, got %v", err)
+	}
 }
