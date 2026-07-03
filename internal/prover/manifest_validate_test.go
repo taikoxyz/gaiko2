@@ -15,6 +15,7 @@ import (
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/core/rawdb"
 	"github.com/ethereum/go-ethereum/core/state"
+	"github.com/ethereum/go-ethereum/core/tracing"
 	"github.com/ethereum/go-ethereum/core/types"
 	"github.com/ethereum/go-ethereum/crypto"
 	"github.com/ethereum/go-ethereum/params"
@@ -94,6 +95,99 @@ func TestValidateManifestBindingRevertsFilteredApplyErrorState(t *testing.T) {
 	view := fixture.view(t)
 	if err := ValidateGuestInputManifestBinding(view); err != nil {
 		t.Fatalf("validate manifest binding with reverted filtered transaction: %v", err)
+	}
+}
+
+func TestValidateManifestBindingRevertsFilteredInsufficientBalanceState(t *testing.T) {
+	fixture := newManifestBindingFixture(t)
+	tooExpensive := manifestUserTxJSONWithGas(t, fixture.chainID, 0, testAddress("31"), 1_000_000)
+	included := manifestUserTxJSON(t, fixture.chainID, 0, testAddress("32"))
+	fixture.manifestUserTxJSONs = []json.RawMessage{tooExpensive, included}
+	fixture.blockUserTxJSONs = []json.RawMessage{included}
+
+	signer := manifestTestTxSigner(t)
+	witnessStateNodes, witnessStateRoot := witnessStateNodesWithBalance(t, signer, new(big.Int).SetUint64(manifestTestLowGasBalance))
+	fixture.parentHeader.Root = witnessStateRoot
+	fixture.witnessStateNodes = witnessStateNodes
+
+	view := fixture.view(t)
+	if err := ValidateGuestInputManifestBinding(view); err != nil {
+		t.Fatalf("validate manifest binding with reverted insufficient-balance transaction: %v", err)
+	}
+}
+
+func TestValidateManifestBindingRejectsCanonicalBodyPastZkGasTruncation(t *testing.T) {
+	fixture := newManifestBindingFixture(t)
+	manifestTxJSONs := manifestSequentialUserTxJSONs(t, fixture.chainID, 450)
+	fixture.manifestUserTxJSONs = manifestTxJSONs
+	fixture.blockUserTxJSONs = manifestTxJSONs
+
+	signer := manifestTestTxSigner(t)
+	witnessStateNodes, witnessStateRoot := witnessStateNodesWithBalance(t, signer, new(big.Int).SetUint64(1_000_000_000_000_000_000))
+	fixture.parentHeader.Root = witnessStateRoot
+	fixture.witnessStateNodes = witnessStateNodes
+
+	err := ValidateGuestInputManifestBinding(fixture.view(t))
+	if err == nil {
+		t.Fatalf("expected transaction root mismatch for body past zkGas truncation")
+	}
+	if !strings.Contains(err.Error(), "transaction root mismatch") {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
+func TestValidateManifestBindingKeepsRuntimeOutOfGasTransaction(t *testing.T) {
+	fixture := newManifestBindingFixture(t)
+	loopContract := common.HexToAddress(testAddress("45"))
+	runtimeOOG := manifestUserTxJSONWithGas(t, fixture.chainID, 0, loopContract.Hex(), 25_000)
+	included := manifestUserTxJSON(t, fixture.chainID, 1, testAddress("32"))
+	fixture.manifestUserTxJSONs = []json.RawMessage{runtimeOOG, included}
+	fixture.blockUserTxJSONs = []json.RawMessage{runtimeOOG, included}
+
+	signer := manifestTestTxSigner(t)
+	witnessStateNodes, witnessCodes, witnessStateRoot := witnessStateNodesWithBalanceAndCode(
+		t,
+		signer,
+		new(big.Int).SetUint64(1_000_000_000_000),
+		loopContract,
+		runtimeOutOfGasLoopCode(),
+	)
+	fixture.parentHeader.Root = witnessStateRoot
+	fixture.witnessStateNodes = witnessStateNodes
+	fixture.witnessCodes = witnessCodes
+
+	view := fixture.view(t)
+	if err := ValidateGuestInputManifestBinding(view); err != nil {
+		t.Fatalf("validate manifest binding with runtime out-of-gas transaction: %v", err)
+	}
+}
+
+func TestValidateManifestBindingRejectsDroppingRuntimeOutOfGasTransaction(t *testing.T) {
+	fixture := newManifestBindingFixture(t)
+	loopContract := common.HexToAddress(testAddress("45"))
+	runtimeOOG := manifestUserTxJSONWithGas(t, fixture.chainID, 0, loopContract.Hex(), 25_000)
+	included := manifestUserTxJSON(t, fixture.chainID, 1, testAddress("32"))
+	fixture.manifestUserTxJSONs = []json.RawMessage{runtimeOOG, included}
+	fixture.blockUserTxJSONs = []json.RawMessage{included}
+
+	signer := manifestTestTxSigner(t)
+	witnessStateNodes, witnessCodes, witnessStateRoot := witnessStateNodesWithBalanceAndCode(
+		t,
+		signer,
+		new(big.Int).SetUint64(1_000_000_000_000),
+		loopContract,
+		runtimeOutOfGasLoopCode(),
+	)
+	fixture.parentHeader.Root = witnessStateRoot
+	fixture.witnessStateNodes = witnessStateNodes
+	fixture.witnessCodes = witnessCodes
+
+	err := ValidateGuestInputManifestBinding(fixture.view(t))
+	if err == nil {
+		t.Fatalf("expected transaction root mismatch when runtime out-of-gas transaction is dropped")
+	}
+	if !strings.Contains(err.Error(), "transaction root mismatch") {
+		t.Fatalf("unexpected error: %v", err)
 	}
 }
 
@@ -462,6 +556,7 @@ type manifestBindingFixture struct {
 	omitUserTx                  bool
 	addManifestBlock            bool
 	witnessStateNodes           []string
+	witnessCodes                []string
 	omitProposalAncestorHeaders bool
 	omitGrandparentHeader       bool
 	blobBacked                  bool
@@ -558,6 +653,10 @@ func (f *manifestBindingFixture) view(t *testing.T) *GuestInputView {
 	if err != nil {
 		t.Fatalf("marshal witness state nodes: %v", err)
 	}
+	witnessCodesJSON, err := json.Marshal(f.witnessCodes)
+	if err != nil {
+		t.Fatalf("marshal witness codes: %v", err)
+	}
 
 	proposalAncestorHeaders := []json.RawMessage{}
 	if !f.omitGrandparentHeader && f.grandparentHeader != nil {
@@ -573,9 +672,9 @@ func (f *manifestBindingFixture) view(t *testing.T) *GuestInputView {
 			mustRawMessage(t, fmt.Sprintf(`{
 				"block": %s,
 				"chain_spec": %s,
-				"witness": {"state": %s, "state_indices": [], "codes": [], "headers": [%s]},
+				"witness": {"state": %s, "state_indices": [], "codes": %s, "headers": [%s]},
 				"accounts": {}
-			}`, block, f.chainSpecJSON(t), witnessStateJSON, f.parentWitnessHeaderJSON(t))),
+			}`, block, f.chainSpecJSON(t), witnessStateJSON, witnessCodesJSON, f.parentWitnessHeaderJSON(t))),
 		},
 		Taiko: mustRawMessage(t, fmt.Sprintf(`{
 			"chain_spec": {"chain_id": %d},
@@ -1190,6 +1289,52 @@ func witnessStateNodesWithBalances(t *testing.T, balances map[common.Address]*bi
 	return nodes, root
 }
 
+func witnessStateNodesWithBalanceAndCode(
+	t *testing.T,
+	balanceAddress common.Address,
+	balance *big.Int,
+	codeAddress common.Address,
+	code []byte,
+) ([]string, []string, common.Hash) {
+	t.Helper()
+
+	memdb := rawdb.NewMemoryDatabase()
+	tdb := triedb.NewDatabase(memdb, triedb.HashDefaults)
+	statedb, err := state.New(types.EmptyRootHash, state.NewDatabase(tdb, state.NewCodeDB(memdb)))
+	if err != nil {
+		t.Fatalf("open test state: %v", err)
+	}
+	statedb.AddBalance(balanceAddress, uint256.MustFromBig(balance), 0)
+	statedb.SetCode(codeAddress, code, tracing.CodeChangeUnspecified)
+
+	root, err := statedb.Commit(0, false, false)
+	if err != nil {
+		t.Fatalf("commit test state: %v", err)
+	}
+
+	stateTrie, err := trie.NewStateTrie(trie.StateTrieID(root), tdb)
+	if err != nil {
+		t.Fatalf("open test state trie: %v", err)
+	}
+	it, err := stateTrie.NodeIterator(nil)
+	if err != nil {
+		t.Fatalf("iterate test state trie: %v", err)
+	}
+
+	nodes := make([]string, 0, 8)
+	for it.Next(true) {
+		if it.Hash() == (common.Hash{}) {
+			continue
+		}
+		blob := it.NodeBlob()
+		if len(blob) == 0 {
+			continue
+		}
+		nodes = append(nodes, "0x"+hex.EncodeToString(blob))
+	}
+	return nodes, []string{"0x" + hex.EncodeToString(code)}, root
+}
+
 func rootWitnessNode(t *testing.T, nodes []string, root common.Hash) string {
 	t.Helper()
 	for _, node := range nodes {
@@ -1203,4 +1348,8 @@ func rootWitnessNode(t *testing.T, nodes []string, root common.Hash) string {
 	}
 	t.Fatalf("root witness node %s not found", root.Hex())
 	return ""
+}
+
+func runtimeOutOfGasLoopCode() []byte {
+	return []byte{0x5b, 0x60, 0x00, 0x56}
 }
