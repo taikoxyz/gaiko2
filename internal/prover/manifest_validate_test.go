@@ -266,6 +266,26 @@ func TestValidateSourceAwareManifestAnchorsAcceptsForcedPrefixThenNormalCatchup(
 	}
 }
 
+func TestValidateSourceAwareManifestAnchorsAcceptsOutOfRangeStalledBypassShape(t *testing.T) {
+	lastAnchor := uint64(13_414)
+	origin := lastAnchor + anchorMaxOffsetForChain(167001) + 1
+	spans := []manifestAnchorSourceSpan{
+		{isForcedInclusion: true, blockCount: 1},
+		{isForcedInclusion: false, blockCount: 1},
+	}
+
+	err := validateSourceAwareManifestAnchors(
+		[]uint64{lastAnchor, lastAnchor},
+		spans,
+		lastAnchor,
+		origin,
+		167001,
+	)
+	if err != nil {
+		t.Fatalf("validate source-aware stalled-anchor bypass shape: %v", err)
+	}
+}
+
 func TestValidateSourceAwareManifestAnchorsRejectsForcedSourceThatBumpsAnchor(t *testing.T) {
 	spans := []manifestAnchorSourceSpan{
 		{isForcedInclusion: true, blockCount: 1},

@@ -620,6 +620,10 @@ func validateSourceAwareManifestAnchors(
 	if end != len(anchorBlockNumbers) {
 		return fmt.Errorf("source spans cover %d blocks but anchor block numbers have %d", end, len(anchorBlockNumbers))
 	}
+	// The all-stay out-of-range case is bound later against the parent L2 CheckpointStore.
+	if shouldBypassStalledAnchorLinkage(anchorBlockNumbers, lastAnchorBlockNumber, originBlockNumber, chainID) {
+		return nil
+	}
 	return validateManifestAnchorProgression(
 		anchorBlockNumbers[cursor:end],
 		lastAnchorBlockNumber,
