@@ -601,6 +601,51 @@ func TestValidateManifestBindingRejectsMismatches(t *testing.T) {
 	}
 }
 
+func TestValidateManifestBindingRejectsNonCanonicalAnchorGas(t *testing.T) {
+	fixture := newManifestBindingFixture(t)
+	fixture.anchorGas = shastaAnchorGasLimit + 1
+	view := fixture.view(t)
+	err := ValidateGuestInputManifestBinding(view)
+	if err == nil || !strings.Contains(err.Error(), "anchor transaction gas limit mismatch") {
+		t.Fatalf("expected anchor gas rejection, got %v", err)
+	}
+}
+
+func TestValidateManifestBindingRejectsNonGoldenTouchAnchorSender(t *testing.T) {
+	fixture := newManifestBindingFixture(t)
+	fixture.anchorPrivateKeyHex = manifestTestTxPrivateKeyHex
+	view := fixture.view(t)
+	block, _, err := decodeReplayBlock(view.Witnesses[0].ReplayBlock)
+	if err != nil {
+		t.Fatalf("decode replay block: %v", err)
+	}
+	err = validateManifestAnchorTransaction(view, block.Transactions()[0], block.Header(), shastaManifestBlock{
+		AnchorBlockNumber: fixture.anchorBlockNumber,
+	})
+	if err == nil || !strings.Contains(err.Error(), "anchor transaction sender mismatch") {
+		t.Fatalf("expected anchor sender rejection, got %v", err)
+	}
+}
+
+func TestValidateManifestBindingRejectsRequestControlledAnchorRecipient(t *testing.T) {
+	fixture := newManifestBindingFixture(t)
+	attacker := common.HexToAddress(testAddress("44"))
+	fixture.l2Contract = attacker
+	fixture.anchorTo = attacker
+	view := fixture.view(t)
+	err := ValidateGuestInputManifestBinding(view)
+	if err == nil || !strings.Contains(err.Error(), "anchor transaction recipient mismatch") {
+		t.Fatalf("expected canonical anchor recipient rejection, got %v", err)
+	}
+}
+
+func testTaikoL2Address(chainID uint64) common.Address {
+	prefix := strings.TrimPrefix(fmt.Sprintf("%d", chainID), "0")
+	const suffix = "10001"
+	padding := common.AddressLength*2 - len(prefix) - len(suffix)
+	return common.HexToAddress("0x" + prefix + strings.Repeat("0", padding) + suffix)
+}
+
 func TestValidateGuestInputBlobSourcesAcceptsInlineCalldataSource(t *testing.T) {
 	view := newManifestBindingFixture(t).view(t)
 
@@ -634,6 +679,8 @@ type manifestBindingFixture struct {
 	omitBlockBaseFee            bool
 	l2Contract                  common.Address
 	anchorTo                    common.Address
+	anchorGas                   uint64
+	anchorPrivateKeyHex         string
 	anchorBlockNumber           uint64
 	omitAnchorTx                bool
 	omitUserTx                  bool
@@ -701,22 +748,24 @@ func newManifestBindingFixture(t *testing.T) *manifestBindingFixture {
 			Nonce:       types.BlockNonce{},
 			BaseFee:     new(big.Int).SetUint64(manifestTestBaseFee),
 		},
-		manifestTimestamp:  1_001,
-		manifestCoinbase:   common.HexToAddress(testAddress("22")),
-		manifestGasLimit:   manifestGasLimit,
-		manifestUserTxJSON: manifestTx,
-		blockUserTxJSON:    manifestTx,
-		blockTimestamp:     1_001,
-		blockCoinbase:      common.HexToAddress(testAddress("22")),
-		blockNumber:        blockNumber,
-		blockGasLimit:      manifestGasLimit + 1_000_000,
-		blockExtra:         manifestExtraData(42, proposalID),
-		blockMixDigest:     manifestMixHash(common.BigToHash(parentDifficulty), blockNumber),
-		blockBaseFee:       manifestTestBaseFee,
-		l2Contract:         common.HexToAddress(testAddress("44")),
-		anchorTo:           common.HexToAddress(testAddress("44")),
-		anchorBlockNumber:  900,
-		witnessStateNodes:  witnessStateNodes,
+		manifestTimestamp:   1_001,
+		manifestCoinbase:    common.HexToAddress(testAddress("22")),
+		manifestGasLimit:    manifestGasLimit,
+		manifestUserTxJSON:  manifestTx,
+		blockUserTxJSON:     manifestTx,
+		blockTimestamp:      1_001,
+		blockCoinbase:       common.HexToAddress(testAddress("22")),
+		blockNumber:         blockNumber,
+		blockGasLimit:       manifestGasLimit + 1_000_000,
+		blockExtra:          manifestExtraData(42, proposalID),
+		blockMixDigest:      manifestMixHash(common.BigToHash(parentDifficulty), blockNumber),
+		blockBaseFee:        manifestTestBaseFee,
+		l2Contract:          testTaikoL2Address(chainID),
+		anchorTo:            testTaikoL2Address(chainID),
+		anchorGas:           shastaAnchorGasLimit,
+		anchorPrivateKeyHex: nativeProofPrivateKey,
+		anchorBlockNumber:   900,
+		witnessStateNodes:   witnessStateNodes,
 	}
 	fixture.parentHeader.ParentHash = fixture.grandparentHeader.Hash()
 	return fixture
@@ -975,22 +1024,31 @@ func (f *manifestBindingFixture) blockJSON(t *testing.T) json.RawMessage {
 func (f *manifestBindingFixture) anchorTxJSON(t *testing.T) json.RawMessage {
 	t.Helper()
 	input := anchorInput(t, f.anchorBlockNumber, common.HexToHash(testHash("61")), common.HexToHash(testHash("62")))
+	key, err := crypto.HexToECDSA(f.anchorPrivateKeyHex)
+	if err != nil {
+		t.Fatalf("parse anchor tx key: %v", err)
+	}
+	cfg, err := chainConfigFor(f.chainID)
+	if err != nil {
+		t.Fatalf("chain config: %v", err)
+	}
+	tx := types.NewTx(&types.DynamicFeeTx{
+		ChainID: new(big.Int).SetUint64(f.chainID), Nonce: 0, GasTipCap: big.NewInt(0),
+		GasFeeCap: new(big.Int).SetUint64(f.blockBaseFee), Gas: f.anchorGas, To: &f.anchorTo,
+		Value: big.NewInt(0), Data: input,
+	})
+	signed, err := types.SignTx(tx, types.MakeSigner(cfg, new(big.Int).SetUint64(f.blockNumber), f.blockTimestamp), key)
+	if err != nil {
+		t.Fatalf("sign anchor tx: %v", err)
+	}
+	v, r, s := signed.RawSignatureValues()
 	return mustRawMessage(t, fmt.Sprintf(`{
-		"signature": {"r": "0x1", "s": "0x1", "yParity": "0x0"},
-		"transaction": {
-			"Eip1559": {
-				"chain_id": "0x%x",
-				"nonce": "0x0",
-				"max_priority_fee_per_gas": "0x0",
-				"max_fee_per_gas": "0x%x",
-				"gas": "0xf4240",
-				"to": %q,
-				"value": "0x0",
-				"input": %q,
-				"access_list": []
-			}
-		}
-	}`, f.chainID, f.blockBaseFee, f.anchorTo.Hex(), "0x"+hex.EncodeToString(input)))
+		"signature": {"r": "0x%s", "s": "0x%s", "yParity": "0x%s"},
+		"transaction": {"Eip1559": {"chain_id": "0x%x", "nonce": "0x0",
+			"max_priority_fee_per_gas": "0x0", "max_fee_per_gas": "0x%x", "gas": "0x%x",
+			"to": %q, "value": "0x0", "input": %q, "access_list": []}}}`,
+		r.Text(16), s.Text(16), v.Text(16), f.chainID, f.blockBaseFee, f.anchorGas,
+		f.anchorTo.Hex(), "0x"+hex.EncodeToString(input)))
 }
 
 func (f *manifestBindingFixture) chainSpecJSON(t *testing.T) json.RawMessage {

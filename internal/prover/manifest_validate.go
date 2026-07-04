@@ -34,7 +34,10 @@ const (
 	shastaMaxManifestOffset          = shastaBytesPerBlob - 64
 	shastaMaxManifestDecodedPayload  = 16 * 1024 * 1024
 	shastaMaxManifestTxsPerBlock     = shastaMaxBlockGasLimit / params.TxGas
+	shastaTaikoL2AddressSuffix       = "10001"
 )
+
+var shastaGoldenTouchAccount = common.HexToAddress("0x0000777735367b36bC9B61C50022d9D0700dB4Ec")
 
 type shastaSourceManifest struct {
 	Blocks []shastaManifestBlock
@@ -932,7 +935,10 @@ func validateManifestAnchorTransaction(
 	header *types.Header,
 	expected shastaManifestBlock,
 ) error {
-	expectedRecipient, err := decodeWitnessL2Contract(view)
+	if tx.Type() != types.DynamicFeeTxType {
+		return fmt.Errorf("anchor transaction type mismatch: expected %d got %d", types.DynamicFeeTxType, tx.Type())
+	}
+	expectedRecipient, err := shastaTaikoL2Address(view.GuestInputChainID)
 	if err != nil {
 		return err
 	}
@@ -946,8 +952,17 @@ func validateManifestAnchorTransaction(
 	if tx.ChainId().Uint64() != view.GuestInputChainID {
 		return fmt.Errorf("anchor transaction chain_id mismatch: expected %d got %s", view.GuestInputChainID, tx.ChainId())
 	}
+	if tx.Value().Sign() != 0 {
+		return fmt.Errorf("anchor transaction value mismatch: expected 0 got %s", tx.Value())
+	}
+	if tx.Gas() != shastaAnchorGasLimit {
+		return fmt.Errorf("anchor transaction gas limit mismatch: expected %d got %d", shastaAnchorGasLimit, tx.Gas())
+	}
 	if header.BaseFee == nil {
 		return fmt.Errorf("missing base fee per gas in block header")
+	}
+	if header.Number == nil {
+		return fmt.Errorf("block header is missing number for anchor transaction validation")
 	}
 	if tx.GasFeeCap().Cmp(header.BaseFee) != 0 {
 		return fmt.Errorf("anchor transaction max_fee_per_gas mismatch: expected %s got %s", header.BaseFee, tx.GasFeeCap())
@@ -957,6 +972,21 @@ func validateManifestAnchorTransaction(
 	}
 	if len(tx.AccessList()) != 0 {
 		return fmt.Errorf("anchor transaction access list must be empty")
+	}
+	config, err := chainConfigFor(view.GuestInputChainID)
+	if err != nil {
+		return err
+	}
+	sender, err := types.Sender(types.MakeSigner(config, header.Number, header.Time), tx)
+	if err != nil {
+		return fmt.Errorf("recover anchor transaction sender: %w", err)
+	}
+	if sender != shastaGoldenTouchAccount {
+		return fmt.Errorf(
+			"anchor transaction sender mismatch: expected %s got %s",
+			shastaGoldenTouchAccount.Hex(),
+			sender.Hex(),
+		)
 	}
 	checkpoint, err := decodeAnchorV4Checkpoint(tx.Data())
 	if err != nil {
@@ -972,19 +1002,13 @@ func validateManifestAnchorTransaction(
 	return nil
 }
 
-func decodeWitnessL2Contract(view *GuestInputView) (common.Address, error) {
-	if len(view.Witnesses) == 0 {
-		return common.Address{}, fmt.Errorf("guest input must include at least one witness")
+func shastaTaikoL2Address(chainID uint64) (common.Address, error) {
+	prefix := strings.TrimPrefix(fmt.Sprintf("%d", chainID), "0")
+	padding := common.AddressLength*2 - len(prefix) - len(shastaTaikoL2AddressSuffix)
+	if padding < 0 {
+		return common.Address{}, fmt.Errorf("chain_id %d is too long to derive TaikoL2 address", chainID)
 	}
-	fields, err := decodeJSONObject(view.Witnesses[0].ChainSpecRaw)
-	if err != nil {
-		return common.Address{}, fmt.Errorf("unmarshal witness.chain_spec: %w", err)
-	}
-	l2Contract, err := requireAddress(fields, "l2_contract", "l2Contract")
-	if err != nil {
-		return common.Address{}, fmt.Errorf("parse witness.chain_spec.l2_contract: %w", err)
-	}
-	return l2Contract, nil
+	return common.HexToAddress("0x" + prefix + strings.Repeat("0", padding) + shastaTaikoL2AddressSuffix), nil
 }
 
 type anchorV4CheckpointView struct {
