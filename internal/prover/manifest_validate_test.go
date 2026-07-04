@@ -1698,3 +1698,18 @@ func TestValidateAnchorL1LinkageRejectsForgedCheckpointStateRoot(t *testing.T) {
 		t.Fatalf("expected forged stateRoot rejection, got %v", err)
 	}
 }
+
+func TestShastaCheckpointStorageSlots(t *testing.T) {
+	blockHashSlot, stateRootSlot := shastaCheckpointStorageSlots(24862915)
+	var buf [64]byte
+	new(big.Int).SetUint64(24862915).FillBytes(buf[0:32])
+	new(big.Int).SetUint64(254).FillBytes(buf[32:64])
+	want := crypto.Keccak256Hash(buf[:])
+	if blockHashSlot != want {
+		t.Fatalf("blockHashSlot: got %s want %s", blockHashSlot.Hex(), want.Hex())
+	}
+	wantSR := common.BigToHash(new(big.Int).Add(want.Big(), big.NewInt(1)))
+	if stateRootSlot != wantSR {
+		t.Fatalf("stateRootSlot: got %s want %s", stateRootSlot.Hex(), wantSR.Hex())
+	}
+}

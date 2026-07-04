@@ -37,6 +37,8 @@ const (
 	shastaTaikoL2AddressSuffix       = "10001"
 )
 
+const shastaSignalServiceCheckpointsSlot uint64 = 254
+
 var shastaGoldenTouchAccount = common.HexToAddress("0x0000777735367b36bC9B61C50022d9D0700dB4Ec")
 
 type shastaSourceManifest struct {
@@ -1065,6 +1067,15 @@ func shastaManifestParentDifficulty(parentHeader *types.Header) common.Hash {
 		return common.Hash{}
 	}
 	return common.BigToHash(parentHeader.Difficulty)
+}
+
+func shastaCheckpointStorageSlots(blockNumber uint64) (common.Hash, common.Hash) {
+	var buf [64]byte
+	new(big.Int).SetUint64(blockNumber).FillBytes(buf[0:32])
+	new(big.Int).SetUint64(shastaSignalServiceCheckpointsSlot).FillBytes(buf[32:64])
+	blockHashSlot := crypto.Keccak256Hash(buf[:])
+	stateRootSlot := common.BigToHash(new(big.Int).Add(blockHashSlot.Big(), big.NewInt(1)))
+	return blockHashSlot, stateRootSlot
 }
 
 func decodeGuestInputL1Headers(raw json.RawMessage) (*types.Header, []*types.Header, error) {
