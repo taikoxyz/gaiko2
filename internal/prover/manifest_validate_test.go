@@ -498,6 +498,23 @@ func TestValidateManifestBindingRejectsForgedLastAnchorBaseline(t *testing.T) {
 	}
 }
 
+func TestValidateManifestBindingUsesVerifiedAnchorWhenFieldAbsent(t *testing.T) {
+	fixture := newManifestBindingFixture(t)
+	fixture.lastAnchorBlockNumber = nil // omit prover_data.last_anchor_block_number
+	// Default seeded anchor baseline is 899; the derived source advances to 900.
+	if err := ValidateGuestInputManifestBinding(fixture.view(t)); err != nil {
+		t.Fatalf("expected binding to succeed using the verified anchor, got %v", err)
+	}
+}
+
+func TestValidateManifestBindingAcceptsMatchingLastAnchorBaseline(t *testing.T) {
+	fixture := newManifestBindingFixture(t)
+	fixture.lastAnchorBlockNumber = manifestUint64Ptr(manifestDefaultParentAnchorBlockNumber) // 899 == seeded slot 256
+	if err := ValidateGuestInputManifestBinding(fixture.view(t)); err != nil {
+		t.Fatalf("expected binding to succeed when field matches verified anchor, got %v", err)
+	}
+}
+
 func TestDecodeManifestPayloadRejectsOversizedDecodedPayload(t *testing.T) {
 	payload := encodeCompressedManifestBytes(t, bytes.Repeat([]byte{0}, shastaMaxManifestDecodedPayload+1))
 
