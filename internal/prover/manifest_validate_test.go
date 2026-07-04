@@ -453,7 +453,7 @@ func TestValidateManifestBindingRejectsUnlinkedGrandparentHeader(t *testing.T) {
 	}
 }
 
-func TestValidateManifestBindingRejectsPartialWitnessStateDuringFiltering(t *testing.T) {
+func TestValidateManifestBindingRejectsPartialWitnessStateForAnchorBaseline(t *testing.T) {
 	fixture := newManifestBindingFixture(t)
 	signer := manifestTestTxSigner(t)
 	witnessStateNodes, witnessStateRoot := witnessStateNodesWithBalances(t, map[common.Address]*big.Int{
@@ -468,8 +468,33 @@ func TestValidateManifestBindingRejectsPartialWitnessStateDuringFiltering(t *tes
 	if err == nil {
 		t.Fatalf("expected partial witness state error")
 	}
-	if !strings.Contains(err.Error(), "witness state") {
-		t.Fatalf("expected witness state error, got %v", err)
+	if !strings.Contains(err.Error(), "parent Anchor._blockState") {
+		t.Fatalf("expected fail-closed parent anchor read error, got %v", err)
+	}
+}
+
+func TestValidateManifestBindingRejectsForgedLastAnchorBaseline(t *testing.T) {
+	// PoC: the real parent Anchor baseline is 900, but the request forges
+	// prover_data.last_anchor_block_number to 899 so a non-advancing normal
+	// source (anchor 900) looks like an advance. The verified baseline must
+	// override the forged field and reject.
+	fixture := newManifestBindingFixture(t)
+	signer := manifestTestTxSigner(t)
+	witnessStateNodes, witnessStateRoot := witnessStateNodesWithBalancesAndAnchor(
+		t,
+		map[common.Address]*big.Int{signer: new(big.Int).SetUint64(1_000_000_000_000_000_000)},
+		900,
+	)
+	fixture.parentHeader.Root = witnessStateRoot
+	fixture.witnessStateNodes = witnessStateNodes
+	fixture.lastAnchorBlockNumber = manifestUint64Ptr(899)
+
+	err := ValidateGuestInputManifestBinding(fixture.view(t))
+	if err == nil {
+		t.Fatalf("expected forged last_anchor_block_number to be rejected")
+	}
+	if !strings.Contains(err.Error(), "last_anchor_block_number mismatch") {
+		t.Fatalf("expected baseline mismatch error, got %v", err)
 	}
 }
 
