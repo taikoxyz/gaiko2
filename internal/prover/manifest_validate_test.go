@@ -1870,6 +1870,31 @@ func TestValidateAnchorL1LinkageRejectsUnboundWitnessParent(t *testing.T) {
 	}
 }
 
+// TestDecodeProposalStateNodesRealFixture gives the forced-inclusion / bypass
+// CheckpointStore decode real-wire coverage. The real mainnet fixture is
+// normal-path, so it never invokes readParentL2Storage, but its ~5.9k
+// proposal_state_nodes are genuine raiko2 output; decoding them confirms the
+// bare-hex wire form holds against real data, not just synthetic fixtures.
+func TestDecodeProposalStateNodesRealFixture(t *testing.T) {
+	view := loadRealFixtureView(t)
+	raws := view.Raw.ProposalStateNodes
+	if len(raws) == 0 {
+		t.Fatal("real fixture has no proposal_state_nodes")
+	}
+	nodes, err := decodeProposalStateNodes(raws)
+	if err != nil {
+		t.Fatalf("decode real proposal_state_nodes: %v", err)
+	}
+	if len(nodes) != len(raws) {
+		t.Fatalf("decoded node count %d != input %d", len(nodes), len(raws))
+	}
+	for i, node := range nodes {
+		if len(node) == 0 {
+			t.Fatalf("proposal_state_nodes[%d] decoded to empty bytes", i)
+		}
+	}
+}
+
 // newCheckpointStoreStateFixture builds a GuestInputView whose first witness
 // carries a coherent nested trie: an account trie (its root is the pre-state
 // root) containing a CheckpointStore account whose storageRoot points at a

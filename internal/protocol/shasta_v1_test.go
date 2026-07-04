@@ -26,8 +26,12 @@ func TestShastaV1RoundTripUsesGuestInputPayload(t *testing.T) {
 				Witnesses:               []json.RawMessage{mustRawMessage(t, `{"block":{"number":"0x2a"}}`)},
 				Taiko:                   mustRawMessage(t, `{"proposal_id":"0x1"}`),
 				ProposalAncestorHeaders: []json.RawMessage{mustRawMessage(t, `{"number":"0x29"}`)},
-				ProposalStateNodes:      []json.RawMessage{mustRawMessage(t, `{"key":"0x01"}`)},
-				ProofCarryData:          mustRawMessage(t, `{"chain_id":167013}`),
+				// ProposalStateNodes is opaque json.RawMessage at this layer, so this
+				// value only exercises passthrough. On the wire each entry is a bare
+				// hex string (a hex-encoded RLP trie node); the prover interprets that
+				// form later in readParentL2Storage.
+				ProposalStateNodes: []json.RawMessage{mustRawMessage(t, `{"key":"0x01"}`)},
+				ProofCarryData:     mustRawMessage(t, `{"chain_id":167013}`),
 			},
 		},
 	}

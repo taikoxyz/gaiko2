@@ -44,16 +44,12 @@ func readParentL2Storage(view *GuestInputView, account common.Address, slot comm
 	for node := range replayWitness.Witness.State {
 		witness.State[node] = struct{}{}
 	}
-	for i, raw := range view.Raw.ProposalStateNodes {
-		var hexNode string
-		if err := json.Unmarshal(raw, &hexNode); err != nil {
-			return common.Hash{}, fmt.Errorf("proposal_state_nodes[%d]: %w", i, err)
-		}
-		decoded, err := hexutil.Decode(hexNode)
-		if err != nil {
-			return common.Hash{}, fmt.Errorf("proposal_state_nodes[%d]: %w", i, err)
-		}
-		witness.State[string(decoded)] = struct{}{}
+	proposalNodes, err := decodeProposalStateNodes(view.Raw.ProposalStateNodes)
+	if err != nil {
+		return common.Hash{}, err
+	}
+	for _, node := range proposalNodes {
+		witness.State[string(node)] = struct{}{}
 	}
 
 	memdb := witness.MakeHashDB()
@@ -72,4 +68,30 @@ func readParentL2Storage(view *GuestInputView, account common.Address, slot comm
 			account.Hex(), slot.Hex(), preStateRoot.Hex(), err)
 	}
 	return value, nil
+}
+
+// decodeProposalStateNodes decodes the shared proposal_state_nodes pool into raw
+// RLP trie-node bytes.
+//
+// Each entry is a bare hex string of the node's RLP bytes. This matches raiko2's
+// wire form: its WitnessStateNode Serialize emits `self.bytes` (a "0x…" hex
+// string) in JSON, identical to the per-witness `state` nodes. The `{hash,bytes}`
+// object form in raiko2's deserializer is backcompat that it never emits, so a
+// non-string entry is genuinely malformed and fails closed here. (Confirmed
+// against the real mainnet fixture, whose ~5.9k proposal_state_nodes are all bare
+// hex strings.)
+func decodeProposalStateNodes(raws []json.RawMessage) ([][]byte, error) {
+	nodes := make([][]byte, 0, len(raws))
+	for i, raw := range raws {
+		var hexNode string
+		if err := json.Unmarshal(raw, &hexNode); err != nil {
+			return nil, fmt.Errorf("proposal_state_nodes[%d]: %w", i, err)
+		}
+		decoded, err := hexutil.Decode(hexNode)
+		if err != nil {
+			return nil, fmt.Errorf("proposal_state_nodes[%d]: %w", i, err)
+		}
+		nodes = append(nodes, decoded)
+	}
+	return nodes, nil
 }
