@@ -187,6 +187,7 @@ func ValidateGuestInputManifestBindingWithContext(ctx context.Context, view *Gue
 
 	canonicalParent := parentHeader
 	canonicalGrandparent := grandparentHeader
+	checkpoints := make([]anchorV4CheckpointView, 0, len(derived))
 	for index, expectedBlock := range derived {
 		if err := ctx.Err(); err != nil {
 			return err
@@ -195,9 +196,11 @@ func ValidateGuestInputManifestBindingWithContext(ctx context.Context, view *Gue
 		if err != nil {
 			return fmt.Errorf("decode witness block %d: %w", index, err)
 		}
-		if err := validateManifestBlockBinding(ctx, view, proposal, block, witness, expectedBlock, canonicalParent, canonicalGrandparent); err != nil {
+		checkpoint, err := validateManifestBlockBinding(ctx, view, proposal, block, witness, expectedBlock, canonicalParent, canonicalGrandparent)
+		if err != nil {
 			return fmt.Errorf("manifest block %d: %w", index, err)
 		}
+		checkpoints = append(checkpoints, checkpoint)
 		rolledGrandparent := compactAncestorFromHeader(canonicalParent)
 		canonicalGrandparent = &rolledGrandparent
 		canonicalParent = block.Header()
@@ -794,35 +797,35 @@ func validateManifestBlockBinding(
 	expected shastaManifestBlock,
 	parentHeader *types.Header,
 	grandparentHeader *CompactAncestor,
-) error {
+) (anchorV4CheckpointView, error) {
 	header := block.Header()
 	txs := block.Transactions()
 	if len(txs) == 0 {
-		return fmt.Errorf("missing anchor transaction")
+		return anchorV4CheckpointView{}, fmt.Errorf("missing anchor transaction")
 	}
 	if err := validateManifestHeaderBaseFee(view.GuestInputChainID, header, parentHeader, grandparentHeader); err != nil {
-		return err
+		return anchorV4CheckpointView{}, err
 	}
 	if err := validateManifestTransactionRoot(ctx, view, block, witness, expected.Transactions); err != nil {
-		return err
+		return anchorV4CheckpointView{}, err
 	}
 
 	if header.Time != expected.Timestamp {
-		return fmt.Errorf("timestamp mismatch: expected %d got %d", expected.Timestamp, header.Time)
+		return anchorV4CheckpointView{}, fmt.Errorf("timestamp mismatch: expected %d got %d", expected.Timestamp, header.Time)
 	}
 	if header.Coinbase != expected.Coinbase {
-		return fmt.Errorf("coinbase mismatch: expected %s got %s", expected.Coinbase.Hex(), header.Coinbase.Hex())
+		return anchorV4CheckpointView{}, fmt.Errorf("coinbase mismatch: expected %s got %s", expected.Coinbase.Hex(), header.Coinbase.Hex())
 	}
 	if header.GasLimit != expected.GasLimit+shastaAnchorGasLimit {
-		return fmt.Errorf("gas limit mismatch: expected %d got %d", expected.GasLimit+shastaAnchorGasLimit, header.GasLimit)
+		return anchorV4CheckpointView{}, fmt.Errorf("gas limit mismatch: expected %d got %d", expected.GasLimit+shastaAnchorGasLimit, header.GasLimit)
 	}
 	expectedExtra := encodeShastaManifestExtraData(proposal.BasefeeSharingPctg, view.Taiko.ProposalID)
 	if !bytes.Equal(header.Extra, expectedExtra) {
-		return fmt.Errorf("extra_data mismatch")
+		return anchorV4CheckpointView{}, fmt.Errorf("extra_data mismatch")
 	}
 	expectedMixHash := shastaManifestMixHash(shastaManifestParentDifficulty(parentHeader), header.Number.Uint64())
 	if header.MixDigest != expectedMixHash {
-		return fmt.Errorf("mix_hash mismatch: expected %s got %s", expectedMixHash.Hex(), header.MixDigest.Hex())
+		return anchorV4CheckpointView{}, fmt.Errorf("mix_hash mismatch: expected %s got %s", expectedMixHash.Hex(), header.MixDigest.Hex())
 	}
 
 	return validateManifestAnchorTransaction(view, txs[0], header, expected)
@@ -934,55 +937,55 @@ func validateManifestAnchorTransaction(
 	tx *types.Transaction,
 	header *types.Header,
 	expected shastaManifestBlock,
-) error {
+) (anchorV4CheckpointView, error) {
 	if tx.Type() != types.DynamicFeeTxType {
-		return fmt.Errorf("anchor transaction type mismatch: expected %d got %d", types.DynamicFeeTxType, tx.Type())
+		return anchorV4CheckpointView{}, fmt.Errorf("anchor transaction type mismatch: expected %d got %d", types.DynamicFeeTxType, tx.Type())
 	}
 	expectedRecipient, err := shastaTaikoL2Address(view.GuestInputChainID)
 	if err != nil {
-		return err
+		return anchorV4CheckpointView{}, err
 	}
 	if tx.To() == nil || *tx.To() != expectedRecipient {
 		got := "<nil>"
 		if tx.To() != nil {
 			got = tx.To().Hex()
 		}
-		return fmt.Errorf("anchor transaction recipient mismatch: expected %s got %s", expectedRecipient.Hex(), got)
+		return anchorV4CheckpointView{}, fmt.Errorf("anchor transaction recipient mismatch: expected %s got %s", expectedRecipient.Hex(), got)
 	}
 	if tx.ChainId().Uint64() != view.GuestInputChainID {
-		return fmt.Errorf("anchor transaction chain_id mismatch: expected %d got %s", view.GuestInputChainID, tx.ChainId())
+		return anchorV4CheckpointView{}, fmt.Errorf("anchor transaction chain_id mismatch: expected %d got %s", view.GuestInputChainID, tx.ChainId())
 	}
 	if tx.Value().Sign() != 0 {
-		return fmt.Errorf("anchor transaction value mismatch: expected 0 got %s", tx.Value())
+		return anchorV4CheckpointView{}, fmt.Errorf("anchor transaction value mismatch: expected 0 got %s", tx.Value())
 	}
 	if tx.Gas() != shastaAnchorGasLimit {
-		return fmt.Errorf("anchor transaction gas limit mismatch: expected %d got %d", shastaAnchorGasLimit, tx.Gas())
+		return anchorV4CheckpointView{}, fmt.Errorf("anchor transaction gas limit mismatch: expected %d got %d", shastaAnchorGasLimit, tx.Gas())
 	}
 	if header.BaseFee == nil {
-		return fmt.Errorf("missing base fee per gas in block header")
+		return anchorV4CheckpointView{}, fmt.Errorf("missing base fee per gas in block header")
 	}
 	if header.Number == nil {
-		return fmt.Errorf("block header is missing number for anchor transaction validation")
+		return anchorV4CheckpointView{}, fmt.Errorf("block header is missing number for anchor transaction validation")
 	}
 	if tx.GasFeeCap().Cmp(header.BaseFee) != 0 {
-		return fmt.Errorf("anchor transaction max_fee_per_gas mismatch: expected %s got %s", header.BaseFee, tx.GasFeeCap())
+		return anchorV4CheckpointView{}, fmt.Errorf("anchor transaction max_fee_per_gas mismatch: expected %s got %s", header.BaseFee, tx.GasFeeCap())
 	}
 	if tx.GasTipCap().Sign() != 0 {
-		return fmt.Errorf("anchor transaction max_priority_fee_per_gas mismatch")
+		return anchorV4CheckpointView{}, fmt.Errorf("anchor transaction max_priority_fee_per_gas mismatch")
 	}
 	if len(tx.AccessList()) != 0 {
-		return fmt.Errorf("anchor transaction access list must be empty")
+		return anchorV4CheckpointView{}, fmt.Errorf("anchor transaction access list must be empty")
 	}
 	config, err := chainConfigFor(view.GuestInputChainID)
 	if err != nil {
-		return err
+		return anchorV4CheckpointView{}, err
 	}
 	sender, err := types.Sender(types.MakeSigner(config, header.Number, header.Time), tx)
 	if err != nil {
-		return fmt.Errorf("recover anchor transaction sender: %w", err)
+		return anchorV4CheckpointView{}, fmt.Errorf("recover anchor transaction sender: %w", err)
 	}
 	if sender != shastaGoldenTouchAccount {
-		return fmt.Errorf(
+		return anchorV4CheckpointView{}, fmt.Errorf(
 			"anchor transaction sender mismatch: expected %s got %s",
 			shastaGoldenTouchAccount.Hex(),
 			sender.Hex(),
@@ -990,16 +993,16 @@ func validateManifestAnchorTransaction(
 	}
 	checkpoint, err := decodeAnchorV4Checkpoint(tx.Data())
 	if err != nil {
-		return err
+		return anchorV4CheckpointView{}, err
 	}
 	if checkpoint.blockNumber != expected.AnchorBlockNumber {
-		return fmt.Errorf(
+		return anchorV4CheckpointView{}, fmt.Errorf(
 			"anchor checkpoint block number mismatch: expected %d got %d",
 			expected.AnchorBlockNumber,
 			checkpoint.blockNumber,
 		)
 	}
-	return nil
+	return checkpoint, nil
 }
 
 func shastaTaikoL2Address(chainID uint64) (common.Address, error) {

@@ -634,11 +634,31 @@ func TestValidateManifestBindingRejectsNonGoldenTouchAnchorSender(t *testing.T) 
 	if err != nil {
 		t.Fatalf("decode replay block: %v", err)
 	}
-	err = validateManifestAnchorTransaction(view, block.Transactions()[0], block.Header(), shastaManifestBlock{
+	_, err = validateManifestAnchorTransaction(view, block.Transactions()[0], block.Header(), shastaManifestBlock{
 		AnchorBlockNumber: fixture.anchorBlockNumber,
 	})
 	if err == nil || !strings.Contains(err.Error(), "anchor transaction sender mismatch") {
 		t.Fatalf("expected anchor sender rejection, got %v", err)
+	}
+}
+
+func TestValidateManifestBindingCollectsAnchorCheckpoints(t *testing.T) {
+	fixture := newManifestBindingFixture(t)
+	view := fixture.view(t)
+	block, _, err := decodeReplayBlock(view.Witnesses[0].ReplayBlock)
+	if err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	cp, err := validateManifestAnchorTransaction(view, block.Transactions()[0], block.Header(),
+		shastaManifestBlock{AnchorBlockNumber: fixture.anchorBlockNumber})
+	if err != nil {
+		t.Fatalf("validate: %v", err)
+	}
+	if cp.blockNumber != fixture.anchorBlockNumber {
+		t.Fatalf("checkpoint blockNumber: got %d want %d", cp.blockNumber, fixture.anchorBlockNumber)
+	}
+	if cp.blockHash != common.HexToHash(testHash("61")) || cp.stateRoot != common.HexToHash(testHash("62")) {
+		t.Fatalf("checkpoint hash/stateRoot not returned")
 	}
 }
 
