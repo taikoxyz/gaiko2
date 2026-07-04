@@ -34,7 +34,12 @@ const (
 	shastaMaxManifestOffset          = shastaBytesPerBlob - 64
 	shastaMaxManifestDecodedPayload  = 16 * 1024 * 1024
 	shastaMaxManifestTxsPerBlock     = shastaMaxBlockGasLimit / params.TxGas
+	shastaTaikoL2AddressSuffix       = "10001"
 )
+
+const shastaSignalServiceCheckpointsSlot uint64 = 254
+
+var shastaGoldenTouchAccount = common.HexToAddress("0x0000777735367b36bC9B61C50022d9D0700dB4Ec")
 
 type shastaSourceManifest struct {
 	Blocks []shastaManifestBlock
@@ -184,6 +189,7 @@ func ValidateGuestInputManifestBindingWithContext(ctx context.Context, view *Gue
 
 	canonicalParent := parentHeader
 	canonicalGrandparent := grandparentHeader
+	checkpoints := make([]anchorV4CheckpointView, 0, len(derived))
 	for index, expectedBlock := range derived {
 		if err := ctx.Err(); err != nil {
 			return err
@@ -192,14 +198,19 @@ func ValidateGuestInputManifestBindingWithContext(ctx context.Context, view *Gue
 		if err != nil {
 			return fmt.Errorf("decode witness block %d: %w", index, err)
 		}
-		if err := validateManifestBlockBinding(ctx, view, proposal, block, witness, expectedBlock, canonicalParent, canonicalGrandparent); err != nil {
+		checkpoint, err := validateManifestBlockBinding(ctx, view, proposal, block, witness, expectedBlock, canonicalParent, canonicalGrandparent)
+		if err != nil {
 			return fmt.Errorf("manifest block %d: %w", index, err)
 		}
+		checkpoints = append(checkpoints, checkpoint)
 		rolledGrandparent := compactAncestorFromHeader(canonicalParent)
 		canonicalGrandparent = &rolledGrandparent
 		canonicalParent = block.Header()
 	}
 
+	if err := validateAnchorL1Linkage(view, proposal, checkpoints, sourceSpans, lastAnchor); err != nil {
+		return err
+	}
 	return nil
 }
 
@@ -609,6 +620,10 @@ func validateSourceAwareManifestAnchors(
 	if end != len(anchorBlockNumbers) {
 		return fmt.Errorf("source spans cover %d blocks but anchor block numbers have %d", end, len(anchorBlockNumbers))
 	}
+	// The all-stay out-of-range case is bound later against the parent L2 CheckpointStore.
+	if shouldBypassStalledAnchorLinkage(anchorBlockNumbers, lastAnchorBlockNumber, originBlockNumber, chainID) {
+		return nil
+	}
 	return validateManifestAnchorProgression(
 		anchorBlockNumbers[cursor:end],
 		lastAnchorBlockNumber,
@@ -791,35 +806,35 @@ func validateManifestBlockBinding(
 	expected shastaManifestBlock,
 	parentHeader *types.Header,
 	grandparentHeader *CompactAncestor,
-) error {
+) (anchorV4CheckpointView, error) {
 	header := block.Header()
 	txs := block.Transactions()
 	if len(txs) == 0 {
-		return fmt.Errorf("missing anchor transaction")
+		return anchorV4CheckpointView{}, fmt.Errorf("missing anchor transaction")
 	}
 	if err := validateManifestHeaderBaseFee(view.GuestInputChainID, header, parentHeader, grandparentHeader); err != nil {
-		return err
+		return anchorV4CheckpointView{}, err
 	}
 	if err := validateManifestTransactionRoot(ctx, view, block, witness, expected.Transactions); err != nil {
-		return err
+		return anchorV4CheckpointView{}, err
 	}
 
 	if header.Time != expected.Timestamp {
-		return fmt.Errorf("timestamp mismatch: expected %d got %d", expected.Timestamp, header.Time)
+		return anchorV4CheckpointView{}, fmt.Errorf("timestamp mismatch: expected %d got %d", expected.Timestamp, header.Time)
 	}
 	if header.Coinbase != expected.Coinbase {
-		return fmt.Errorf("coinbase mismatch: expected %s got %s", expected.Coinbase.Hex(), header.Coinbase.Hex())
+		return anchorV4CheckpointView{}, fmt.Errorf("coinbase mismatch: expected %s got %s", expected.Coinbase.Hex(), header.Coinbase.Hex())
 	}
 	if header.GasLimit != expected.GasLimit+shastaAnchorGasLimit {
-		return fmt.Errorf("gas limit mismatch: expected %d got %d", expected.GasLimit+shastaAnchorGasLimit, header.GasLimit)
+		return anchorV4CheckpointView{}, fmt.Errorf("gas limit mismatch: expected %d got %d", expected.GasLimit+shastaAnchorGasLimit, header.GasLimit)
 	}
 	expectedExtra := encodeShastaManifestExtraData(proposal.BasefeeSharingPctg, view.Taiko.ProposalID)
 	if !bytes.Equal(header.Extra, expectedExtra) {
-		return fmt.Errorf("extra_data mismatch")
+		return anchorV4CheckpointView{}, fmt.Errorf("extra_data mismatch")
 	}
 	expectedMixHash := shastaManifestMixHash(shastaManifestParentDifficulty(parentHeader), header.Number.Uint64())
 	if header.MixDigest != expectedMixHash {
-		return fmt.Errorf("mix_hash mismatch: expected %s got %s", expectedMixHash.Hex(), header.MixDigest.Hex())
+		return anchorV4CheckpointView{}, fmt.Errorf("mix_hash mismatch: expected %s got %s", expectedMixHash.Hex(), header.MixDigest.Hex())
 	}
 
 	return validateManifestAnchorTransaction(view, txs[0], header, expected)
@@ -931,60 +946,81 @@ func validateManifestAnchorTransaction(
 	tx *types.Transaction,
 	header *types.Header,
 	expected shastaManifestBlock,
-) error {
-	expectedRecipient, err := decodeWitnessL2Contract(view)
+) (anchorV4CheckpointView, error) {
+	if tx.Type() != types.DynamicFeeTxType {
+		return anchorV4CheckpointView{}, fmt.Errorf("anchor transaction type mismatch: expected %d got %d", types.DynamicFeeTxType, tx.Type())
+	}
+	expectedRecipient, err := shastaTaikoL2Address(view.GuestInputChainID)
 	if err != nil {
-		return err
+		return anchorV4CheckpointView{}, err
 	}
 	if tx.To() == nil || *tx.To() != expectedRecipient {
 		got := "<nil>"
 		if tx.To() != nil {
 			got = tx.To().Hex()
 		}
-		return fmt.Errorf("anchor transaction recipient mismatch: expected %s got %s", expectedRecipient.Hex(), got)
+		return anchorV4CheckpointView{}, fmt.Errorf("anchor transaction recipient mismatch: expected %s got %s", expectedRecipient.Hex(), got)
 	}
 	if tx.ChainId().Uint64() != view.GuestInputChainID {
-		return fmt.Errorf("anchor transaction chain_id mismatch: expected %d got %s", view.GuestInputChainID, tx.ChainId())
+		return anchorV4CheckpointView{}, fmt.Errorf("anchor transaction chain_id mismatch: expected %d got %s", view.GuestInputChainID, tx.ChainId())
+	}
+	if tx.Value().Sign() != 0 {
+		return anchorV4CheckpointView{}, fmt.Errorf("anchor transaction value mismatch: expected 0 got %s", tx.Value())
+	}
+	if tx.Gas() != shastaAnchorGasLimit {
+		return anchorV4CheckpointView{}, fmt.Errorf("anchor transaction gas limit mismatch: expected %d got %d", shastaAnchorGasLimit, tx.Gas())
 	}
 	if header.BaseFee == nil {
-		return fmt.Errorf("missing base fee per gas in block header")
+		return anchorV4CheckpointView{}, fmt.Errorf("missing base fee per gas in block header")
+	}
+	if header.Number == nil {
+		return anchorV4CheckpointView{}, fmt.Errorf("block header is missing number for anchor transaction validation")
 	}
 	if tx.GasFeeCap().Cmp(header.BaseFee) != 0 {
-		return fmt.Errorf("anchor transaction max_fee_per_gas mismatch: expected %s got %s", header.BaseFee, tx.GasFeeCap())
+		return anchorV4CheckpointView{}, fmt.Errorf("anchor transaction max_fee_per_gas mismatch: expected %s got %s", header.BaseFee, tx.GasFeeCap())
 	}
 	if tx.GasTipCap().Sign() != 0 {
-		return fmt.Errorf("anchor transaction max_priority_fee_per_gas mismatch")
+		return anchorV4CheckpointView{}, fmt.Errorf("anchor transaction max_priority_fee_per_gas mismatch")
 	}
 	if len(tx.AccessList()) != 0 {
-		return fmt.Errorf("anchor transaction access list must be empty")
+		return anchorV4CheckpointView{}, fmt.Errorf("anchor transaction access list must be empty")
+	}
+	config, err := chainConfigFor(view.GuestInputChainID)
+	if err != nil {
+		return anchorV4CheckpointView{}, err
+	}
+	sender, err := types.Sender(types.MakeSigner(config, header.Number, header.Time), tx)
+	if err != nil {
+		return anchorV4CheckpointView{}, fmt.Errorf("recover anchor transaction sender: %w", err)
+	}
+	if sender != shastaGoldenTouchAccount {
+		return anchorV4CheckpointView{}, fmt.Errorf(
+			"anchor transaction sender mismatch: expected %s got %s",
+			shastaGoldenTouchAccount.Hex(),
+			sender.Hex(),
+		)
 	}
 	checkpoint, err := decodeAnchorV4Checkpoint(tx.Data())
 	if err != nil {
-		return err
+		return anchorV4CheckpointView{}, err
 	}
 	if checkpoint.blockNumber != expected.AnchorBlockNumber {
-		return fmt.Errorf(
+		return anchorV4CheckpointView{}, fmt.Errorf(
 			"anchor checkpoint block number mismatch: expected %d got %d",
 			expected.AnchorBlockNumber,
 			checkpoint.blockNumber,
 		)
 	}
-	return nil
+	return checkpoint, nil
 }
 
-func decodeWitnessL2Contract(view *GuestInputView) (common.Address, error) {
-	if len(view.Witnesses) == 0 {
-		return common.Address{}, fmt.Errorf("guest input must include at least one witness")
+func shastaTaikoL2Address(chainID uint64) (common.Address, error) {
+	prefix := strings.TrimPrefix(fmt.Sprintf("%d", chainID), "0")
+	padding := common.AddressLength*2 - len(prefix) - len(shastaTaikoL2AddressSuffix)
+	if padding < 0 {
+		return common.Address{}, fmt.Errorf("chain_id %d is too long to derive TaikoL2 address", chainID)
 	}
-	fields, err := decodeJSONObject(view.Witnesses[0].ChainSpecRaw)
-	if err != nil {
-		return common.Address{}, fmt.Errorf("unmarshal witness.chain_spec: %w", err)
-	}
-	l2Contract, err := requireAddress(fields, "l2_contract", "l2Contract")
-	if err != nil {
-		return common.Address{}, fmt.Errorf("parse witness.chain_spec.l2_contract: %w", err)
-	}
-	return l2Contract, nil
+	return common.HexToAddress("0x" + prefix + strings.Repeat("0", padding) + shastaTaikoL2AddressSuffix), nil
 }
 
 type anchorV4CheckpointView struct {
@@ -1037,6 +1073,81 @@ func shastaManifestParentDifficulty(parentHeader *types.Header) common.Hash {
 	return common.BigToHash(parentHeader.Difficulty)
 }
 
+func shastaCheckpointStorageSlots(blockNumber uint64) (common.Hash, common.Hash) {
+	var buf [64]byte
+	new(big.Int).SetUint64(blockNumber).FillBytes(buf[0:32])
+	new(big.Int).SetUint64(shastaSignalServiceCheckpointsSlot).FillBytes(buf[32:64])
+	blockHashSlot := crypto.Keccak256Hash(buf[:])
+	stateRootSlot := common.BigToHash(new(big.Int).Add(blockHashSlot.Big(), big.NewInt(1)))
+	return blockHashSlot, stateRootSlot
+}
+
+func verifiedParentShastaCheckpoint(view *GuestInputView, blockNumber uint64) (anchorV4CheckpointView, error) {
+	store, err := decodeWitnessCheckpointStore(view)
+	if err != nil {
+		return anchorV4CheckpointView{}, err
+	}
+	blockHashSlot, stateRootSlot := shastaCheckpointStorageSlots(blockNumber)
+	blockHash, err := readParentL2Storage(view, store, blockHashSlot)
+	if err != nil {
+		return anchorV4CheckpointView{}, fmt.Errorf("read parent CheckpointStore blockHash: %w", err)
+	}
+	stateRoot, err := readParentL2Storage(view, store, stateRootSlot)
+	if err != nil {
+		return anchorV4CheckpointView{}, fmt.Errorf("read parent CheckpointStore stateRoot: %w", err)
+	}
+	if blockHash == (common.Hash{}) {
+		return anchorV4CheckpointView{}, fmt.Errorf("parent CheckpointStore blockHash is zero")
+	}
+	if stateRoot == (common.Hash{}) {
+		return anchorV4CheckpointView{}, fmt.Errorf("parent CheckpointStore stateRoot is zero")
+	}
+	return anchorV4CheckpointView{blockNumber: blockNumber, blockHash: blockHash, stateRoot: stateRoot}, nil
+}
+
+func decodeWitnessCheckpointStore(view *GuestInputView) (common.Address, error) {
+	if len(view.Witnesses) == 0 {
+		return common.Address{}, fmt.Errorf("guest input must include at least one witness")
+	}
+	fields, err := decodeJSONObject(view.Witnesses[0].ChainSpecRaw)
+	if err != nil {
+		return common.Address{}, fmt.Errorf("unmarshal witness.chain_spec: %w", err)
+	}
+	return requireAddress(fields, "checkpoint_store_contract", "checkpointStoreContract")
+}
+
+func decodeGuestInputL1Headers(raw json.RawMessage) (*types.Header, []*types.Header, error) {
+	fields, err := decodeJSONObject(raw)
+	if err != nil {
+		return nil, nil, fmt.Errorf("unmarshal taiko: %w", err)
+	}
+	l1HeaderRaw, ok := lookupField(fields, "l1_header", "l1Header")
+	if !ok || isEmptyOrNullRawMessage(l1HeaderRaw) {
+		return nil, nil, fmt.Errorf("missing taiko.l1_header")
+	}
+	l1Header, err := decodeHeader(l1HeaderRaw)
+	if err != nil {
+		return nil, nil, fmt.Errorf("decode taiko.l1_header: %w", err)
+	}
+	ancestorsRaw, ok := lookupField(fields, "l1_ancestor_headers", "l1AncestorHeaders")
+	if !ok || isEmptyOrNullRawMessage(ancestorsRaw) {
+		return l1Header, nil, nil
+	}
+	var rawList []json.RawMessage
+	if err := json.Unmarshal(ancestorsRaw, &rawList); err != nil {
+		return nil, nil, fmt.Errorf("unmarshal taiko.l1_ancestor_headers: %w", err)
+	}
+	ancestors := make([]*types.Header, len(rawList))
+	for i, r := range rawList {
+		h, err := decodeHeader(r)
+		if err != nil {
+			return nil, nil, fmt.Errorf("decode taiko.l1_ancestor_headers[%d]: %w", i, err)
+		}
+		ancestors[i] = h
+	}
+	return l1Header, ancestors, nil
+}
+
 func decodeGuestInputLastAnchorBlockNumber(raw json.RawMessage) (uint64, error) {
 	fields, err := decodeJSONObject(raw)
 	if err != nil {
@@ -1058,4 +1169,133 @@ func decodeGuestInputLastAnchorBlockNumber(raw json.RawMessage) (uint64, error) 
 		return 0, nil
 	}
 	return *lastAnchor, nil
+}
+
+func manifestForcedInclusionPrefixCount(sourceSpans []manifestAnchorSourceSpan) int {
+	count := 0
+	for _, span := range sourceSpans[:max(0, len(sourceSpans)-1)] {
+		if span.isForcedInclusion {
+			count += span.blockCount
+		}
+	}
+	return count
+}
+
+func validateAnchorL1Linkage(
+	view *GuestInputView,
+	proposal shastaProposalView,
+	checkpoints []anchorV4CheckpointView,
+	sourceSpans []manifestAnchorSourceSpan,
+	lastAnchor uint64,
+) error {
+	l1Header, ancestors, err := decodeGuestInputL1Headers(view.TaikoRaw)
+	if err != nil {
+		return err
+	}
+	if l1Header.Number == nil || l1Header.Number.Uint64() != proposal.OriginBlockNumber {
+		return fmt.Errorf("taiko.l1_header.number mismatch: expected %d", proposal.OriginBlockNumber)
+	}
+	if l1Header.Hash() != proposal.OriginBlockHash {
+		return fmt.Errorf("taiko.l1_header hash mismatch")
+	}
+
+	anchorNumbers := make([]uint64, len(checkpoints))
+	for i, cp := range checkpoints {
+		anchorNumbers[i] = cp.blockNumber
+	}
+	if shouldBypassStalledAnchorLinkage(anchorNumbers, lastAnchor, proposal.OriginBlockNumber, view.GuestInputChainID) {
+		parentCheckpoint, err := verifiedParentShastaCheckpoint(view, lastAnchor)
+		if err != nil {
+			return err
+		}
+		for _, cp := range checkpoints {
+			if cp != parentCheckpoint {
+				return fmt.Errorf("anchor checkpoint (%d) does not match parent checkpoint (%d)",
+					cp.blockNumber, parentCheckpoint.blockNumber)
+			}
+		}
+		return nil
+	}
+	startIndex := manifestForcedInclusionPrefixCount(sourceSpans)
+	if startIndex > len(checkpoints) {
+		return fmt.Errorf("forced-inclusion prefix exceeds checkpoint count")
+	}
+	if startIndex > 0 {
+		parentCheckpoint, err := verifiedParentShastaCheckpoint(view, lastAnchor)
+		if err != nil {
+			return err
+		}
+		for _, cp := range checkpoints[:startIndex] {
+			if cp != parentCheckpoint {
+				return fmt.Errorf("forced-inclusion anchor checkpoint (%d) does not match parent checkpoint (%d)",
+					cp.blockNumber, parentCheckpoint.blockNumber)
+			}
+		}
+	}
+	headerCheckpoints := checkpoints[startIndex:]
+
+	if len(ancestors) == 0 {
+		return fmt.Errorf("taiko.l1_ancestor_headers must not be empty")
+	}
+	cpIndex := 0
+	var prevNumber *uint64
+	var prevHash common.Hash
+	var lastNumber uint64
+	var lastHash common.Hash
+	for i, header := range ancestors {
+		if header.Number == nil {
+			return fmt.Errorf("taiko.l1_ancestor_headers[%d] missing number", i)
+		}
+		headerHash := header.Hash()
+		number := header.Number.Uint64()
+		if prevNumber != nil {
+			if number != *prevNumber+1 {
+				return fmt.Errorf("taiko.l1_ancestor_headers must be contiguous at index %d", i)
+			}
+			if header.ParentHash != prevHash {
+				return fmt.Errorf("taiko.l1_ancestor_headers parent hash mismatch at index %d", i)
+			}
+		}
+		for cpIndex < len(headerCheckpoints) && headerCheckpoints[cpIndex].blockNumber == number {
+			cp := headerCheckpoints[cpIndex]
+			if cp.blockHash != headerHash || cp.stateRoot != header.Root {
+				return fmt.Errorf(
+					"anchor checkpoint (%d) not found in taiko.l1_ancestor_headers", cp.blockNumber)
+			}
+			cpIndex++
+		}
+		n := number
+		prevNumber = &n
+		prevHash = headerHash
+		lastNumber = number
+		lastHash = headerHash
+	}
+	if lastNumber != proposal.OriginBlockNumber {
+		return fmt.Errorf("taiko.l1_ancestor_headers last block number mismatch: expected %d got %d",
+			proposal.OriginBlockNumber, lastNumber)
+	}
+	if lastHash != proposal.OriginBlockHash {
+		return fmt.Errorf("taiko.l1_ancestor_headers last hash mismatch")
+	}
+	if cpIndex != len(headerCheckpoints) {
+		return fmt.Errorf("anchor checkpoint (%d) not found in taiko.l1_ancestor_headers",
+			headerCheckpoints[cpIndex].blockNumber)
+	}
+	return nil
+}
+
+func shouldBypassStalledAnchorLinkage(anchorNumbers []uint64, lastAnchor, origin, chainID uint64) bool {
+	if len(anchorNumbers) == 0 {
+		return false
+	}
+	first := anchorNumbers[0]
+	if first != lastAnchor || origin-first <= anchorMaxOffsetForChain(chainID) {
+		return false
+	}
+	for _, a := range anchorNumbers {
+		if a != first {
+			return false
+		}
+	}
+	return true
 }

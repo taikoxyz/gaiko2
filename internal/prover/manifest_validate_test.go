@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"math/big"
+	"os"
 	"strings"
 	"testing"
 
@@ -265,6 +266,26 @@ func TestValidateSourceAwareManifestAnchorsAcceptsForcedPrefixThenNormalCatchup(
 	}
 }
 
+func TestValidateSourceAwareManifestAnchorsAcceptsOutOfRangeStalledBypassShape(t *testing.T) {
+	lastAnchor := uint64(13_414)
+	origin := lastAnchor + anchorMaxOffsetForChain(167001) + 1
+	spans := []manifestAnchorSourceSpan{
+		{isForcedInclusion: true, blockCount: 1},
+		{isForcedInclusion: false, blockCount: 1},
+	}
+
+	err := validateSourceAwareManifestAnchors(
+		[]uint64{lastAnchor, lastAnchor},
+		spans,
+		lastAnchor,
+		origin,
+		167001,
+	)
+	if err != nil {
+		t.Fatalf("validate source-aware stalled-anchor bypass shape: %v", err)
+	}
+}
+
 func TestValidateSourceAwareManifestAnchorsRejectsForcedSourceThatBumpsAnchor(t *testing.T) {
 	spans := []manifestAnchorSourceSpan{
 		{isForcedInclusion: true, blockCount: 1},
@@ -293,6 +314,21 @@ func TestValidateManifestAnchorNumbersRejectsNormalSourceThatDoesNotAdvance(t *t
 
 	if validateManifestAnchorNumbers(manifest, 1_000, 899, false, 167001) {
 		t.Fatalf("expected normal source anchor advancement rejection")
+	}
+}
+
+func TestDecodeGuestInputL1HeadersReadsOriginAndAncestors(t *testing.T) {
+	raw := mustRawMessage(t, `{"l1_header":{`+minimalHeaderJSON(100)+`},
+		"l1_ancestor_headers":[{`+minimalHeaderJSON(99)+`},{`+minimalHeaderJSON(100)+`}]}`)
+	origin, ancestors, err := decodeGuestInputL1Headers(raw)
+	if err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if origin.Number.Uint64() != 100 {
+		t.Fatalf("origin number: got %d", origin.Number.Uint64())
+	}
+	if len(ancestors) != 2 || ancestors[1].Number.Uint64() != 100 {
+		t.Fatalf("ancestors: got %d entries", len(ancestors))
 	}
 }
 
@@ -601,6 +637,71 @@ func TestValidateManifestBindingRejectsMismatches(t *testing.T) {
 	}
 }
 
+func TestValidateManifestBindingRejectsNonCanonicalAnchorGas(t *testing.T) {
+	fixture := newManifestBindingFixture(t)
+	fixture.anchorGas = shastaAnchorGasLimit + 1
+	view := fixture.view(t)
+	err := ValidateGuestInputManifestBinding(view)
+	if err == nil || !strings.Contains(err.Error(), "anchor transaction gas limit mismatch") {
+		t.Fatalf("expected anchor gas rejection, got %v", err)
+	}
+}
+
+func TestValidateManifestBindingRejectsNonGoldenTouchAnchorSender(t *testing.T) {
+	fixture := newManifestBindingFixture(t)
+	fixture.anchorPrivateKeyHex = manifestTestTxPrivateKeyHex
+	view := fixture.view(t)
+	block, _, err := decodeReplayBlock(view.Witnesses[0].ReplayBlock)
+	if err != nil {
+		t.Fatalf("decode replay block: %v", err)
+	}
+	_, err = validateManifestAnchorTransaction(view, block.Transactions()[0], block.Header(), shastaManifestBlock{
+		AnchorBlockNumber: fixture.anchorBlockNumber,
+	})
+	if err == nil || !strings.Contains(err.Error(), "anchor transaction sender mismatch") {
+		t.Fatalf("expected anchor sender rejection, got %v", err)
+	}
+}
+
+func TestValidateManifestBindingCollectsAnchorCheckpoints(t *testing.T) {
+	fixture := newManifestBindingFixture(t)
+	view := fixture.view(t)
+	block, _, err := decodeReplayBlock(view.Witnesses[0].ReplayBlock)
+	if err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	cp, err := validateManifestAnchorTransaction(view, block.Transactions()[0], block.Header(),
+		shastaManifestBlock{AnchorBlockNumber: fixture.anchorBlockNumber})
+	if err != nil {
+		t.Fatalf("validate: %v", err)
+	}
+	if cp.blockNumber != fixture.anchorBlockNumber {
+		t.Fatalf("checkpoint blockNumber: got %d want %d", cp.blockNumber, fixture.anchorBlockNumber)
+	}
+	if cp.blockHash != fixture.anchorCheckpointBlockHash || cp.stateRoot != fixture.anchorCheckpointStateRoot {
+		t.Fatalf("checkpoint hash/stateRoot not returned")
+	}
+}
+
+func TestValidateManifestBindingRejectsRequestControlledAnchorRecipient(t *testing.T) {
+	fixture := newManifestBindingFixture(t)
+	attacker := common.HexToAddress(testAddress("44"))
+	fixture.l2Contract = attacker
+	fixture.anchorTo = attacker
+	view := fixture.view(t)
+	err := ValidateGuestInputManifestBinding(view)
+	if err == nil || !strings.Contains(err.Error(), "anchor transaction recipient mismatch") {
+		t.Fatalf("expected canonical anchor recipient rejection, got %v", err)
+	}
+}
+
+func testTaikoL2Address(chainID uint64) common.Address {
+	prefix := strings.TrimPrefix(fmt.Sprintf("%d", chainID), "0")
+	const suffix = "10001"
+	padding := common.AddressLength*2 - len(prefix) - len(suffix)
+	return common.HexToAddress("0x" + prefix + strings.Repeat("0", padding) + suffix)
+}
+
 func TestValidateGuestInputBlobSourcesAcceptsInlineCalldataSource(t *testing.T) {
 	view := newManifestBindingFixture(t).view(t)
 
@@ -634,6 +735,8 @@ type manifestBindingFixture struct {
 	omitBlockBaseFee            bool
 	l2Contract                  common.Address
 	anchorTo                    common.Address
+	anchorGas                   uint64
+	anchorPrivateKeyHex         string
 	anchorBlockNumber           uint64
 	omitAnchorTx                bool
 	omitUserTx                  bool
@@ -645,6 +748,15 @@ type manifestBindingFixture struct {
 	blobBacked                  bool
 	corruptBlobEncoding         bool
 	isForcedInclusion           bool
+
+	// L1 anchor linkage state, built by buildL1Chain from a coherent synthetic
+	// L1 chain spanning [anchorBlockNumber, originBlockNumber]. Derived so the
+	// anchor checkpoint and proposal origin bind to real L1 ancestor headers.
+	l1Headers                 []*types.Header
+	originBlockHash           common.Hash
+	anchorCheckpointBlockHash common.Hash
+	anchorCheckpointStateRoot common.Hash
+	omitL1Headers             bool
 }
 
 func newManifestBindingFixture(t *testing.T) *manifestBindingFixture {
@@ -701,29 +813,98 @@ func newManifestBindingFixture(t *testing.T) *manifestBindingFixture {
 			Nonce:       types.BlockNonce{},
 			BaseFee:     new(big.Int).SetUint64(manifestTestBaseFee),
 		},
-		manifestTimestamp:  1_001,
-		manifestCoinbase:   common.HexToAddress(testAddress("22")),
-		manifestGasLimit:   manifestGasLimit,
-		manifestUserTxJSON: manifestTx,
-		blockUserTxJSON:    manifestTx,
-		blockTimestamp:     1_001,
-		blockCoinbase:      common.HexToAddress(testAddress("22")),
-		blockNumber:        blockNumber,
-		blockGasLimit:      manifestGasLimit + 1_000_000,
-		blockExtra:         manifestExtraData(42, proposalID),
-		blockMixDigest:     manifestMixHash(common.BigToHash(parentDifficulty), blockNumber),
-		blockBaseFee:       manifestTestBaseFee,
-		l2Contract:         common.HexToAddress(testAddress("44")),
-		anchorTo:           common.HexToAddress(testAddress("44")),
-		anchorBlockNumber:  900,
-		witnessStateNodes:  witnessStateNodes,
+		manifestTimestamp:   1_001,
+		manifestCoinbase:    common.HexToAddress(testAddress("22")),
+		manifestGasLimit:    manifestGasLimit,
+		manifestUserTxJSON:  manifestTx,
+		blockUserTxJSON:     manifestTx,
+		blockTimestamp:      1_001,
+		blockCoinbase:       common.HexToAddress(testAddress("22")),
+		blockNumber:         blockNumber,
+		blockGasLimit:       manifestGasLimit + 1_000_000,
+		blockExtra:          manifestExtraData(42, proposalID),
+		blockMixDigest:      manifestMixHash(common.BigToHash(parentDifficulty), blockNumber),
+		blockBaseFee:        manifestTestBaseFee,
+		l2Contract:          testTaikoL2Address(chainID),
+		anchorTo:            testTaikoL2Address(chainID),
+		anchorGas:           shastaAnchorGasLimit,
+		anchorPrivateKeyHex: nativeProofPrivateKey,
+		anchorBlockNumber:   900,
+		witnessStateNodes:   witnessStateNodes,
 	}
 	fixture.parentHeader.ParentHash = fixture.grandparentHeader.Hash()
 	return fixture
 }
 
+// buildL1Chain synthesizes a coherent L1 chain spanning
+// [anchorBlockNumber, originBlockNumber] and records the hashes the anchor
+// checkpoint and proposal origin must bind to. Headers are contiguous and
+// parent-linked so validateAnchorL1Linkage accepts them on the normal path.
+func (f *manifestBindingFixture) buildL1Chain(t *testing.T) {
+	t.Helper()
+
+	if f.originBlockNumber < f.anchorBlockNumber {
+		t.Fatalf("originBlockNumber %d below anchorBlockNumber %d", f.originBlockNumber, f.anchorBlockNumber)
+	}
+
+	headers := make([]*types.Header, 0, f.originBlockNumber-f.anchorBlockNumber+1)
+	var parentHash common.Hash
+	for number := f.anchorBlockNumber; number <= f.originBlockNumber; number++ {
+		header := &types.Header{
+			ParentHash:  parentHash,
+			UncleHash:   types.EmptyUncleHash,
+			Coinbase:    common.HexToAddress(testAddress("0a")),
+			Root:        common.HexToHash(fmt.Sprintf("0x%064x", 0x100000+number)),
+			TxHash:      types.EmptyTxsHash,
+			ReceiptHash: types.EmptyReceiptsHash,
+			Bloom:       types.Bloom{},
+			Difficulty:  big.NewInt(0),
+			Number:      new(big.Int).SetUint64(number),
+			GasLimit:    30_000_000,
+			GasUsed:     0,
+			Time:        900_000 + number,
+			Extra:       []byte{},
+			MixDigest:   common.Hash{},
+			Nonce:       types.BlockNonce{},
+			BaseFee:     new(big.Int).SetUint64(manifestTestBaseFee),
+		}
+		parentHash = header.Hash()
+		headers = append(headers, header)
+	}
+
+	f.l1Headers = headers
+	anchorHeader := headers[0]
+	originHeader := headers[len(headers)-1]
+	f.anchorCheckpointBlockHash = anchorHeader.Hash()
+	f.anchorCheckpointStateRoot = anchorHeader.Root
+	f.originBlockHash = originHeader.Hash()
+}
+
+// l1HeadersJSON renders the taiko.l1_header and taiko.l1_ancestor_headers JSON
+// fragment (with leading comma) for embedding in the taiko object. The headers
+// are the full eth JSON shape consumed by decodeGuestInputL1Headers.
+func (f *manifestBindingFixture) l1HeadersJSON(t *testing.T) string {
+	t.Helper()
+	if f.omitL1Headers || len(f.l1Headers) == 0 {
+		return ""
+	}
+	originHeader := f.l1Headers[len(f.l1Headers)-1]
+	ancestors := make([]string, 0, len(f.l1Headers))
+	for _, header := range f.l1Headers {
+		ancestors = append(ancestors, headerJSON(t, header))
+	}
+	return fmt.Sprintf(`,
+			"l1_header": %s,
+			"l1_ancestor_headers": [%s]`,
+		headerJSON(t, originHeader),
+		strings.Join(ancestors, ","),
+	)
+}
+
 func (f *manifestBindingFixture) view(t *testing.T) *GuestInputView {
 	t.Helper()
+
+	f.buildL1Chain(t)
 
 	manifestPayload := f.manifestPayload(t)
 	dataSourceJSON, sourceJSON := f.dataSourceAndSourceJSON(t, manifestPayload)
@@ -767,8 +948,8 @@ func (f *manifestBindingFixture) view(t *testing.T) *GuestInputView {
 				"actual_prover": %q,
 				"last_anchor_block_number": 899
 			},
-			"data_sources": [%s]
-		}`, f.chainID, f.proposalID, proposalJSON, testAddress("77"), dataSourceJSON)),
+			"data_sources": [%s]%s
+		}`, f.chainID, f.proposalID, proposalJSON, testAddress("77"), dataSourceJSON, f.l1HeadersJSON(t))),
 		ProposalAncestorHeaders: proposalAncestorHeaders,
 		ProofCarryData: f.proofCarryData(
 			t,
@@ -974,23 +1155,38 @@ func (f *manifestBindingFixture) blockJSON(t *testing.T) json.RawMessage {
 
 func (f *manifestBindingFixture) anchorTxJSON(t *testing.T) json.RawMessage {
 	t.Helper()
-	input := anchorInput(t, f.anchorBlockNumber, common.HexToHash(testHash("61")), common.HexToHash(testHash("62")))
+	checkpointBlockHash := f.anchorCheckpointBlockHash
+	checkpointStateRoot := f.anchorCheckpointStateRoot
+	if checkpointBlockHash == (common.Hash{}) && checkpointStateRoot == (common.Hash{}) {
+		checkpointBlockHash = common.HexToHash(testHash("61"))
+		checkpointStateRoot = common.HexToHash(testHash("62"))
+	}
+	input := anchorInput(t, f.anchorBlockNumber, checkpointBlockHash, checkpointStateRoot)
+	key, err := crypto.HexToECDSA(f.anchorPrivateKeyHex)
+	if err != nil {
+		t.Fatalf("parse anchor tx key: %v", err)
+	}
+	cfg, err := chainConfigFor(f.chainID)
+	if err != nil {
+		t.Fatalf("chain config: %v", err)
+	}
+	tx := types.NewTx(&types.DynamicFeeTx{
+		ChainID: new(big.Int).SetUint64(f.chainID), Nonce: 0, GasTipCap: big.NewInt(0),
+		GasFeeCap: new(big.Int).SetUint64(f.blockBaseFee), Gas: f.anchorGas, To: &f.anchorTo,
+		Value: big.NewInt(0), Data: input,
+	})
+	signed, err := types.SignTx(tx, types.MakeSigner(cfg, new(big.Int).SetUint64(f.blockNumber), f.blockTimestamp), key)
+	if err != nil {
+		t.Fatalf("sign anchor tx: %v", err)
+	}
+	v, r, s := signed.RawSignatureValues()
 	return mustRawMessage(t, fmt.Sprintf(`{
-		"signature": {"r": "0x1", "s": "0x1", "yParity": "0x0"},
-		"transaction": {
-			"Eip1559": {
-				"chain_id": "0x%x",
-				"nonce": "0x0",
-				"max_priority_fee_per_gas": "0x0",
-				"max_fee_per_gas": "0x%x",
-				"gas": "0xf4240",
-				"to": %q,
-				"value": "0x0",
-				"input": %q,
-				"access_list": []
-			}
-		}
-	}`, f.chainID, f.blockBaseFee, f.anchorTo.Hex(), "0x"+hex.EncodeToString(input)))
+		"signature": {"r": "0x%s", "s": "0x%s", "yParity": "0x%s"},
+		"transaction": {"Eip1559": {"chain_id": "0x%x", "nonce": "0x0",
+			"max_priority_fee_per_gas": "0x0", "max_fee_per_gas": "0x%x", "gas": "0x%x",
+			"to": %q, "value": "0x0", "input": %q, "access_list": []}}}`,
+		r.Text(16), s.Text(16), v.Text(16), f.chainID, f.blockBaseFee, f.anchorGas,
+		f.anchorTo.Hex(), "0x"+hex.EncodeToString(input)))
 }
 
 func (f *manifestBindingFixture) chainSpecJSON(t *testing.T) json.RawMessage {
@@ -1016,6 +1212,10 @@ func (f *manifestBindingFixture) witnessHeaderJSON(t *testing.T, header *types.H
 
 func (f *manifestBindingFixture) proposalJSON(t *testing.T, sourceJSON string) json.RawMessage {
 	t.Helper()
+	originBlockHash := testHash("cd")
+	if f.originBlockHash != (common.Hash{}) {
+		originBlockHash = f.originBlockHash.Hex()
+	}
 	return mustRawMessage(t, fmt.Sprintf(`{
 		"id": %d,
 		"timestamp": %d,
@@ -1033,7 +1233,7 @@ func (f *manifestBindingFixture) proposalJSON(t *testing.T, sourceJSON string) j
 		f.proposer.Hex(),
 		testHash("ab"),
 		f.originBlockNumber,
-		testHash("cd"),
+		originBlockHash,
 		sourceJSON,
 	))
 }
@@ -1229,6 +1429,34 @@ func headerJSON(t *testing.T, header *types.Header) string {
 		baseFee,
 	)
 	return raw
+}
+
+func minimalHeaderJSON(number uint64) string {
+	return fmt.Sprintf(`"number": "0x%x",
+		"gasLimit": "0x0",
+		"gasUsed": "0x0",
+		"timestamp": "0x0",
+		"difficulty": "0x0",
+		"logsBloom": %q,
+		"extraData": "0x",
+		"parentHash": %q,
+		"sha3Uncles": %q,
+		"stateRoot": %q,
+		"transactionsRoot": %q,
+		"receiptsRoot": %q,
+		"miner": %q,
+		"mixHash": %q,
+		"nonce": "0x0000000000000000"`,
+		number,
+		testBloom(),
+		testHash("00"),
+		testHash("00"),
+		testHash("00"),
+		testHash("00"),
+		testHash("00"),
+		testAddress("00"),
+		testHash("00"),
+	)
 }
 
 func encodeTestKonaBlob(t *testing.T, payload []byte) []byte {
@@ -1444,4 +1672,491 @@ func rootWitnessNode(t *testing.T, nodes []string, root common.Hash) string {
 
 func runtimeOutOfGasLoopCode() []byte {
 	return []byte{0x5b, 0x60, 0x00, 0x56}
+}
+
+func loadRealFixtureView(t *testing.T) *GuestInputView {
+	t.Helper()
+
+	if _, err := os.Stat(sharedShastaFixturePath()); err != nil {
+		t.Skipf("real fixture unavailable: %v", err)
+	}
+
+	req := loadSharedShastaFixture(t)
+	if req.Payload.GuestInput == nil {
+		t.Fatalf("real fixture missing guest_input")
+	}
+	view, err := DecodeGuestInput(*req.Payload.GuestInput)
+	if err != nil {
+		t.Fatalf("decode real fixture guest input: %v", err)
+	}
+	return view
+}
+
+func TestValidateManifestBindingAcceptsRealFixtureL1Linkage(t *testing.T) {
+	view := loadRealFixtureView(t)
+	if err := ValidateGuestInputManifestBinding(view); err != nil {
+		t.Fatalf("real fixture must pass L1 linkage: %v", err)
+	}
+}
+
+func TestValidateAnchorL1LinkageRejectsForgedCheckpointStateRoot(t *testing.T) {
+	view := loadRealFixtureView(t)
+	proposal, err := decodeGuestInputTaikoProposal(view.TaikoRaw)
+	if err != nil {
+		t.Fatalf("proposal: %v", err)
+	}
+	origin, ancestors, err := decodeGuestInputL1Headers(view.TaikoRaw)
+	if err != nil || origin == nil || len(ancestors) == 0 {
+		t.Fatalf("l1 headers: %v", err)
+	}
+	// one checkpoint per anchor block number present in ancestors[0], stateRoot forged
+	cp := anchorV4CheckpointView{blockNumber: ancestors[0].Number.Uint64(),
+		blockHash: ancestors[0].Hash(), stateRoot: common.HexToHash(testHash("ff"))}
+	spans := []manifestAnchorSourceSpan{{isForcedInclusion: false, blockCount: 1}}
+	err = validateAnchorL1Linkage(view, proposal, []anchorV4CheckpointView{cp}, spans, ancestors[0].Number.Uint64()-1)
+	if err == nil || !strings.Contains(err.Error(), "not found in taiko.l1_ancestor_headers") {
+		t.Fatalf("expected forged stateRoot rejection, got %v", err)
+	}
+}
+
+func TestValidateAnchorL1LinkageBypassMatchesParentCheckpoint(t *testing.T) {
+	view, account, parentAnchor, wantHash, wantRoot := newCheckpointStoreStateFixture(t)
+	_ = account
+	proposal := shastaProposalView{
+		OriginBlockNumber: parentAnchor + 600, // > mainnet offset 512 beyond parentAnchor
+		OriginBlockHash:   fixtureOriginHash(t, view),
+	}
+	cp := anchorV4CheckpointView{blockNumber: parentAnchor, blockHash: wantHash, stateRoot: wantRoot}
+	spans := []manifestAnchorSourceSpan{{isForcedInclusion: false, blockCount: 1}}
+	// origin header must be present as l1_header for the origin checks; helper sets chainID 167001.
+	if err := validateAnchorL1Linkage(view, proposal, []anchorV4CheckpointView{cp}, spans, parentAnchor); err != nil {
+		t.Fatalf("bypass path should accept matching parent checkpoint: %v", err)
+	}
+	bad := anchorV4CheckpointView{blockNumber: parentAnchor, blockHash: wantHash, stateRoot: common.HexToHash(testHash("ee"))}
+	if err := validateAnchorL1Linkage(view, proposal, []anchorV4CheckpointView{bad}, spans, parentAnchor); err == nil {
+		t.Fatalf("bypass path must reject non-matching checkpoint")
+	}
+}
+
+func TestValidateAnchorL1LinkageForcedPrefixMatchesParentCheckpoint(t *testing.T) {
+	view, _, parentAnchor, wantHash, wantRoot := newCheckpointStoreStateFixture(t)
+	origin, ancestors, err := decodeGuestInputL1Headers(view.TaikoRaw)
+	if err != nil || origin == nil || len(ancestors) < 2 {
+		t.Fatalf("fixture l1 headers: %v", err)
+	}
+	// The normal (non-prefix) checkpoint binds to a real, non-origin ancestor so
+	// the per-header linkage that runs after the forced prefix accepts it.
+	normalAncestor := ancestors[len(ancestors)-2]
+	proposal := shastaProposalView{
+		OriginBlockNumber: origin.Number.Uint64(),
+		OriginBlockHash:   origin.Hash(),
+	}
+	forced := anchorV4CheckpointView{blockNumber: parentAnchor, blockHash: wantHash, stateRoot: wantRoot}
+	normal := anchorV4CheckpointView{
+		blockNumber: normalAncestor.Number.Uint64(),
+		blockHash:   normalAncestor.Hash(),
+		stateRoot:   normalAncestor.Root,
+	}
+	spans := []manifestAnchorSourceSpan{
+		{isForcedInclusion: true, blockCount: 1},
+		{isForcedInclusion: false, blockCount: 1},
+	}
+	if err := validateAnchorL1Linkage(view, proposal, []anchorV4CheckpointView{forced, normal}, spans, parentAnchor); err != nil {
+		t.Fatalf("forced-inclusion prefix should accept matching parent checkpoint: %v", err)
+	}
+	// A forced-prefix checkpoint that does not equal the verified parent
+	// checkpoint must be rejected before the per-header linkage.
+	badForced := anchorV4CheckpointView{blockNumber: parentAnchor, blockHash: wantHash, stateRoot: common.HexToHash(testHash("ee"))}
+	if err := validateAnchorL1Linkage(view, proposal, []anchorV4CheckpointView{badForced, normal}, spans, parentAnchor); err == nil {
+		t.Fatalf("forced-inclusion prefix must reject non-matching parent checkpoint")
+	}
+}
+
+func TestReadParentL2StorageReturnsCheckpoint(t *testing.T) {
+	view, account, blockNumber, wantHash, wantRoot := newCheckpointStoreStateFixture(t)
+	blockHashSlot, stateRootSlot := shastaCheckpointStorageSlots(blockNumber)
+	gotHash, err := readParentL2Storage(view, account, blockHashSlot)
+	if err != nil {
+		t.Fatalf("read blockHash: %v", err)
+	}
+	gotRoot, err := readParentL2Storage(view, account, stateRootSlot)
+	if err != nil {
+		t.Fatalf("read stateRoot: %v", err)
+	}
+	if gotHash != wantHash || gotRoot != wantRoot {
+		t.Fatalf("checkpoint read mismatch: gotHash=%s wantHash=%s gotRoot=%s wantRoot=%s",
+			gotHash.Hex(), wantHash.Hex(), gotRoot.Hex(), wantRoot.Hex())
+	}
+}
+
+// TestReadParentL2StorageRequiresProposalStateNodes confirms the storage-trie
+// nodes carried in view.Raw.ProposalStateNodes are load-bearing: dropping them
+// leaves the storage trie unresolvable, so the read must surface a missing-node
+// error rather than silently returning an empty (zero) slot.
+func TestReadParentL2StorageRequiresProposalStateNodes(t *testing.T) {
+	view, account, blockNumber, _, _ := newCheckpointStoreStateFixture(t)
+	view.Raw.ProposalStateNodes = nil
+	blockHashSlot, _ := shastaCheckpointStorageSlots(blockNumber)
+	if _, err := readParentL2Storage(view, account, blockHashSlot); err == nil {
+		t.Fatalf("expected error reading storage slot without proposal state nodes")
+	}
+}
+
+// TestReadParentL2StorageRejectsForgedParentRoot proves the parent pre-state root
+// used for the CheckpointStore read is bound to the committed
+// TransitionInput.ParentBlockHash: a witness whose parent header carries a forged
+// state root (and therefore a different block hash) is rejected by the read alone,
+// so the manifest-binding path is sound without relying on the later replay step.
+func TestReadParentL2StorageRejectsForgedParentRoot(t *testing.T) {
+	account := common.HexToAddress(testAddress("34"))
+	newParent := func(root common.Hash) *types.Header {
+		return &types.Header{
+			ParentHash:  common.HexToHash(testHash("01")),
+			UncleHash:   types.EmptyUncleHash,
+			Coinbase:    common.HexToAddress(testAddress("02")),
+			Root:        root,
+			TxHash:      types.EmptyTxsHash,
+			ReceiptHash: types.EmptyReceiptsHash,
+			Difficulty:  big.NewInt(0),
+			Number:      new(big.Int).SetUint64(24862915),
+			GasLimit:    30_000_000,
+			Time:        1_000,
+			Extra:       []byte{},
+			BaseFee:     new(big.Int).SetUint64(manifestTestBaseFee),
+		}
+	}
+	// The committed parent is the header carrying the real pre-state root; the
+	// witness instead supplies a header with a forged root (hence a different hash).
+	committedParentHash := newParent(common.HexToHash(testHash("cd"))).Hash()
+	forgedParent := newParent(common.HexToHash(testHash("ef")))
+	if forgedParent.Hash() == committedParentHash {
+		t.Fatal("test setup: forging the state root must change the header hash")
+	}
+
+	child := &types.Header{
+		ParentHash:  forgedParent.Hash(),
+		UncleHash:   types.EmptyUncleHash,
+		Coinbase:    common.HexToAddress(testAddress("02")),
+		Root:        common.HexToHash(testHash("55")),
+		TxHash:      types.EmptyTxsHash,
+		ReceiptHash: types.EmptyReceiptsHash,
+		Difficulty:  big.NewInt(0),
+		Number:      new(big.Int).SetUint64(24862916),
+		GasLimit:    30_000_000,
+		Time:        1_012,
+		Extra:       []byte{},
+		BaseFee:     new(big.Int).SetUint64(manifestTestBaseFee),
+	}
+	witnessJSON := mustRawMessage(t, fmt.Sprintf(`{
+		"block": {"header": %s, "body": {"transactions": [], "ommers": [], "withdrawals": []}},
+		"chain_spec": {"chain_id": 167001, "checkpoint_store_contract": %q},
+		"witness": {"state": [], "state_indices": [], "codes": [], "headers": [%s]},
+		"accounts": {}
+	}`, headerJSON(t, child), account.Hex(),
+		fmt.Sprintf(`{"header": %s, "hash": %q}`, headerJSON(t, forgedParent), forgedParent.Hash().Hex())))
+
+	witnessView, _, err := decodeGuestInputWitness(witnessJSON)
+	if err != nil {
+		t.Fatalf("decode witness: %v", err)
+	}
+	view := &GuestInputView{Witnesses: []GuestInputWitnessView{witnessView}}
+	view.Carry.TransitionInput.ParentBlockHash = committedParentHash
+
+	blockHashSlot, _ := shastaCheckpointStorageSlots(24862915)
+	if _, err := readParentL2Storage(view, account, blockHashSlot); err == nil ||
+		!strings.Contains(err.Error(), "does not match committed parent block hash") {
+		t.Fatalf("expected forged parent-root rejection, got %v", err)
+	}
+}
+
+// TestValidateAnchorL1LinkageRejectsUnboundWitnessParent proves the rejection
+// propagates through the binding-path linkage validator (the function
+// ValidateGuestInputManifestBinding calls): if the witness parent header does not
+// bind to the committed parent block hash, the bypass/forced checkpoint read fails
+// there, without running ReplayService.Prove.
+func TestValidateAnchorL1LinkageRejectsUnboundWitnessParent(t *testing.T) {
+	view, _, parentAnchor, wantHash, wantRoot := newCheckpointStoreStateFixture(t)
+	proposal := shastaProposalView{
+		OriginBlockNumber: parentAnchor + 600,
+		OriginBlockHash:   fixtureOriginHash(t, view),
+	}
+	cp := anchorV4CheckpointView{blockNumber: parentAnchor, blockHash: wantHash, stateRoot: wantRoot}
+	spans := []manifestAnchorSourceSpan{{isForcedInclusion: false, blockCount: 1}}
+	// Committed parent no longer matches the witness parent header — as if the
+	// witness pre-state root were forged.
+	view.Carry.TransitionInput.ParentBlockHash = common.HexToHash(testHash("99"))
+	if err := validateAnchorL1Linkage(view, proposal, []anchorV4CheckpointView{cp}, spans, parentAnchor); err == nil {
+		t.Fatalf("bypass path must reject an unbound witness parent header")
+	}
+}
+
+// TestDecodeProposalStateNodesRealFixture gives the forced-inclusion / bypass
+// CheckpointStore decode real-wire coverage. The real mainnet fixture is
+// normal-path, so it never invokes readParentL2Storage, but its ~5.9k
+// proposal_state_nodes are genuine raiko2 output; decoding them confirms the
+// bare-hex wire form holds against real data, not just synthetic fixtures.
+func TestDecodeProposalStateNodesRealFixture(t *testing.T) {
+	view := loadRealFixtureView(t)
+	raws := view.Raw.ProposalStateNodes
+	if len(raws) == 0 {
+		t.Fatal("real fixture has no proposal_state_nodes")
+	}
+	nodes, err := decodeProposalStateNodes(raws)
+	if err != nil {
+		t.Fatalf("decode real proposal_state_nodes: %v", err)
+	}
+	if len(nodes) != len(raws) {
+		t.Fatalf("decoded node count %d != input %d", len(nodes), len(raws))
+	}
+	for i, node := range nodes {
+		if len(node) == 0 {
+			t.Fatalf("proposal_state_nodes[%d] decoded to empty bytes", i)
+		}
+	}
+}
+
+// newCheckpointStoreStateFixture builds a GuestInputView whose first witness
+// carries a coherent nested trie: an account trie (its root is the pre-state
+// root) containing a CheckpointStore account whose storageRoot points at a
+// storage trie holding blockHashSlot=>wantHash and stateRootSlot=>wantRoot.
+//
+// The account-trie nodes are placed in the witness's own state set while the
+// storage-trie nodes are placed in view.Raw.ProposalStateNodes, so a passing
+// read proves readParentL2Storage merges both node sources before opening the
+// pre-state.
+func newCheckpointStoreStateFixture(t *testing.T) (*GuestInputView, common.Address, uint64, common.Hash, common.Hash) {
+	t.Helper()
+
+	const chainID = uint64(167001)
+	account := common.HexToAddress("0x1234567890AbcdEF1234567890aBcdef12345678")
+	blockNumber := uint64(24862915)
+	wantHash := common.HexToHash(testHash("ab"))
+	wantRoot := common.HexToHash(testHash("cd"))
+
+	blockHashSlot, stateRootSlot := shastaCheckpointStorageSlots(blockNumber)
+
+	memdb := rawdb.NewMemoryDatabase()
+	tdb := triedb.NewDatabase(memdb, triedb.HashDefaults)
+	statedb, err := state.New(types.EmptyRootHash, state.NewDatabase(tdb, state.NewCodeDB(memdb)))
+	if err != nil {
+		t.Fatalf("open checkpoint store state: %v", err)
+	}
+	// Give the account a nonce so it survives commit as a non-empty object.
+	statedb.SetNonce(account, 1, tracing.NonceChangeUnspecified)
+	statedb.SetState(account, blockHashSlot, wantHash)
+	statedb.SetState(account, stateRootSlot, wantRoot)
+
+	accountRoot, err := statedb.Commit(0, false, false)
+	if err != nil {
+		t.Fatalf("commit checkpoint store state: %v", err)
+	}
+
+	// Account-trie nodes -> witness state.
+	accountTrie, err := trie.NewStateTrie(trie.StateTrieID(accountRoot), tdb)
+	if err != nil {
+		t.Fatalf("open account trie: %v", err)
+	}
+	stateAccount, err := accountTrie.GetAccount(account)
+	if err != nil || stateAccount == nil {
+		t.Fatalf("resolve checkpoint store account: %v", err)
+	}
+	witnessStateNodes := collectTrieNodes(t, accountTrie)
+
+	// Storage-trie nodes -> proposal state nodes (shared witness resources).
+	storageTrie, err := trie.NewStateTrie(
+		trie.StorageTrieID(accountRoot, crypto.Keccak256Hash(account.Bytes()), stateAccount.Root),
+		tdb,
+	)
+	if err != nil {
+		t.Fatalf("open storage trie: %v", err)
+	}
+	storageNodes := collectTrieNodes(t, storageTrie)
+	if len(storageNodes) == 0 {
+		t.Fatalf("storage trie produced no nodes")
+	}
+	proposalStateNodes := make([]json.RawMessage, 0, len(storageNodes))
+	for _, node := range storageNodes {
+		proposalStateNodes = append(proposalStateNodes, mustRawMessage(t, fmt.Sprintf("%q", node)))
+	}
+
+	parentHeader := &types.Header{
+		ParentHash:  common.HexToHash(testHash("01")),
+		UncleHash:   types.EmptyUncleHash,
+		Coinbase:    common.HexToAddress(testAddress("02")),
+		Root:        accountRoot,
+		TxHash:      types.EmptyTxsHash,
+		ReceiptHash: types.EmptyReceiptsHash,
+		Bloom:       types.Bloom{},
+		Difficulty:  big.NewInt(0),
+		Number:      new(big.Int).SetUint64(blockNumber),
+		GasLimit:    30_000_000,
+		GasUsed:     0,
+		Time:        1_000,
+		Extra:       []byte{},
+		MixDigest:   common.Hash{},
+		Nonce:       types.BlockNonce{},
+		BaseFee:     new(big.Int).SetUint64(manifestTestBaseFee),
+	}
+	childHeader := &types.Header{
+		ParentHash:  parentHeader.Hash(),
+		UncleHash:   types.EmptyUncleHash,
+		Coinbase:    common.HexToAddress(testAddress("02")),
+		Root:        common.HexToHash(testHash("55")),
+		TxHash:      types.EmptyTxsHash,
+		ReceiptHash: types.EmptyReceiptsHash,
+		Bloom:       types.Bloom{},
+		Difficulty:  big.NewInt(0),
+		Number:      new(big.Int).SetUint64(blockNumber + 1),
+		GasLimit:    30_000_000,
+		GasUsed:     0,
+		Time:        1_012,
+		Extra:       []byte{},
+		MixDigest:   common.Hash{},
+		Nonce:       types.BlockNonce{},
+		BaseFee:     new(big.Int).SetUint64(manifestTestBaseFee),
+	}
+
+	blockJSON := mustRawMessage(t, fmt.Sprintf(`{
+		"header": %s,
+		"body": {"transactions": [], "ommers": [], "withdrawals": []}
+	}`, headerJSON(t, childHeader)))
+	witnessStateJSON, err := json.Marshal(witnessStateNodes)
+	if err != nil {
+		t.Fatalf("marshal witness state: %v", err)
+	}
+
+	// Coherent short L1 chain ending at the origin block. The bypass test sets
+	// proposal.OriginBlockNumber = parentAnchor + 600 (> the mainnet 512 anchor
+	// offset), so origin is fixed here at blockNumber + 600. The origin checks in
+	// validateAnchorL1Linkage run before the bypass/forced branch, so l1_header
+	// must equal an origin header at that number; l1_ancestor_headers are
+	// contiguous and parent-linked so the forced-inclusion test's normal
+	// checkpoint can bind to a real ancestor.
+	originBlockNumber := blockNumber + 600
+	l1Headers := buildContiguousL1Headers(originBlockNumber-2, originBlockNumber)
+	originHeader := l1Headers[len(l1Headers)-1]
+	l1AncestorsJSON := make([]string, 0, len(l1Headers))
+	for _, header := range l1Headers {
+		l1AncestorsJSON = append(l1AncestorsJSON, headerJSON(t, header))
+	}
+	taikoJSON := fmt.Sprintf(`{
+		"chain_spec": {"chain_id": %d},
+		"l1_header": %s,
+		"l1_ancestor_headers": [%s]
+	}`, chainID, headerJSON(t, originHeader), strings.Join(l1AncestorsJSON, ","))
+
+	input := protocol.ShastaGuestInput{
+		Witnesses: []json.RawMessage{
+			mustRawMessage(t, fmt.Sprintf(`{
+				"block": %s,
+				"chain_spec": {"chain_id": %d, "checkpoint_store_contract": %q},
+				"witness": {"state": %s, "state_indices": [], "codes": [], "headers": [%s]},
+				"accounts": {}
+			}`,
+				blockJSON,
+				chainID,
+				account.Hex(),
+				witnessStateJSON,
+				fmt.Sprintf(`{"header": %s, "hash": %q}`, headerJSON(t, parentHeader), parentHeader.Hash().Hex()),
+			)),
+		},
+		Taiko:                   mustRawMessage(t, taikoJSON),
+		ProposalAncestorHeaders: []json.RawMessage{},
+		ProposalStateNodes:      proposalStateNodes,
+	}
+
+	view := &GuestInputView{Raw: input}
+	witnessView, _, err := decodeGuestInputWitness(input.Witnesses[0])
+	if err != nil {
+		t.Fatalf("decode fixture witness: %v", err)
+	}
+	view.Witnesses = []GuestInputWitnessView{witnessView}
+	view.TaikoRaw = input.Taiko
+	view.GuestInputChainID = chainID
+	// The witness parent header is the committed transition parent, so bind it —
+	// readParentL2Storage now requires Headers[0].Hash() == ParentBlockHash before
+	// trusting the pre-state root.
+	view.Carry.TransitionInput.ParentBlockHash = parentHeader.Hash()
+
+	return view, account, blockNumber, wantHash, wantRoot
+}
+
+// buildContiguousL1Headers synthesizes a contiguous, parent-linked L1 header
+// chain covering [from, to] inclusive. Each header carries a distinct state root
+// so a checkpoint bound to any of them (blockHash + stateRoot) is uniquely
+// identified. Used by newCheckpointStoreStateFixture to give the origin and
+// forced-inclusion checkpoint tests a real L1 chain to bind against.
+func buildContiguousL1Headers(from, to uint64) []*types.Header {
+	headers := make([]*types.Header, 0, to-from+1)
+	var parentHash common.Hash
+	for number := from; number <= to; number++ {
+		header := &types.Header{
+			ParentHash:  parentHash,
+			UncleHash:   types.EmptyUncleHash,
+			Coinbase:    common.HexToAddress(testAddress("0a")),
+			Root:        common.HexToHash(fmt.Sprintf("0x%064x", 0x200000+number)),
+			TxHash:      types.EmptyTxsHash,
+			ReceiptHash: types.EmptyReceiptsHash,
+			Bloom:       types.Bloom{},
+			Difficulty:  big.NewInt(0),
+			Number:      new(big.Int).SetUint64(number),
+			GasLimit:    30_000_000,
+			GasUsed:     0,
+			Time:        900_000 + number,
+			Extra:       []byte{},
+			MixDigest:   common.Hash{},
+			Nonce:       types.BlockNonce{},
+			BaseFee:     new(big.Int).SetUint64(manifestTestBaseFee),
+		}
+		parentHash = header.Hash()
+		headers = append(headers, header)
+	}
+	return headers
+}
+
+// fixtureOriginHash returns the hash of the taiko.l1_header embedded in the view
+// by newCheckpointStoreStateFixture. The bypass/forced-inclusion tests use it as
+// proposal.OriginBlockHash so the origin checks in validateAnchorL1Linkage pass.
+func fixtureOriginHash(t *testing.T, view *GuestInputView) common.Hash {
+	t.Helper()
+	origin, _, err := decodeGuestInputL1Headers(view.TaikoRaw)
+	if err != nil {
+		t.Fatalf("decode fixture origin header: %v", err)
+	}
+	return origin.Hash()
+}
+
+func collectTrieNodes(t *testing.T, tr *trie.StateTrie) []string {
+	t.Helper()
+	it, err := tr.NodeIterator(nil)
+	if err != nil {
+		t.Fatalf("iterate trie: %v", err)
+	}
+	nodes := make([]string, 0, 4)
+	for it.Next(true) {
+		if it.Hash() == (common.Hash{}) {
+			continue
+		}
+		blob := it.NodeBlob()
+		if len(blob) == 0 {
+			continue
+		}
+		nodes = append(nodes, "0x"+hex.EncodeToString(blob))
+	}
+	return nodes
+}
+
+func TestShastaCheckpointStorageSlots(t *testing.T) {
+	blockHashSlot, stateRootSlot := shastaCheckpointStorageSlots(24862915)
+	var buf [64]byte
+	new(big.Int).SetUint64(24862915).FillBytes(buf[0:32])
+	new(big.Int).SetUint64(254).FillBytes(buf[32:64])
+	want := crypto.Keccak256Hash(buf[:])
+	if blockHashSlot != want {
+		t.Fatalf("blockHashSlot: got %s want %s", blockHashSlot.Hex(), want.Hex())
+	}
+	wantSR := common.BigToHash(new(big.Int).Add(want.Big(), big.NewInt(1)))
+	if stateRootSlot != wantSR {
+		t.Fatalf("stateRootSlot: got %s want %s", stateRootSlot.Hex(), wantSR.Hex())
+	}
 }
