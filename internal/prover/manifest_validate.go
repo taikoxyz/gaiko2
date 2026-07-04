@@ -39,6 +39,11 @@ const (
 
 const shastaSignalServiceCheckpointsSlot uint64 = 254
 
+// shastaAnchorBlockStateSlot is the storage slot of Anchor._blockState on the
+// TaikoL2 contract. anchorBlockNumber is a uint48 packed into the low 48 bits of
+// the word at this slot. Matches raiko2's ANCHOR_BLOCK_STATE_SLOT.
+const shastaAnchorBlockStateSlot uint64 = 256
+
 var shastaGoldenTouchAccount = common.HexToAddress("0x0000777735367b36bC9B61C50022d9D0700dB4Ec")
 
 type shastaSourceManifest struct {
@@ -1080,6 +1085,12 @@ func shastaCheckpointStorageSlots(blockNumber uint64) (common.Hash, common.Hash)
 	blockHashSlot := crypto.Keccak256Hash(buf[:])
 	stateRootSlot := common.BigToHash(new(big.Int).Add(blockHashSlot.Big(), big.NewInt(1)))
 	return blockHashSlot, stateRootSlot
+}
+
+// anchorBlockNumberFromStorageWord extracts Anchor._blockState.anchorBlockNumber,
+// a uint48 packed into the least-significant 48 bits of the storage word.
+func anchorBlockNumberFromStorageWord(word common.Hash) uint64 {
+	return new(big.Int).SetBytes(word[26:32]).Uint64()
 }
 
 func verifiedParentShastaCheckpoint(view *GuestInputView, blockNumber uint64) (anchorV4CheckpointView, error) {

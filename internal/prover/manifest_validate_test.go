@@ -2160,3 +2160,17 @@ func TestShastaCheckpointStorageSlots(t *testing.T) {
 		t.Fatalf("stateRootSlot: got %s want %s", stateRootSlot.Hex(), wantSR.Hex())
 	}
 }
+
+func TestAnchorBlockNumberFromStorageWord(t *testing.T) {
+	// Real mainnet slot-256 word observed in the shared fixture.
+	real := common.HexToHash("0x00000000000000000000000000000000000000000000000000000000017b60a5")
+	if got := anchorBlockNumberFromStorageWord(real); got != 24862885 {
+		t.Fatalf("real word: got %d want 24862885", got)
+	}
+	// Full uint48 in the low 48 bits; higher-order bytes are other packed
+	// struct fields and must be ignored.
+	packed := common.HexToHash("0x" + strings.Repeat("ab", 26) + "ffffffffffff")
+	if got := anchorBlockNumberFromStorageWord(packed); got != 281474976710655 {
+		t.Fatalf("packed word: got %d want 281474976710655", got)
+	}
+}
