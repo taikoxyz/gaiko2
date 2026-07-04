@@ -296,6 +296,21 @@ func TestValidateManifestAnchorNumbersRejectsNormalSourceThatDoesNotAdvance(t *t
 	}
 }
 
+func TestDecodeGuestInputL1HeadersReadsOriginAndAncestors(t *testing.T) {
+	raw := mustRawMessage(t, `{"l1_header":{`+minimalHeaderJSON(100)+`},
+		"l1_ancestor_headers":[{`+minimalHeaderJSON(99)+`},{`+minimalHeaderJSON(100)+`}]}`)
+	origin, ancestors, err := decodeGuestInputL1Headers(raw)
+	if err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if origin.Number.Uint64() != 100 {
+		t.Fatalf("origin number: got %d", origin.Number.Uint64())
+	}
+	if len(ancestors) != 2 || ancestors[1].Number.Uint64() != 100 {
+		t.Fatalf("ancestors: got %d entries", len(ancestors))
+	}
+}
+
 func TestValidateManifestBindingRejectsEmptyProposalSources(t *testing.T) {
 	view := newManifestBindingFixture(t).view(t)
 	taikoFields, err := decodeJSONObject(view.TaikoRaw)
@@ -1287,6 +1302,34 @@ func headerJSON(t *testing.T, header *types.Header) string {
 		baseFee,
 	)
 	return raw
+}
+
+func minimalHeaderJSON(number uint64) string {
+	return fmt.Sprintf(`"number": "0x%x",
+		"gasLimit": "0x0",
+		"gasUsed": "0x0",
+		"timestamp": "0x0",
+		"difficulty": "0x0",
+		"logsBloom": %q,
+		"extraData": "0x",
+		"parentHash": %q,
+		"sha3Uncles": %q,
+		"stateRoot": %q,
+		"transactionsRoot": %q,
+		"receiptsRoot": %q,
+		"miner": %q,
+		"mixHash": %q,
+		"nonce": "0x0000000000000000"`,
+		number,
+		testBloom(),
+		testHash("00"),
+		testHash("00"),
+		testHash("00"),
+		testHash("00"),
+		testHash("00"),
+		testAddress("00"),
+		testHash("00"),
+	)
 }
 
 func encodeTestKonaBlob(t *testing.T, payload []byte) []byte {

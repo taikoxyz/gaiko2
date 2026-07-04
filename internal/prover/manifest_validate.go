@@ -1061,6 +1061,38 @@ func shastaManifestParentDifficulty(parentHeader *types.Header) common.Hash {
 	return common.BigToHash(parentHeader.Difficulty)
 }
 
+func decodeGuestInputL1Headers(raw json.RawMessage) (*types.Header, []*types.Header, error) {
+	fields, err := decodeJSONObject(raw)
+	if err != nil {
+		return nil, nil, fmt.Errorf("unmarshal taiko: %w", err)
+	}
+	l1HeaderRaw, ok := lookupField(fields, "l1_header", "l1Header")
+	if !ok || isEmptyOrNullRawMessage(l1HeaderRaw) {
+		return nil, nil, fmt.Errorf("missing taiko.l1_header")
+	}
+	l1Header, err := decodeHeader(l1HeaderRaw)
+	if err != nil {
+		return nil, nil, fmt.Errorf("decode taiko.l1_header: %w", err)
+	}
+	ancestorsRaw, ok := lookupField(fields, "l1_ancestor_headers", "l1AncestorHeaders")
+	if !ok || isEmptyOrNullRawMessage(ancestorsRaw) {
+		return l1Header, nil, nil
+	}
+	var rawList []json.RawMessage
+	if err := json.Unmarshal(ancestorsRaw, &rawList); err != nil {
+		return nil, nil, fmt.Errorf("unmarshal taiko.l1_ancestor_headers: %w", err)
+	}
+	ancestors := make([]*types.Header, len(rawList))
+	for i, r := range rawList {
+		h, err := decodeHeader(r)
+		if err != nil {
+			return nil, nil, fmt.Errorf("decode taiko.l1_ancestor_headers[%d]: %w", i, err)
+		}
+		ancestors[i] = h
+	}
+	return l1Header, ancestors, nil
+}
+
 func decodeGuestInputLastAnchorBlockNumber(raw json.RawMessage) (uint64, error) {
 	fields, err := decodeJSONObject(raw)
 	if err != nil {
