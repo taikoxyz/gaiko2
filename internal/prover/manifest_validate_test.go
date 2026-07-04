@@ -1782,6 +1782,94 @@ func TestReadParentL2StorageRequiresProposalStateNodes(t *testing.T) {
 	}
 }
 
+// TestReadParentL2StorageRejectsForgedParentRoot proves the parent pre-state root
+// used for the CheckpointStore read is bound to the committed
+// TransitionInput.ParentBlockHash: a witness whose parent header carries a forged
+// state root (and therefore a different block hash) is rejected by the read alone,
+// so the manifest-binding path is sound without relying on the later replay step.
+func TestReadParentL2StorageRejectsForgedParentRoot(t *testing.T) {
+	account := common.HexToAddress(testAddress("34"))
+	newParent := func(root common.Hash) *types.Header {
+		return &types.Header{
+			ParentHash:  common.HexToHash(testHash("01")),
+			UncleHash:   types.EmptyUncleHash,
+			Coinbase:    common.HexToAddress(testAddress("02")),
+			Root:        root,
+			TxHash:      types.EmptyTxsHash,
+			ReceiptHash: types.EmptyReceiptsHash,
+			Difficulty:  big.NewInt(0),
+			Number:      new(big.Int).SetUint64(24862915),
+			GasLimit:    30_000_000,
+			Time:        1_000,
+			Extra:       []byte{},
+			BaseFee:     new(big.Int).SetUint64(manifestTestBaseFee),
+		}
+	}
+	// The committed parent is the header carrying the real pre-state root; the
+	// witness instead supplies a header with a forged root (hence a different hash).
+	committedParentHash := newParent(common.HexToHash(testHash("cd"))).Hash()
+	forgedParent := newParent(common.HexToHash(testHash("ef")))
+	if forgedParent.Hash() == committedParentHash {
+		t.Fatal("test setup: forging the state root must change the header hash")
+	}
+
+	child := &types.Header{
+		ParentHash:  forgedParent.Hash(),
+		UncleHash:   types.EmptyUncleHash,
+		Coinbase:    common.HexToAddress(testAddress("02")),
+		Root:        common.HexToHash(testHash("55")),
+		TxHash:      types.EmptyTxsHash,
+		ReceiptHash: types.EmptyReceiptsHash,
+		Difficulty:  big.NewInt(0),
+		Number:      new(big.Int).SetUint64(24862916),
+		GasLimit:    30_000_000,
+		Time:        1_012,
+		Extra:       []byte{},
+		BaseFee:     new(big.Int).SetUint64(manifestTestBaseFee),
+	}
+	witnessJSON := mustRawMessage(t, fmt.Sprintf(`{
+		"block": {"header": %s, "body": {"transactions": [], "ommers": [], "withdrawals": []}},
+		"chain_spec": {"chain_id": 167001, "checkpoint_store_contract": %q},
+		"witness": {"state": [], "state_indices": [], "codes": [], "headers": [%s]},
+		"accounts": {}
+	}`, headerJSON(t, child), account.Hex(),
+		fmt.Sprintf(`{"header": %s, "hash": %q}`, headerJSON(t, forgedParent), forgedParent.Hash().Hex())))
+
+	witnessView, _, err := decodeGuestInputWitness(witnessJSON)
+	if err != nil {
+		t.Fatalf("decode witness: %v", err)
+	}
+	view := &GuestInputView{Witnesses: []GuestInputWitnessView{witnessView}}
+	view.Carry.TransitionInput.ParentBlockHash = committedParentHash
+
+	blockHashSlot, _ := shastaCheckpointStorageSlots(24862915)
+	if _, err := readParentL2Storage(view, account, blockHashSlot); err == nil ||
+		!strings.Contains(err.Error(), "does not match committed parent block hash") {
+		t.Fatalf("expected forged parent-root rejection, got %v", err)
+	}
+}
+
+// TestValidateAnchorL1LinkageRejectsUnboundWitnessParent proves the rejection
+// propagates through the binding-path linkage validator (the function
+// ValidateGuestInputManifestBinding calls): if the witness parent header does not
+// bind to the committed parent block hash, the bypass/forced checkpoint read fails
+// there, without running ReplayService.Prove.
+func TestValidateAnchorL1LinkageRejectsUnboundWitnessParent(t *testing.T) {
+	view, _, parentAnchor, wantHash, wantRoot := newCheckpointStoreStateFixture(t)
+	proposal := shastaProposalView{
+		OriginBlockNumber: parentAnchor + 600,
+		OriginBlockHash:   fixtureOriginHash(t, view),
+	}
+	cp := anchorV4CheckpointView{blockNumber: parentAnchor, blockHash: wantHash, stateRoot: wantRoot}
+	spans := []manifestAnchorSourceSpan{{isForcedInclusion: false, blockCount: 1}}
+	// Committed parent no longer matches the witness parent header — as if the
+	// witness pre-state root were forged.
+	view.Carry.TransitionInput.ParentBlockHash = common.HexToHash(testHash("99"))
+	if err := validateAnchorL1Linkage(view, proposal, []anchorV4CheckpointView{cp}, spans, parentAnchor); err == nil {
+		t.Fatalf("bypass path must reject an unbound witness parent header")
+	}
+}
+
 // newCheckpointStoreStateFixture builds a GuestInputView whose first witness
 // carries a coherent nested trie: an account trie (its root is the pre-state
 // root) containing a CheckpointStore account whose storageRoot points at a
@@ -1940,6 +2028,10 @@ func newCheckpointStoreStateFixture(t *testing.T) (*GuestInputView, common.Addre
 	view.Witnesses = []GuestInputWitnessView{witnessView}
 	view.TaikoRaw = input.Taiko
 	view.GuestInputChainID = chainID
+	// The witness parent header is the committed transition parent, so bind it —
+	// readParentL2Storage now requires Headers[0].Hash() == ParentBlockHash before
+	// trusting the pre-state root.
+	view.Carry.TransitionInput.ParentBlockHash = parentHeader.Hash()
 
 	return view, account, blockNumber, wantHash, wantRoot
 }

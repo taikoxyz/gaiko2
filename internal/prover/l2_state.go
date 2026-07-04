@@ -22,7 +22,19 @@ func readParentL2Storage(view *GuestInputView, account common.Address, slot comm
 	if len(replayWitness.Witness.Headers) == 0 || replayWitness.Witness.Headers[0] == nil {
 		return common.Hash{}, fmt.Errorf("first witness missing parent header")
 	}
-	preStateRoot := replayWitness.Witness.Headers[0].Root
+	parentHeader := replayWitness.Witness.Headers[0]
+	// The witness parent header's state root is only a trustworthy pre-state root
+	// if that header is the committed transition parent. Bind it to
+	// TransitionInput.ParentBlockHash here so this read — and therefore manifest
+	// binding — is sound on its own, rather than relying on the later replay-phase
+	// checks in validateReplayWitness / validateBlockViews (which run only inside
+	// ReplayService.Prove).
+	if got := parentHeader.Hash(); got != view.Carry.TransitionInput.ParentBlockHash {
+		return common.Hash{}, fmt.Errorf(
+			"witness parent header hash %s does not match committed parent block hash %s",
+			got.Hex(), view.Carry.TransitionInput.ParentBlockHash.Hex())
+	}
+	preStateRoot := parentHeader.Root
 
 	witness := &stateless.Witness{
 		Headers: replayWitness.Witness.Headers,
