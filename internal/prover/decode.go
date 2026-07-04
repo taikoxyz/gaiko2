@@ -415,7 +415,7 @@ func decodeWitness(raw json.RawMessage) (*ReplayWitness, error) {
 		return nil, fmt.Errorf("witness contains state_indices; adapter must expand shared state nodes first")
 	}
 
-	fullHeaders, compactAncestors, err := decodeWitnessHeaders(decoded.Headers)
+	fullHeaders, err := decodeWitnessHeaders(decoded.Headers)
 	if err != nil {
 		return nil, err
 	}
@@ -430,60 +430,38 @@ func decodeWitness(raw json.RawMessage) (*ReplayWitness, error) {
 	for _, node := range decoded.State {
 		witness.State[string(node)] = struct{}{}
 	}
-	return &ReplayWitness{
-		Witness:          witness,
-		CompactAncestors: compactAncestors,
-	}, nil
+	return &ReplayWitness{Witness: witness}, nil
 }
 
-func decodeWitnessHeaders(raws []json.RawMessage) ([]*types.Header, []CompactAncestor, error) {
+func decodeWitnessHeaders(raws []json.RawMessage) ([]*types.Header, error) {
 	if len(raws) == 0 {
-		return nil, nil, fmt.Errorf("witness must include at least one ancestor header")
+		return nil, fmt.Errorf("witness must include at least one ancestor header")
 	}
-	fullHeaders := make([]*types.Header, 0, 1)
-	compactAncestors := make([]CompactAncestor, 0, len(raws))
+	headers := make([]*types.Header, 0, len(raws))
 	for index, raw := range raws {
 		var decoded rawWitnessHeader
-		if err := json.Unmarshal(raw, &decoded); err == nil && len(decoded.Header) > 0 && !bytes.Equal(decoded.Header, []byte("null")) {
-			header, err := decodeHeader(decoded.Header)
-			if err != nil {
-				return nil, nil, fmt.Errorf("decode witness header %d: %w", index, err)
-			}
-			fullHeaders = append(fullHeaders, header)
-			continue
+		if err := json.Unmarshal(raw, &decoded); err != nil ||
+			len(decoded.Header) == 0 || bytes.Equal(decoded.Header, []byte("null")) {
+			return nil, fmt.Errorf(
+				"witness header %d is not a full header; compact replay ancestors are not accepted",
+				index,
+			)
 		}
-
-		fields, err := decodeJSONObject(raw)
+		header, err := decodeHeader(decoded.Header)
 		if err != nil {
-			return nil, nil, fmt.Errorf("decode witness header %d: %w", index, err)
+			return nil, fmt.Errorf("decode witness header %d: %w", index, err)
 		}
-		number, err := requireUint64(fields, "number")
-		if err != nil {
-			return nil, nil, fmt.Errorf("decode witness header %d number: %w", index, err)
-		}
-		hash, err := requireHash(fields, "hash")
-		if err != nil {
-			return nil, nil, fmt.Errorf("decode witness header %d hash: %w", index, err)
-		}
-		parentHash, err := requireHash(fields, "parent_hash", "parentHash")
-		if err != nil {
-			return nil, nil, fmt.Errorf("decode witness header %d parent hash: %w", index, err)
-		}
-		timestamp, err := requireUint64(fields, "timestamp")
-		if err != nil {
-			return nil, nil, fmt.Errorf("decode witness header %d timestamp: %w", index, err)
-		}
-		compactAncestors = append(compactAncestors, CompactAncestor{
-			Number:     number,
-			Hash:       hash,
-			ParentHash: parentHash,
-			Timestamp:  timestamp,
-		})
+		headers = append(headers, header)
 	}
-	if len(fullHeaders) == 0 {
-		return nil, nil, fmt.Errorf("witness must include a full parent header")
+	// Producers emit ancestors oldest-first (parent last); taiko-geth's stateless
+	// witness requires parent-first (Headers[0] = parent, used by Root()). Reverse
+	// into parent-first order. validateReplayWitness then binds Headers[0] to the
+	// block's parent and verifies ancestor contiguity, failing closed on any
+	// ordering deviation.
+	for i, j := 0, len(headers)-1; i < j; i, j = i+1, j-1 {
+		headers[i], headers[j] = headers[j], headers[i]
 	}
-	return fullHeaders, compactAncestors, nil
+	return headers, nil
 }
 
 func decodeJSONObject(raw json.RawMessage) (map[string]json.RawMessage, error) {
