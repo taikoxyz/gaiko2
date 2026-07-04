@@ -1699,6 +1699,59 @@ func TestValidateAnchorL1LinkageRejectsForgedCheckpointStateRoot(t *testing.T) {
 	}
 }
 
+func TestValidateAnchorL1LinkageBypassMatchesParentCheckpoint(t *testing.T) {
+	view, account, parentAnchor, wantHash, wantRoot := newCheckpointStoreStateFixture(t)
+	_ = account
+	proposal := shastaProposalView{
+		OriginBlockNumber: parentAnchor + 600, // > mainnet offset 512 beyond parentAnchor
+		OriginBlockHash:   fixtureOriginHash(t, view),
+	}
+	cp := anchorV4CheckpointView{blockNumber: parentAnchor, blockHash: wantHash, stateRoot: wantRoot}
+	spans := []manifestAnchorSourceSpan{{isForcedInclusion: false, blockCount: 1}}
+	// origin header must be present as l1_header for the origin checks; helper sets chainID 167001.
+	if err := validateAnchorL1Linkage(view, proposal, []anchorV4CheckpointView{cp}, spans, parentAnchor); err != nil {
+		t.Fatalf("bypass path should accept matching parent checkpoint: %v", err)
+	}
+	bad := anchorV4CheckpointView{blockNumber: parentAnchor, blockHash: wantHash, stateRoot: common.HexToHash(testHash("ee"))}
+	if err := validateAnchorL1Linkage(view, proposal, []anchorV4CheckpointView{bad}, spans, parentAnchor); err == nil {
+		t.Fatalf("bypass path must reject non-matching checkpoint")
+	}
+}
+
+func TestValidateAnchorL1LinkageForcedPrefixMatchesParentCheckpoint(t *testing.T) {
+	view, _, parentAnchor, wantHash, wantRoot := newCheckpointStoreStateFixture(t)
+	origin, ancestors, err := decodeGuestInputL1Headers(view.TaikoRaw)
+	if err != nil || origin == nil || len(ancestors) < 2 {
+		t.Fatalf("fixture l1 headers: %v", err)
+	}
+	// The normal (non-prefix) checkpoint binds to a real, non-origin ancestor so
+	// the per-header linkage that runs after the forced prefix accepts it.
+	normalAncestor := ancestors[len(ancestors)-2]
+	proposal := shastaProposalView{
+		OriginBlockNumber: origin.Number.Uint64(),
+		OriginBlockHash:   origin.Hash(),
+	}
+	forced := anchorV4CheckpointView{blockNumber: parentAnchor, blockHash: wantHash, stateRoot: wantRoot}
+	normal := anchorV4CheckpointView{
+		blockNumber: normalAncestor.Number.Uint64(),
+		blockHash:   normalAncestor.Hash(),
+		stateRoot:   normalAncestor.Root,
+	}
+	spans := []manifestAnchorSourceSpan{
+		{isForcedInclusion: true, blockCount: 1},
+		{isForcedInclusion: false, blockCount: 1},
+	}
+	if err := validateAnchorL1Linkage(view, proposal, []anchorV4CheckpointView{forced, normal}, spans, parentAnchor); err != nil {
+		t.Fatalf("forced-inclusion prefix should accept matching parent checkpoint: %v", err)
+	}
+	// A forced-prefix checkpoint that does not equal the verified parent
+	// checkpoint must be rejected before the per-header linkage.
+	badForced := anchorV4CheckpointView{blockNumber: parentAnchor, blockHash: wantHash, stateRoot: common.HexToHash(testHash("ee"))}
+	if err := validateAnchorL1Linkage(view, proposal, []anchorV4CheckpointView{badForced, normal}, spans, parentAnchor); err == nil {
+		t.Fatalf("forced-inclusion prefix must reject non-matching parent checkpoint")
+	}
+}
+
 func TestReadParentL2StorageReturnsCheckpoint(t *testing.T) {
 	view, account, blockNumber, wantHash, wantRoot := newCheckpointStoreStateFixture(t)
 	blockHashSlot, stateRootSlot := shastaCheckpointStorageSlots(blockNumber)
@@ -1839,6 +1892,26 @@ func newCheckpointStoreStateFixture(t *testing.T) (*GuestInputView, common.Addre
 		t.Fatalf("marshal witness state: %v", err)
 	}
 
+	// Coherent short L1 chain ending at the origin block. The bypass test sets
+	// proposal.OriginBlockNumber = parentAnchor + 600 (> the mainnet 512 anchor
+	// offset), so origin is fixed here at blockNumber + 600. The origin checks in
+	// validateAnchorL1Linkage run before the bypass/forced branch, so l1_header
+	// must equal an origin header at that number; l1_ancestor_headers are
+	// contiguous and parent-linked so the forced-inclusion test's normal
+	// checkpoint can bind to a real ancestor.
+	originBlockNumber := blockNumber + 600
+	l1Headers := buildContiguousL1Headers(originBlockNumber-2, originBlockNumber)
+	originHeader := l1Headers[len(l1Headers)-1]
+	l1AncestorsJSON := make([]string, 0, len(l1Headers))
+	for _, header := range l1Headers {
+		l1AncestorsJSON = append(l1AncestorsJSON, headerJSON(t, header))
+	}
+	taikoJSON := fmt.Sprintf(`{
+		"chain_spec": {"chain_id": %d},
+		"l1_header": %s,
+		"l1_ancestor_headers": [%s]
+	}`, chainID, headerJSON(t, originHeader), strings.Join(l1AncestorsJSON, ","))
+
 	input := protocol.ShastaGuestInput{
 		Witnesses: []json.RawMessage{
 			mustRawMessage(t, fmt.Sprintf(`{
@@ -1854,7 +1927,7 @@ func newCheckpointStoreStateFixture(t *testing.T) (*GuestInputView, common.Addre
 				fmt.Sprintf(`{"header": %s, "hash": %q}`, headerJSON(t, parentHeader), parentHeader.Hash().Hex()),
 			)),
 		},
-		Taiko:                   mustRawMessage(t, fmt.Sprintf(`{"chain_spec": {"chain_id": %d}}`, chainID)),
+		Taiko:                   mustRawMessage(t, taikoJSON),
 		ProposalAncestorHeaders: []json.RawMessage{},
 		ProposalStateNodes:      proposalStateNodes,
 	}
@@ -1865,8 +1938,55 @@ func newCheckpointStoreStateFixture(t *testing.T) (*GuestInputView, common.Addre
 		t.Fatalf("decode fixture witness: %v", err)
 	}
 	view.Witnesses = []GuestInputWitnessView{witnessView}
+	view.TaikoRaw = input.Taiko
+	view.GuestInputChainID = chainID
 
 	return view, account, blockNumber, wantHash, wantRoot
+}
+
+// buildContiguousL1Headers synthesizes a contiguous, parent-linked L1 header
+// chain covering [from, to] inclusive. Each header carries a distinct state root
+// so a checkpoint bound to any of them (blockHash + stateRoot) is uniquely
+// identified. Used by newCheckpointStoreStateFixture to give the origin and
+// forced-inclusion checkpoint tests a real L1 chain to bind against.
+func buildContiguousL1Headers(from, to uint64) []*types.Header {
+	headers := make([]*types.Header, 0, to-from+1)
+	var parentHash common.Hash
+	for number := from; number <= to; number++ {
+		header := &types.Header{
+			ParentHash:  parentHash,
+			UncleHash:   types.EmptyUncleHash,
+			Coinbase:    common.HexToAddress(testAddress("0a")),
+			Root:        common.HexToHash(fmt.Sprintf("0x%064x", 0x200000+number)),
+			TxHash:      types.EmptyTxsHash,
+			ReceiptHash: types.EmptyReceiptsHash,
+			Bloom:       types.Bloom{},
+			Difficulty:  big.NewInt(0),
+			Number:      new(big.Int).SetUint64(number),
+			GasLimit:    30_000_000,
+			GasUsed:     0,
+			Time:        900_000 + number,
+			Extra:       []byte{},
+			MixDigest:   common.Hash{},
+			Nonce:       types.BlockNonce{},
+			BaseFee:     new(big.Int).SetUint64(manifestTestBaseFee),
+		}
+		parentHash = header.Hash()
+		headers = append(headers, header)
+	}
+	return headers
+}
+
+// fixtureOriginHash returns the hash of the taiko.l1_header embedded in the view
+// by newCheckpointStoreStateFixture. The bypass/forced-inclusion tests use it as
+// proposal.OriginBlockHash so the origin checks in validateAnchorL1Linkage pass.
+func fixtureOriginHash(t *testing.T, view *GuestInputView) common.Hash {
+	t.Helper()
+	origin, _, err := decodeGuestInputL1Headers(view.TaikoRaw)
+	if err != nil {
+		t.Fatalf("decode fixture origin header: %v", err)
+	}
+	return origin.Hash()
 }
 
 func collectTrieNodes(t *testing.T, tr *trie.StateTrie) []string {

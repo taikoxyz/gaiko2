@@ -1167,9 +1167,6 @@ func decodeGuestInputLastAnchorBlockNumber(raw json.RawMessage) (uint64, error) 
 	return *lastAnchor, nil
 }
 
-var errAnchorL1ParentCheckpointUnsupported = fmt.Errorf(
-	"forced-inclusion / stalled-anchor checkpoint binding not yet supported")
-
 func manifestForcedInclusionPrefixCount(sourceSpans []manifestAnchorSourceSpan) int {
 	count := 0
 	for _, span := range sourceSpans[:max(0, len(sourceSpans)-1)] {
@@ -1203,14 +1200,33 @@ func validateAnchorL1Linkage(
 		anchorNumbers[i] = cp.blockNumber
 	}
 	if shouldBypassStalledAnchorLinkage(anchorNumbers, lastAnchor, proposal.OriginBlockNumber, view.GuestInputChainID) {
-		return errAnchorL1ParentCheckpointUnsupported // wired in Task 7
+		parentCheckpoint, err := verifiedParentShastaCheckpoint(view, lastAnchor)
+		if err != nil {
+			return err
+		}
+		for _, cp := range checkpoints {
+			if cp != parentCheckpoint {
+				return fmt.Errorf("anchor checkpoint (%d) does not match parent checkpoint (%d)",
+					cp.blockNumber, parentCheckpoint.blockNumber)
+			}
+		}
+		return nil
 	}
 	startIndex := manifestForcedInclusionPrefixCount(sourceSpans)
-	if startIndex > 0 {
-		return errAnchorL1ParentCheckpointUnsupported // wired in Task 7
-	}
 	if startIndex > len(checkpoints) {
 		return fmt.Errorf("forced-inclusion prefix exceeds checkpoint count")
+	}
+	if startIndex > 0 {
+		parentCheckpoint, err := verifiedParentShastaCheckpoint(view, lastAnchor)
+		if err != nil {
+			return err
+		}
+		for _, cp := range checkpoints[:startIndex] {
+			if cp != parentCheckpoint {
+				return fmt.Errorf("forced-inclusion anchor checkpoint (%d) does not match parent checkpoint (%d)",
+					cp.blockNumber, parentCheckpoint.blockNumber)
+			}
+		}
 	}
 	headerCheckpoints := checkpoints[startIndex:]
 
