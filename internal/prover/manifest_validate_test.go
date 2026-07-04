@@ -738,6 +738,7 @@ type manifestBindingFixture struct {
 	anchorGas                   uint64
 	anchorPrivateKeyHex         string
 	anchorBlockNumber           uint64
+	lastAnchorBlockNumber       *uint64
 	omitAnchorTx                bool
 	omitUserTx                  bool
 	addManifestBlock            bool
@@ -762,7 +763,7 @@ type manifestBindingFixture struct {
 func newManifestBindingFixture(t *testing.T) *manifestBindingFixture {
 	t.Helper()
 
-	chainID := uint64(167001)
+	chainID := manifestTestChainID
 	proposalID := uint64(12345)
 	parentMixDigest := common.HexToHash(testHash("91"))
 	parentDifficulty := big.NewInt(0x11b626)
@@ -813,24 +814,25 @@ func newManifestBindingFixture(t *testing.T) *manifestBindingFixture {
 			Nonce:       types.BlockNonce{},
 			BaseFee:     new(big.Int).SetUint64(manifestTestBaseFee),
 		},
-		manifestTimestamp:   1_001,
-		manifestCoinbase:    common.HexToAddress(testAddress("22")),
-		manifestGasLimit:    manifestGasLimit,
-		manifestUserTxJSON:  manifestTx,
-		blockUserTxJSON:     manifestTx,
-		blockTimestamp:      1_001,
-		blockCoinbase:       common.HexToAddress(testAddress("22")),
-		blockNumber:         blockNumber,
-		blockGasLimit:       manifestGasLimit + 1_000_000,
-		blockExtra:          manifestExtraData(42, proposalID),
-		blockMixDigest:      manifestMixHash(common.BigToHash(parentDifficulty), blockNumber),
-		blockBaseFee:        manifestTestBaseFee,
-		l2Contract:          testTaikoL2Address(chainID),
-		anchorTo:            testTaikoL2Address(chainID),
-		anchorGas:           shastaAnchorGasLimit,
-		anchorPrivateKeyHex: nativeProofPrivateKey,
-		anchorBlockNumber:   900,
-		witnessStateNodes:   witnessStateNodes,
+		manifestTimestamp:     1_001,
+		manifestCoinbase:      common.HexToAddress(testAddress("22")),
+		manifestGasLimit:      manifestGasLimit,
+		manifestUserTxJSON:    manifestTx,
+		blockUserTxJSON:       manifestTx,
+		blockTimestamp:        1_001,
+		blockCoinbase:         common.HexToAddress(testAddress("22")),
+		blockNumber:           blockNumber,
+		blockGasLimit:         manifestGasLimit + 1_000_000,
+		blockExtra:            manifestExtraData(42, proposalID),
+		blockMixDigest:        manifestMixHash(common.BigToHash(parentDifficulty), blockNumber),
+		blockBaseFee:          manifestTestBaseFee,
+		l2Contract:            testTaikoL2Address(chainID),
+		anchorTo:              testTaikoL2Address(chainID),
+		anchorGas:             shastaAnchorGasLimit,
+		anchorPrivateKeyHex:   nativeProofPrivateKey,
+		anchorBlockNumber:     900,
+		lastAnchorBlockNumber: manifestUint64Ptr(manifestDefaultParentAnchorBlockNumber),
+		witnessStateNodes:     witnessStateNodes,
 	}
 	fixture.parentHeader.ParentHash = fixture.grandparentHeader.Hash()
 	return fixture
@@ -931,6 +933,11 @@ func (f *manifestBindingFixture) view(t *testing.T) *GuestInputView {
 		proposalAncestorHeaders = nil
 	}
 
+	proverData := fmt.Sprintf(`"actual_prover": %q`, testAddress("77"))
+	if f.lastAnchorBlockNumber != nil {
+		proverData += fmt.Sprintf(`, "last_anchor_block_number": %d`, *f.lastAnchorBlockNumber)
+	}
+
 	input := protocol.ShastaGuestInput{
 		Witnesses: []json.RawMessage{
 			mustRawMessage(t, fmt.Sprintf(`{
@@ -944,12 +951,9 @@ func (f *manifestBindingFixture) view(t *testing.T) *GuestInputView {
 			"chain_spec": {"chain_id": %d},
 			"proposal_id": %d,
 			"proposal_event": {"proposal": %s},
-			"prover_data": {
-				"actual_prover": %q,
-				"last_anchor_block_number": 899
-			},
+			"prover_data": {%s},
 			"data_sources": [%s]%s
-		}`, f.chainID, f.proposalID, proposalJSON, testAddress("77"), dataSourceJSON, f.l1HeadersJSON(t))),
+		}`, f.chainID, f.proposalID, proposalJSON, proverData, dataSourceJSON, f.l1HeadersJSON(t))),
 		ProposalAncestorHeaders: proposalAncestorHeaders,
 		ProofCarryData: f.proofCarryData(
 			t,
@@ -1563,6 +1567,13 @@ func manifestTestTxSigner(t *testing.T) common.Address {
 	return crypto.PubkeyToAddress(key.PublicKey)
 }
 
+const (
+	manifestTestChainID                    = uint64(167001)
+	manifestDefaultParentAnchorBlockNumber = uint64(899)
+)
+
+func manifestUint64Ptr(v uint64) *uint64 { return &v }
+
 func witnessStateNodesWithBalance(t *testing.T, address common.Address, balance *big.Int) ([]string, common.Hash) {
 	t.Helper()
 	return witnessStateNodesWithBalances(t, map[common.Address]*big.Int{address: balance})
@@ -1570,43 +1581,42 @@ func witnessStateNodesWithBalance(t *testing.T, address common.Address, balance 
 
 func witnessStateNodesWithBalances(t *testing.T, balances map[common.Address]*big.Int) ([]string, common.Hash) {
 	t.Helper()
+	return witnessStateNodesWithBalancesAndAnchor(t, balances, manifestDefaultParentAnchorBlockNumber)
+}
+
+// witnessStateNodesWithBalancesAndAnchor builds a parent state trie holding the
+// given balances plus the TaikoL2 anchor contract's _blockState.anchorBlockNumber
+// (slot shastaAnchorBlockStateSlot = anchorBaseline). It returns the combined
+// account- and storage-trie nodes (for the witness state set) and the state root.
+func witnessStateNodesWithBalancesAndAnchor(
+	t *testing.T,
+	balances map[common.Address]*big.Int,
+	anchorBaseline uint64,
+) ([]string, common.Hash) {
+	t.Helper()
 
 	memdb := rawdb.NewMemoryDatabase()
 	tdb := triedb.NewDatabase(memdb, triedb.HashDefaults)
-	statedb, err := state.New(types.EmptyRootHash, state.NewDatabase(tdb, nil))
+	statedb, err := state.New(types.EmptyRootHash, state.NewDatabase(tdb, state.NewCodeDB(memdb)))
 	if err != nil {
 		t.Fatalf("open test state: %v", err)
 	}
 	for address, balance := range balances {
 		statedb.AddBalance(address, uint256.MustFromBig(balance), 0)
 	}
+	anchorAddress := testTaikoL2Address(manifestTestChainID)
+	statedb.SetNonce(anchorAddress, 1, tracing.NonceChangeUnspecified)
+	statedb.SetState(
+		anchorAddress,
+		common.BigToHash(new(big.Int).SetUint64(shastaAnchorBlockStateSlot)),
+		common.BigToHash(new(big.Int).SetUint64(anchorBaseline)),
+	)
 
 	root, err := statedb.Commit(0, false, false)
 	if err != nil {
 		t.Fatalf("commit test state: %v", err)
 	}
-
-	stateTrie, err := trie.NewStateTrie(trie.StateTrieID(root), tdb)
-	if err != nil {
-		t.Fatalf("open test state trie: %v", err)
-	}
-	it, err := stateTrie.NodeIterator(nil)
-	if err != nil {
-		t.Fatalf("iterate test state trie: %v", err)
-	}
-
-	nodes := make([]string, 0, 4)
-	for it.Next(true) {
-		if it.Hash() == (common.Hash{}) {
-			continue
-		}
-		blob := it.NodeBlob()
-		if len(blob) == 0 {
-			continue
-		}
-		nodes = append(nodes, "0x"+hex.EncodeToString(blob))
-	}
-	return nodes, root
+	return collectStateAndStorageNodes(t, tdb, root, anchorAddress), root
 }
 
 func witnessStateNodesWithBalanceAndCode(
@@ -1626,33 +1636,21 @@ func witnessStateNodesWithBalanceAndCode(
 	}
 	statedb.AddBalance(balanceAddress, uint256.MustFromBig(balance), 0)
 	statedb.SetCode(codeAddress, code, tracing.CodeChangeUnspecified)
+	anchorAddress := testTaikoL2Address(manifestTestChainID)
+	statedb.SetNonce(anchorAddress, 1, tracing.NonceChangeUnspecified)
+	statedb.SetState(
+		anchorAddress,
+		common.BigToHash(new(big.Int).SetUint64(shastaAnchorBlockStateSlot)),
+		common.BigToHash(new(big.Int).SetUint64(manifestDefaultParentAnchorBlockNumber)),
+	)
 
 	root, err := statedb.Commit(0, false, false)
 	if err != nil {
 		t.Fatalf("commit test state: %v", err)
 	}
-
-	stateTrie, err := trie.NewStateTrie(trie.StateTrieID(root), tdb)
-	if err != nil {
-		t.Fatalf("open test state trie: %v", err)
-	}
-	it, err := stateTrie.NodeIterator(nil)
-	if err != nil {
-		t.Fatalf("iterate test state trie: %v", err)
-	}
-
-	nodes := make([]string, 0, 8)
-	for it.Next(true) {
-		if it.Hash() == (common.Hash{}) {
-			continue
-		}
-		blob := it.NodeBlob()
-		if len(blob) == 0 {
-			continue
-		}
-		nodes = append(nodes, "0x"+hex.EncodeToString(blob))
-	}
-	return nodes, []string{"0x" + hex.EncodeToString(code)}, root
+	return collectStateAndStorageNodes(t, tdb, root, anchorAddress),
+		[]string{"0x" + hex.EncodeToString(code)},
+		root
 }
 
 func rootWitnessNode(t *testing.T, nodes []string, root common.Hash) string {
@@ -2144,6 +2142,35 @@ func collectTrieNodes(t *testing.T, tr *trie.StateTrie) []string {
 		nodes = append(nodes, "0x"+hex.EncodeToString(blob))
 	}
 	return nodes
+}
+
+// collectStateAndStorageNodes returns the account-trie nodes for `root` plus the
+// storage-trie nodes for `storageAccount`, so a proof-backed slot read against
+// storageAccount resolves from the witness state set.
+func collectStateAndStorageNodes(
+	t *testing.T,
+	tdb *triedb.Database,
+	root common.Hash,
+	storageAccount common.Address,
+) []string {
+	t.Helper()
+	accountTrie, err := trie.NewStateTrie(trie.StateTrieID(root), tdb)
+	if err != nil {
+		t.Fatalf("open account trie: %v", err)
+	}
+	nodes := collectTrieNodes(t, accountTrie)
+	account, err := accountTrie.GetAccount(storageAccount)
+	if err != nil || account == nil {
+		t.Fatalf("resolve storage account %s: %v", storageAccount.Hex(), err)
+	}
+	storageTrie, err := trie.NewStateTrie(
+		trie.StorageTrieID(root, crypto.Keccak256Hash(storageAccount.Bytes()), account.Root),
+		tdb,
+	)
+	if err != nil {
+		t.Fatalf("open storage trie: %v", err)
+	}
+	return append(nodes, collectTrieNodes(t, storageTrie)...)
 }
 
 func TestShastaCheckpointStorageSlots(t *testing.T) {
