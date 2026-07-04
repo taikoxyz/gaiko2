@@ -206,6 +206,9 @@ func ValidateGuestInputManifestBindingWithContext(ctx context.Context, view *Gue
 		canonicalParent = block.Header()
 	}
 
+	if err := validateAnchorL1Linkage(view, proposal, checkpoints, sourceSpans, lastAnchor); err != nil {
+		return err
+	}
 	return nil
 }
 
@@ -1117,4 +1120,117 @@ func decodeGuestInputLastAnchorBlockNumber(raw json.RawMessage) (uint64, error) 
 		return 0, nil
 	}
 	return *lastAnchor, nil
+}
+
+var errAnchorL1ParentCheckpointUnsupported = fmt.Errorf(
+	"forced-inclusion / stalled-anchor checkpoint binding not yet supported")
+
+func manifestForcedInclusionPrefixCount(sourceSpans []manifestAnchorSourceSpan) int {
+	count := 0
+	for _, span := range sourceSpans[:max(0, len(sourceSpans)-1)] {
+		if span.isForcedInclusion {
+			count += span.blockCount
+		}
+	}
+	return count
+}
+
+func validateAnchorL1Linkage(
+	view *GuestInputView,
+	proposal shastaProposalView,
+	checkpoints []anchorV4CheckpointView,
+	sourceSpans []manifestAnchorSourceSpan,
+	lastAnchor uint64,
+) error {
+	l1Header, ancestors, err := decodeGuestInputL1Headers(view.TaikoRaw)
+	if err != nil {
+		return err
+	}
+	if l1Header.Number == nil || l1Header.Number.Uint64() != proposal.OriginBlockNumber {
+		return fmt.Errorf("taiko.l1_header.number mismatch: expected %d", proposal.OriginBlockNumber)
+	}
+	if l1Header.Hash() != proposal.OriginBlockHash {
+		return fmt.Errorf("taiko.l1_header hash mismatch")
+	}
+
+	anchorNumbers := make([]uint64, len(checkpoints))
+	for i, cp := range checkpoints {
+		anchorNumbers[i] = cp.blockNumber
+	}
+	if shouldBypassStalledAnchorLinkage(anchorNumbers, lastAnchor, proposal.OriginBlockNumber, view.GuestInputChainID) {
+		return errAnchorL1ParentCheckpointUnsupported // wired in Task 7
+	}
+	startIndex := manifestForcedInclusionPrefixCount(sourceSpans)
+	if startIndex > 0 {
+		return errAnchorL1ParentCheckpointUnsupported // wired in Task 7
+	}
+	if startIndex > len(checkpoints) {
+		return fmt.Errorf("forced-inclusion prefix exceeds checkpoint count")
+	}
+	headerCheckpoints := checkpoints[startIndex:]
+
+	if len(ancestors) == 0 {
+		return fmt.Errorf("taiko.l1_ancestor_headers must not be empty")
+	}
+	cpIndex := 0
+	var prevNumber *uint64
+	var prevHash common.Hash
+	var lastNumber uint64
+	var lastHash common.Hash
+	for i, header := range ancestors {
+		if header.Number == nil {
+			return fmt.Errorf("taiko.l1_ancestor_headers[%d] missing number", i)
+		}
+		headerHash := header.Hash()
+		number := header.Number.Uint64()
+		if prevNumber != nil {
+			if number != *prevNumber+1 {
+				return fmt.Errorf("taiko.l1_ancestor_headers must be contiguous at index %d", i)
+			}
+			if header.ParentHash != prevHash {
+				return fmt.Errorf("taiko.l1_ancestor_headers parent hash mismatch at index %d", i)
+			}
+		}
+		for cpIndex < len(headerCheckpoints) && headerCheckpoints[cpIndex].blockNumber == number {
+			cp := headerCheckpoints[cpIndex]
+			if cp.blockHash != headerHash || cp.stateRoot != header.Root {
+				return fmt.Errorf(
+					"anchor checkpoint (%d) not found in taiko.l1_ancestor_headers", cp.blockNumber)
+			}
+			cpIndex++
+		}
+		n := number
+		prevNumber = &n
+		prevHash = headerHash
+		lastNumber = number
+		lastHash = headerHash
+	}
+	if lastNumber != proposal.OriginBlockNumber {
+		return fmt.Errorf("taiko.l1_ancestor_headers last block number mismatch: expected %d got %d",
+			proposal.OriginBlockNumber, lastNumber)
+	}
+	if lastHash != proposal.OriginBlockHash {
+		return fmt.Errorf("taiko.l1_ancestor_headers last hash mismatch")
+	}
+	if cpIndex != len(headerCheckpoints) {
+		return fmt.Errorf("anchor checkpoint (%d) not found in taiko.l1_ancestor_headers",
+			headerCheckpoints[cpIndex].blockNumber)
+	}
+	return nil
+}
+
+func shouldBypassStalledAnchorLinkage(anchorNumbers []uint64, lastAnchor, origin, chainID uint64) bool {
+	if len(anchorNumbers) == 0 {
+		return false
+	}
+	first := anchorNumbers[0]
+	if first != lastAnchor || origin-first <= anchorMaxOffsetForChain(chainID) {
+		return false
+	}
+	for _, a := range anchorNumbers {
+		if a != first {
+			return false
+		}
+	}
+	return true
 }
