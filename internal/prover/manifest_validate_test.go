@@ -473,6 +473,16 @@ func TestValidateManifestBindingRejectsPartialWitnessStateDuringFiltering(t *tes
 	}
 }
 
+func TestValidateManifestBindingRejectsMissingLastAnchorBlockNumber(t *testing.T) {
+	fixture := newManifestBindingFixture(t)
+	fixture.lastAnchorBlockNumber = nil
+
+	err := ValidateGuestInputManifestBinding(fixture.view(t))
+	if err == nil || !strings.Contains(err.Error(), "missing taiko.prover_data.last_anchor_block_number") {
+		t.Fatalf("expected missing last anchor rejection, got %v", err)
+	}
+}
+
 func TestDecodeManifestPayloadRejectsOversizedDecodedPayload(t *testing.T) {
 	payload := encodeCompressedManifestBytes(t, bytes.Repeat([]byte{0}, shastaMaxManifestDecodedPayload+1))
 
@@ -738,6 +748,7 @@ type manifestBindingFixture struct {
 	anchorGas                   uint64
 	anchorPrivateKeyHex         string
 	anchorBlockNumber           uint64
+	lastAnchorBlockNumber       *uint64
 	omitAnchorTx                bool
 	omitUserTx                  bool
 	addManifestBlock            bool
@@ -813,24 +824,25 @@ func newManifestBindingFixture(t *testing.T) *manifestBindingFixture {
 			Nonce:       types.BlockNonce{},
 			BaseFee:     new(big.Int).SetUint64(manifestTestBaseFee),
 		},
-		manifestTimestamp:   1_001,
-		manifestCoinbase:    common.HexToAddress(testAddress("22")),
-		manifestGasLimit:    manifestGasLimit,
-		manifestUserTxJSON:  manifestTx,
-		blockUserTxJSON:     manifestTx,
-		blockTimestamp:      1_001,
-		blockCoinbase:       common.HexToAddress(testAddress("22")),
-		blockNumber:         blockNumber,
-		blockGasLimit:       manifestGasLimit + 1_000_000,
-		blockExtra:          manifestExtraData(42, proposalID),
-		blockMixDigest:      manifestMixHash(common.BigToHash(parentDifficulty), blockNumber),
-		blockBaseFee:        manifestTestBaseFee,
-		l2Contract:          testTaikoL2Address(chainID),
-		anchorTo:            testTaikoL2Address(chainID),
-		anchorGas:           shastaAnchorGasLimit,
-		anchorPrivateKeyHex: nativeProofPrivateKey,
-		anchorBlockNumber:   900,
-		witnessStateNodes:   witnessStateNodes,
+		manifestTimestamp:     1_001,
+		manifestCoinbase:      common.HexToAddress(testAddress("22")),
+		manifestGasLimit:      manifestGasLimit,
+		manifestUserTxJSON:    manifestTx,
+		blockUserTxJSON:       manifestTx,
+		blockTimestamp:        1_001,
+		blockCoinbase:         common.HexToAddress(testAddress("22")),
+		blockNumber:           blockNumber,
+		blockGasLimit:         manifestGasLimit + 1_000_000,
+		blockExtra:            manifestExtraData(42, proposalID),
+		blockMixDigest:        manifestMixHash(common.BigToHash(parentDifficulty), blockNumber),
+		blockBaseFee:          manifestTestBaseFee,
+		l2Contract:            testTaikoL2Address(chainID),
+		anchorTo:              testTaikoL2Address(chainID),
+		anchorGas:             shastaAnchorGasLimit,
+		anchorPrivateKeyHex:   nativeProofPrivateKey,
+		anchorBlockNumber:     900,
+		lastAnchorBlockNumber: manifestUint64Ptr(899),
+		witnessStateNodes:     witnessStateNodes,
 	}
 	fixture.parentHeader.ParentHash = fixture.grandparentHeader.Hash()
 	return fixture
@@ -921,6 +933,11 @@ func (f *manifestBindingFixture) view(t *testing.T) *GuestInputView {
 	if err != nil {
 		t.Fatalf("marshal witness codes: %v", err)
 	}
+	lastAnchorBlockNumberJSON := ""
+	if f.lastAnchorBlockNumber != nil {
+		lastAnchorBlockNumberJSON = fmt.Sprintf(`,
+				"last_anchor_block_number": %d`, *f.lastAnchorBlockNumber)
+	}
 
 	proposalAncestorHeaders := []json.RawMessage{}
 	if !f.omitGrandparentHeader && f.grandparentHeader != nil {
@@ -945,11 +962,10 @@ func (f *manifestBindingFixture) view(t *testing.T) *GuestInputView {
 			"proposal_id": %d,
 			"proposal_event": {"proposal": %s},
 			"prover_data": {
-				"actual_prover": %q,
-				"last_anchor_block_number": 899
+				"actual_prover": %q%s
 			},
 			"data_sources": [%s]%s
-		}`, f.chainID, f.proposalID, proposalJSON, testAddress("77"), dataSourceJSON, f.l1HeadersJSON(t))),
+		}`, f.chainID, f.proposalID, proposalJSON, testAddress("77"), lastAnchorBlockNumberJSON, dataSourceJSON, f.l1HeadersJSON(t))),
 		ProposalAncestorHeaders: proposalAncestorHeaders,
 		ProofCarryData: f.proofCarryData(
 			t,
@@ -1562,6 +1578,8 @@ func manifestTestTxSigner(t *testing.T) common.Address {
 	}
 	return crypto.PubkeyToAddress(key.PublicKey)
 }
+
+func manifestUint64Ptr(v uint64) *uint64 { return &v }
 
 func witnessStateNodesWithBalance(t *testing.T, address common.Address, balance *big.Int) ([]string, common.Hash) {
 	t.Helper()

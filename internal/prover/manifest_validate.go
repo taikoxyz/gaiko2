@@ -107,10 +107,14 @@ func ValidateGuestInputManifestBindingWithContext(ctx context.Context, view *Gue
 			view.Carry.TransitionInput.ParentBlockHash.Hex(),
 		)
 	}
-	lastAnchor, err := decodeGuestInputLastAnchorBlockNumber(view.TaikoRaw)
+	hostAnchor, err := decodeGuestInputLastAnchorBlockNumber(view.TaikoRaw)
 	if err != nil {
 		return err
 	}
+	if hostAnchor == nil {
+		return fmt.Errorf("missing taiko.prover_data.last_anchor_block_number")
+	}
+	lastAnchor := *hostAnchor
 	parent := shastaManifestParentContext{
 		Header:            parentHeader,
 		GrandparentHeader: grandparentHeader,
@@ -1148,27 +1152,24 @@ func decodeGuestInputL1Headers(raw json.RawMessage) (*types.Header, []*types.Hea
 	return l1Header, ancestors, nil
 }
 
-func decodeGuestInputLastAnchorBlockNumber(raw json.RawMessage) (uint64, error) {
+func decodeGuestInputLastAnchorBlockNumber(raw json.RawMessage) (*uint64, error) {
 	fields, err := decodeJSONObject(raw)
 	if err != nil {
-		return 0, fmt.Errorf("unmarshal taiko: %w", err)
+		return nil, fmt.Errorf("unmarshal taiko: %w", err)
 	}
 	proverDataRaw, ok := lookupField(fields, "prover_data", "proverData")
 	if !ok || isEmptyOrNullRawMessage(proverDataRaw) {
-		return 0, nil
+		return nil, nil
 	}
 	proverData, err := decodeJSONObject(proverDataRaw)
 	if err != nil {
-		return 0, fmt.Errorf("unmarshal taiko.prover_data: %w", err)
+		return nil, fmt.Errorf("unmarshal taiko.prover_data: %w", err)
 	}
 	lastAnchor, err := optionalUint64Ptr(proverData, "last_anchor_block_number", "lastAnchorBlockNumber")
 	if err != nil {
-		return 0, fmt.Errorf("parse taiko.prover_data.last_anchor_block_number: %w", err)
+		return nil, fmt.Errorf("parse taiko.prover_data.last_anchor_block_number: %w", err)
 	}
-	if lastAnchor == nil {
-		return 0, nil
-	}
-	return *lastAnchor, nil
+	return lastAnchor, nil
 }
 
 func manifestForcedInclusionPrefixCount(sourceSpans []manifestAnchorSourceSpan) int {

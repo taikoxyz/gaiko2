@@ -15,6 +15,7 @@ import (
 	"github.com/ethereum/go-ethereum/core/state"
 	"github.com/ethereum/go-ethereum/core/types"
 	"github.com/ethereum/go-ethereum/core/vm"
+	"github.com/ethereum/go-ethereum/crypto"
 	"github.com/ethereum/go-ethereum/params"
 	"github.com/ethereum/go-ethereum/trie"
 	"github.com/ethereum/go-ethereum/triedb"
@@ -33,30 +34,38 @@ const (
 	masayaDevnetUnzenTime   uint64 = 1778158800
 )
 
+var anchoredEventTopic = crypto.Keccak256Hash([]byte("Anchored(uint48,uint48,bytes32)"))
+
 type Runner interface {
 	Execute(
 		ctx context.Context,
 		config *params.ChainConfig,
 		block *types.Block,
 		witness *ReplayWitness,
-	) (common.Hash, common.Hash, error)
+	) (ReplayResult, error)
 }
 
 type GethRunner struct{}
+
+type ReplayResult struct {
+	StateRoot   common.Hash
+	ReceiptRoot common.Hash
+	Receipts    types.Receipts
+}
 
 func (GethRunner) Execute(
 	ctx context.Context,
 	config *params.ChainConfig,
 	block *types.Block,
 	witness *ReplayWitness,
-) (common.Hash, common.Hash, error) {
+) (ReplayResult, error) {
 	memdb := witness.Witness.MakeHashDB()
 	db, err := state.New(
 		witness.Witness.Root(),
 		state.NewDatabase(triedb.NewDatabase(memdb, triedb.HashDefaults), state.NewCodeDB(memdb)),
 	)
 	if err != nil {
-		return common.Hash{}, common.Hash{}, err
+		return ReplayResult{}, err
 	}
 
 	executionBlock, expectedDifficulty := replayExecutionBlock(config, block)
@@ -65,18 +74,22 @@ func (GethRunner) Execute(
 
 	res, err := processReplayBlock(ctx, chain, config, executionBlock, expectedDifficulty, db, vm.Config{})
 	if err != nil {
-		return common.Hash{}, common.Hash{}, err
+		return ReplayResult{}, err
 	}
 	if err := validator.ValidateState(executionBlock, db, res, true); err != nil {
-		return common.Hash{}, common.Hash{}, err
+		return ReplayResult{}, err
 	}
 	if err := validateReplayRequestsHash(executionBlock.Header(), res.Requests); err != nil {
-		return common.Hash{}, common.Hash{}, err
+		return ReplayResult{}, err
 	}
 
 	receiptRoot := types.DeriveSha(res.Receipts, trie.NewStackTrie(nil))
 	stateRoot := db.IntermediateRoot(config.IsEIP158(executionBlock.Number()))
-	return stateRoot, receiptRoot, nil
+	return ReplayResult{
+		StateRoot:   stateRoot,
+		ReceiptRoot: receiptRoot,
+		Receipts:    res.Receipts,
+	}, nil
 }
 
 func processReplayBlock(
@@ -282,25 +295,30 @@ func (s ReplayService) Prove(
 			return protocol.ProofResult{}, fmt.Errorf("validate replay block %d body: %w", index, err)
 		}
 
-		stateRoot, receiptRoot, err := s.runner.Execute(ctx, config, blockForStatelessExecution(block), witness)
+		result, err := s.runner.Execute(ctx, config, blockForStatelessExecution(block), witness)
 		if err != nil {
 			return protocol.ProofResult{}, fmt.Errorf("replay block %d: %w", index, err)
 		}
-		if stateRoot != block.Root() {
+		if result.StateRoot != block.Root() {
 			return protocol.ProofResult{}, fmt.Errorf(
 				"block %d state root mismatch: got %s expected %s",
 				block.NumberU64(),
-				stateRoot,
+				result.StateRoot,
 				block.Root(),
 			)
 		}
-		if receiptRoot != block.ReceiptHash() {
+		if result.ReceiptRoot != block.ReceiptHash() {
 			return protocol.ProofResult{}, fmt.Errorf(
 				"block %d receipt root mismatch: got %s expected %s",
 				block.NumberU64(),
-				receiptRoot,
+				result.ReceiptRoot,
 				block.ReceiptHash(),
 			)
+		}
+		if index == 0 {
+			if err := validateFirstReplayAnchorEvent(req, result.Receipts); err != nil {
+				return protocol.ProofResult{}, fmt.Errorf("replay block %d anchor event: %w", index, err)
+			}
 		}
 	}
 
@@ -309,6 +327,81 @@ func (s ReplayService) Prove(
 		return protocol.ProofResult{}, err
 	}
 	return buildProofResult(inputHash, s.signer)
+}
+
+func validateFirstReplayAnchorEvent(req *ValidatedRequest, receipts types.Receipts) error {
+	if req.Request.Payload.GuestInput == nil {
+		return nil
+	}
+	lastAnchor, err := decodeGuestInputLastAnchorBlockNumber(req.Request.Payload.GuestInput.Taiko)
+	if err != nil {
+		return err
+	}
+	if lastAnchor == nil {
+		return fmt.Errorf("missing taiko.prover_data.last_anchor_block_number")
+	}
+	if len(receipts) == 0 || receipts[0] == nil {
+		return fmt.Errorf("missing first transaction receipt")
+	}
+
+	prevAnchor, _, err := replayAnchoredEvent(req.Carry.ChainID, receipts[0].Logs)
+	if err != nil {
+		return err
+	}
+	if prevAnchor != *lastAnchor {
+		return fmt.Errorf(
+			"prover_data.last_anchor_block_number mismatch: expected %d (first Anchor event prevAnchorBlockNumber), got %d",
+			prevAnchor,
+			*lastAnchor,
+		)
+	}
+	return nil
+}
+
+func replayAnchoredEvent(chainID uint64, logs []*types.Log) (uint64, uint64, error) {
+	anchorAddress, err := shastaTaikoL2Address(chainID)
+	if err != nil {
+		return 0, 0, err
+	}
+
+	var prevAnchor uint64
+	var anchor uint64
+	found := false
+	for _, log := range logs {
+		if log == nil || log.Address != anchorAddress || len(log.Topics) == 0 || log.Topics[0] != anchoredEventTopic {
+			continue
+		}
+		if found {
+			return 0, 0, fmt.Errorf("multiple Anchored events from TaikoL2")
+		}
+		if len(log.Topics) != 1 {
+			return 0, 0, fmt.Errorf("malformed Anchored event topics")
+		}
+		if len(log.Data) != 96 {
+			return 0, 0, fmt.Errorf("malformed Anchored event data length %d", len(log.Data))
+		}
+		prevAnchor, err = uint48FromEventWord(log.Data[:32])
+		if err != nil {
+			return 0, 0, fmt.Errorf("decode prevAnchorBlockNumber: %w", err)
+		}
+		anchor, err = uint48FromEventWord(log.Data[32:64])
+		if err != nil {
+			return 0, 0, fmt.Errorf("decode anchorBlockNumber: %w", err)
+		}
+		found = true
+	}
+	if !found {
+		return 0, 0, fmt.Errorf("missing Anchored event from TaikoL2")
+	}
+	return prevAnchor, anchor, nil
+}
+
+func uint48FromEventWord(word []byte) (uint64, error) {
+	value := new(big.Int).SetBytes(word)
+	if !value.IsUint64() || value.Uint64() > uint64(1<<48)-1 {
+		return 0, fmt.Errorf("value exceeds uint48")
+	}
+	return value.Uint64(), nil
 }
 
 func validateReplayWitness(block *types.Block, witness *ReplayWitness) error {
