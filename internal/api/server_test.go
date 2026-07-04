@@ -98,11 +98,6 @@ func TestNewServerRejectsV1WithoutGuestInput(t *testing.T) {
 }
 
 func TestNewServerReturnsSuccessEnvelope(t *testing.T) {
-	// TODO(compact-ancestors): re-enable after regenerating testdata/shasta_request_*.json
-	// with full replay ancestor headers (raiko2 dump_gaiko2_shasta_fixture). See
-	// docs/plans/2026-07-04-gaiko2-disable-compact-replay-ancestors-design.md.
-	t.Skip("shared fixture carries compact replay ancestors; pending regeneration to full headers")
-
 	server := NewServer(fakeService{
 		result: protocol.ProofResult{
 			Input: "0xinput",
@@ -224,11 +219,6 @@ func TestNewServerKeepsAggregateV1EnabledWhenProposalV1Disabled(t *testing.T) {
 }
 
 func TestNewServerLogsProveSuccess(t *testing.T) {
-	// TODO(compact-ancestors): re-enable after regenerating testdata/shasta_request_*.json
-	// with full replay ancestor headers (raiko2 dump_gaiko2_shasta_fixture). See
-	// docs/plans/2026-07-04-gaiko2-disable-compact-replay-ancestors-design.md.
-	t.Skip("shared fixture carries compact replay ancestors; pending regeneration to full headers")
-
 	var logs bytes.Buffer
 	prevWriter := log.Writer()
 	prevFlags := log.Flags()
