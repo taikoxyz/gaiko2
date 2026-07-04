@@ -86,8 +86,7 @@ type AggregateProofView struct {
 }
 
 type ReplayWitness struct {
-	Witness          *stateless.Witness
-	CompactAncestors []CompactAncestor
+	Witness *stateless.Witness
 }
 
 type CompactAncestor struct {

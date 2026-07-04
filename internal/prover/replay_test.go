@@ -5,9 +5,11 @@ import (
 	"encoding/json"
 	"fmt"
 	"math/big"
+	"strings"
 	"testing"
 
 	"github.com/ethereum/go-ethereum/common"
+	"github.com/ethereum/go-ethereum/core/stateless"
 	"github.com/ethereum/go-ethereum/core/types"
 	"github.com/ethereum/go-ethereum/core/vm"
 	"github.com/ethereum/go-ethereum/params"
@@ -101,6 +103,111 @@ func TestDecodeReplayBlockBuildsGethTypes(t *testing.T) {
 	if witness.Witness.Root() != common.HexToHash("0xbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb") {
 		t.Fatalf("unexpected witness root: %s", witness.Witness.Root())
 	}
+}
+
+func TestDecodeWitnessHeadersRejectsCompactAncestors(t *testing.T) {
+	_, err := decodeWitnessHeaders([]json.RawMessage{
+		mustRawMessage(t, `{
+			"number": "0x28",
+			"hash": "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+			"parent_hash": "0xbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+			"timestamp": "0x0"
+		}`),
+		mustRawMessage(t, `{
+			"hash": "0xffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+			"header": {
+				"parentHash": "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+				"sha3Uncles": "0x1dcc4de8dec75d7aab85b567b6ccd41ad312451b948a7413f0a142fd40d49347",
+				"miner": "0x0000000000000000000000000000000000000000",
+				"stateRoot": "0xbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+				"transactionsRoot": "0x56e81f171bcc55a6ff8345e692c0f86e5b48e01b996cadc001622fb5e363b421",
+				"receiptsRoot": "0x56e81f171bcc55a6ff8345e692c0f86e5b48e01b996cadc001622fb5e363b421",
+				"logsBloom": "0x00000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000",
+				"difficulty": "0x0",
+				"number": "0x29",
+				"gasLimit": "0x0",
+				"gasUsed": "0x0",
+				"timestamp": "0x0",
+				"extraData": "0x",
+				"mixHash": "0x0000000000000000000000000000000000000000000000000000000000000000",
+				"nonce": "0x0000000000000000",
+				"baseFeePerGas": "0x1"
+			}
+		}`),
+	})
+	if err == nil {
+		t.Fatalf("expected compact replay ancestor rejection")
+	}
+	if !strings.Contains(err.Error(), "compact replay ancestor headers are not accepted") {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
+func TestDecodeWitnessHeadersOrdersFullAncestorsParentFirst(t *testing.T) {
+	oldest := sampleBlockHeader(t, "0x28", testHash("11"), testHash("aa"), testHash("bb"))
+	parent := sampleBlockHeader(t, "0x29", oldest.Hash().Hex(), testHash("cc"), testHash("dd"))
+
+	headers, err := decodeWitnessHeaders([]json.RawMessage{
+		witnessHeaderRaw(t, oldest),
+		witnessHeaderRaw(t, parent),
+	})
+	if err != nil {
+		t.Fatalf("decode witness headers: %v", err)
+	}
+	if len(headers) != 2 {
+		t.Fatalf("unexpected header count: %d", len(headers))
+	}
+	if headers[0].Hash() != parent.Hash() {
+		t.Fatalf("first decoded header should be parent, got %s expected %s", headers[0].Hash(), parent.Hash())
+	}
+	if headers[1].Hash() != oldest.Hash() {
+		t.Fatalf("second decoded header should be oldest, got %s expected %s", headers[1].Hash(), oldest.Hash())
+	}
+}
+
+func TestValidateReplayWitnessRejectsUnlinkedFullAncestorHeaders(t *testing.T) {
+	goodGrandparent := sampleBlockHeader(t, "0x28", testHash("11"), testHash("aa"), testHash("bb"))
+	wrongGrandparent := sampleBlockHeader(t, "0x28", testHash("22"), testHash("cc"), testHash("dd"))
+	parent := sampleBlockHeader(t, "0x29", goodGrandparent.Hash().Hex(), testHash("ee"), testHash("ff"))
+	block := types.NewBlockWithHeader(&types.Header{
+		Number:     big.NewInt(42),
+		ParentHash: parent.Hash(),
+		Root:       common.HexToHash(testHash("33")),
+	})
+	witness := &ReplayWitness{
+		Witness: &stateless.Witness{
+			Headers: []*types.Header{parent, wrongGrandparent},
+			State:   map[string]struct{}{},
+			Codes:   map[string]struct{}{},
+		},
+	}
+
+	err := validateReplayWitness(block, witness)
+	if err == nil {
+		t.Fatalf("expected unlinked full ancestor header rejection")
+	}
+	if !strings.Contains(err.Error(), "ancestor header 1 parent hash mismatch") {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
+func sampleBlockHeader(t *testing.T, number string, parentHash string, stateRoot string, receiptsRoot string) *types.Header {
+	t.Helper()
+
+	envelope, err := decodeBlockEnvelope(sampleReplayBlock(t, number, parentHash, stateRoot, receiptsRoot))
+	if err != nil {
+		t.Fatalf("decode sample block: %v", err)
+	}
+	header, err := decodeHeader(envelope.Header)
+	if err != nil {
+		t.Fatalf("decode sample header: %v", err)
+	}
+	return header
+}
+
+func witnessHeaderRaw(t *testing.T, header *types.Header) json.RawMessage {
+	t.Helper()
+	return mustRawMessage(t, fmt.Sprintf(`{"header": %s, "hash": %q}`, headerJSON(t, header), header.Hash().Hex()))
 }
 
 func TestHashShastaSubproofInputSeparatesDomainFields(t *testing.T) {

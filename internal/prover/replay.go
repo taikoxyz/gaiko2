@@ -344,40 +344,29 @@ func validateReplayWitness(block *types.Block, witness *ReplayWitness) error {
 			parent.Root.Hex(),
 		)
 	}
-	for index := 1; index < len(witness.CompactAncestors); index++ {
-		prev := witness.CompactAncestors[index-1]
-		current := witness.CompactAncestors[index]
-		if current.Number != prev.Number+1 {
+	for index := 1; index < len(witness.Witness.Headers); index++ {
+		previous := witness.Witness.Headers[index-1]
+		current := witness.Witness.Headers[index]
+		if current.Number == nil {
+			return fmt.Errorf("ancestor header %d is missing number", index)
+		}
+		if previous.Number == nil {
+			return fmt.Errorf("ancestor header %d is missing number", index-1)
+		}
+		if current.Number.Uint64()+1 != previous.Number.Uint64() {
 			return fmt.Errorf(
-				"compact ancestor %d number mismatch: got %d expected %d",
+				"ancestor header %d number mismatch: got %d expected %d",
 				index,
-				current.Number,
-				prev.Number+1,
+				current.Number.Uint64(),
+				previous.Number.Uint64()-1,
 			)
 		}
-		if current.ParentHash != prev.Hash {
+		if previous.ParentHash != current.Hash() {
 			return fmt.Errorf(
-				"compact ancestor %d parent hash mismatch: got %s expected %s",
+				"ancestor header %d parent hash mismatch: got %s expected %s",
 				index,
-				current.ParentHash.Hex(),
-				prev.Hash.Hex(),
-			)
-		}
-	}
-	if len(witness.CompactAncestors) > 0 {
-		last := witness.CompactAncestors[len(witness.CompactAncestors)-1]
-		if last.Number+1 != parent.Number.Uint64() {
-			return fmt.Errorf(
-				"compact ancestor tail number mismatch: got %d expected %d",
-				last.Number,
-				parent.Number.Uint64()-1,
-			)
-		}
-		if parent.ParentHash != last.Hash {
-			return fmt.Errorf(
-				"compact ancestor tail hash mismatch: got %s expected %s",
-				parent.ParentHash.Hex(),
-				last.Hash.Hex(),
+				current.Hash().Hex(),
+				previous.ParentHash.Hex(),
 			)
 		}
 	}
@@ -492,18 +481,11 @@ func newReplayChainContext(
 		config:         config,
 		engine:         beacon.New(ethash.NewFaker()),
 		current:        block.Header(),
-		headersByHash:  make(map[common.Hash]*types.Header, len(witness.Witness.Headers)+len(witness.CompactAncestors)),
-		hashesByNumber: make(map[uint64]common.Hash, len(witness.Witness.Headers)+len(witness.CompactAncestors)),
+		headersByHash:  make(map[common.Hash]*types.Header, len(witness.Witness.Headers)),
+		hashesByNumber: make(map[uint64]common.Hash, len(witness.Witness.Headers)),
 	}
 	for _, header := range witness.Witness.Headers {
 		ctx.addHeader(header.Hash(), header)
-	}
-	for _, ancestor := range witness.CompactAncestors {
-		ctx.addHeader(ancestor.Hash, &types.Header{
-			ParentHash: ancestor.ParentHash,
-			Number:     new(big.Int).SetUint64(ancestor.Number),
-			Time:       ancestor.Timestamp,
-		})
 	}
 	return ctx
 }
