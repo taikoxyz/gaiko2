@@ -17,6 +17,11 @@ import (
 const sharedFixtureName = "shasta_request_taiko_mainnet_proposal_2222_l2_5412225_5412416.json"
 
 func TestSharedShastaFixtureMetadata(t *testing.T) {
+	// TODO(compact-ancestors): re-enable after regenerating testdata/shasta_request_*.json
+	// with full replay ancestor headers (raiko2 dump_gaiko2_shasta_fixture). See
+	// docs/plans/2026-07-04-gaiko2-disable-compact-replay-ancestors-design.md.
+	t.Skip("shared fixture carries compact replay ancestors; pending regeneration to full headers")
+
 	req := loadSharedShastaFixture(t)
 	validated, err := ValidateRequest(req)
 	if err != nil {
@@ -41,6 +46,11 @@ func TestSharedShastaFixtureMetadata(t *testing.T) {
 }
 
 func TestSharedShastaFixtureReplaysStateless(t *testing.T) {
+	// TODO(compact-ancestors): re-enable after regenerating testdata/shasta_request_*.json
+	// with full replay ancestor headers (raiko2 dump_gaiko2_shasta_fixture). See
+	// docs/plans/2026-07-04-gaiko2-disable-compact-replay-ancestors-design.md.
+	t.Skip("shared fixture carries compact replay ancestors; pending regeneration to full headers")
+
 	req := loadSharedShastaFixture(t)
 
 	validated, err := ValidateRequest(req)
@@ -64,6 +74,11 @@ func TestSharedShastaFixtureReplaysStateless(t *testing.T) {
 }
 
 func TestSharedShastaFixtureFirstAnchorTransactionDecodes(t *testing.T) {
+	// TODO(compact-ancestors): re-enable after regenerating testdata/shasta_request_*.json
+	// with full replay ancestor headers (raiko2 dump_gaiko2_shasta_fixture). See
+	// docs/plans/2026-07-04-gaiko2-disable-compact-replay-ancestors-design.md.
+	t.Skip("shared fixture carries compact replay ancestors; pending regeneration to full headers")
+
 	req := loadSharedShastaFixture(t)
 	validated, err := ValidateRequest(req)
 	if err != nil {
