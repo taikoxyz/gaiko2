@@ -2174,3 +2174,18 @@ func TestAnchorBlockNumberFromStorageWord(t *testing.T) {
 		t.Fatalf("packed word: got %d want 281474976710655", got)
 	}
 }
+
+func TestVerifiedParentAnchorBlockNumberReadsSharedFixture(t *testing.T) {
+	req := loadSharedShastaFixture(t)
+	view, err := DecodeGuestInput(*req.Payload.GuestInput)
+	if err != nil {
+		t.Fatalf("decode guest input: %v", err)
+	}
+	got, err := verifiedParentAnchorBlockNumber(view)
+	if err != nil {
+		t.Fatalf("verified parent anchor: %v", err)
+	}
+	if got != 24862885 {
+		t.Fatalf("verified parent anchor: got %d want 24862885", got)
+	}
+}

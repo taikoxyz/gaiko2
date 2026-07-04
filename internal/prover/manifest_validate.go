@@ -1093,6 +1093,24 @@ func anchorBlockNumberFromStorageWord(word common.Hash) uint64 {
 	return new(big.Int).SetBytes(word[26:32]).Uint64()
 }
 
+// verifiedParentAnchorBlockNumber reads the parent block's
+// Anchor._blockState.anchorBlockNumber from proof-backed L2 state at the trusted
+// TaikoL2 address derived from the chain id. This is the authenticated baseline
+// for Shasta anchor progression; a caller-supplied
+// taiko.prover_data.last_anchor_block_number must not be trusted in its place.
+func verifiedParentAnchorBlockNumber(view *GuestInputView) (uint64, error) {
+	l2Address, err := shastaTaikoL2Address(view.GuestInputChainID)
+	if err != nil {
+		return 0, fmt.Errorf("derive TaikoL2 address for parent anchor state: %w", err)
+	}
+	slot := common.BigToHash(new(big.Int).SetUint64(shastaAnchorBlockStateSlot))
+	word, err := readParentL2Storage(view, l2Address, slot)
+	if err != nil {
+		return 0, fmt.Errorf("read parent Anchor._blockState.anchorBlockNumber: %w", err)
+	}
+	return anchorBlockNumberFromStorageWord(word), nil
+}
+
 func verifiedParentShastaCheckpoint(view *GuestInputView, blockNumber uint64) (anchorV4CheckpointView, error) {
 	store, err := decodeWitnessCheckpointStore(view)
 	if err != nil {
