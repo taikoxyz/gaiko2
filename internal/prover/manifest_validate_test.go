@@ -1699,6 +1699,196 @@ func TestValidateAnchorL1LinkageRejectsForgedCheckpointStateRoot(t *testing.T) {
 	}
 }
 
+func TestReadParentL2StorageReturnsCheckpoint(t *testing.T) {
+	view, account, blockNumber, wantHash, wantRoot := newCheckpointStoreStateFixture(t)
+	blockHashSlot, stateRootSlot := shastaCheckpointStorageSlots(blockNumber)
+	gotHash, err := readParentL2Storage(view, account, blockHashSlot)
+	if err != nil {
+		t.Fatalf("read blockHash: %v", err)
+	}
+	gotRoot, err := readParentL2Storage(view, account, stateRootSlot)
+	if err != nil {
+		t.Fatalf("read stateRoot: %v", err)
+	}
+	if gotHash != wantHash || gotRoot != wantRoot {
+		t.Fatalf("checkpoint read mismatch: gotHash=%s wantHash=%s gotRoot=%s wantRoot=%s",
+			gotHash.Hex(), wantHash.Hex(), gotRoot.Hex(), wantRoot.Hex())
+	}
+}
+
+// TestReadParentL2StorageRequiresProposalStateNodes confirms the storage-trie
+// nodes carried in view.Raw.ProposalStateNodes are load-bearing: dropping them
+// leaves the storage trie unresolvable, so the read must surface a missing-node
+// error rather than silently returning an empty (zero) slot.
+func TestReadParentL2StorageRequiresProposalStateNodes(t *testing.T) {
+	view, account, blockNumber, _, _ := newCheckpointStoreStateFixture(t)
+	view.Raw.ProposalStateNodes = nil
+	blockHashSlot, _ := shastaCheckpointStorageSlots(blockNumber)
+	if _, err := readParentL2Storage(view, account, blockHashSlot); err == nil {
+		t.Fatalf("expected error reading storage slot without proposal state nodes")
+	}
+}
+
+// newCheckpointStoreStateFixture builds a GuestInputView whose first witness
+// carries a coherent nested trie: an account trie (its root is the pre-state
+// root) containing a CheckpointStore account whose storageRoot points at a
+// storage trie holding blockHashSlot=>wantHash and stateRootSlot=>wantRoot.
+//
+// The account-trie nodes are placed in the witness's own state set while the
+// storage-trie nodes are placed in view.Raw.ProposalStateNodes, so a passing
+// read proves readParentL2Storage merges both node sources before opening the
+// pre-state.
+func newCheckpointStoreStateFixture(t *testing.T) (*GuestInputView, common.Address, uint64, common.Hash, common.Hash) {
+	t.Helper()
+
+	const chainID = uint64(167001)
+	account := common.HexToAddress("0x1234567890AbcdEF1234567890aBcdef12345678")
+	blockNumber := uint64(24862915)
+	wantHash := common.HexToHash(testHash("ab"))
+	wantRoot := common.HexToHash(testHash("cd"))
+
+	blockHashSlot, stateRootSlot := shastaCheckpointStorageSlots(blockNumber)
+
+	memdb := rawdb.NewMemoryDatabase()
+	tdb := triedb.NewDatabase(memdb, triedb.HashDefaults)
+	statedb, err := state.New(types.EmptyRootHash, state.NewDatabase(tdb, state.NewCodeDB(memdb)))
+	if err != nil {
+		t.Fatalf("open checkpoint store state: %v", err)
+	}
+	// Give the account a nonce so it survives commit as a non-empty object.
+	statedb.SetNonce(account, 1, tracing.NonceChangeUnspecified)
+	statedb.SetState(account, blockHashSlot, wantHash)
+	statedb.SetState(account, stateRootSlot, wantRoot)
+
+	accountRoot, err := statedb.Commit(0, false, false)
+	if err != nil {
+		t.Fatalf("commit checkpoint store state: %v", err)
+	}
+
+	// Account-trie nodes -> witness state.
+	accountTrie, err := trie.NewStateTrie(trie.StateTrieID(accountRoot), tdb)
+	if err != nil {
+		t.Fatalf("open account trie: %v", err)
+	}
+	stateAccount, err := accountTrie.GetAccount(account)
+	if err != nil || stateAccount == nil {
+		t.Fatalf("resolve checkpoint store account: %v", err)
+	}
+	witnessStateNodes := collectTrieNodes(t, accountTrie)
+
+	// Storage-trie nodes -> proposal state nodes (shared witness resources).
+	storageTrie, err := trie.NewStateTrie(
+		trie.StorageTrieID(accountRoot, crypto.Keccak256Hash(account.Bytes()), stateAccount.Root),
+		tdb,
+	)
+	if err != nil {
+		t.Fatalf("open storage trie: %v", err)
+	}
+	storageNodes := collectTrieNodes(t, storageTrie)
+	if len(storageNodes) == 0 {
+		t.Fatalf("storage trie produced no nodes")
+	}
+	proposalStateNodes := make([]json.RawMessage, 0, len(storageNodes))
+	for _, node := range storageNodes {
+		proposalStateNodes = append(proposalStateNodes, mustRawMessage(t, fmt.Sprintf("%q", node)))
+	}
+
+	parentHeader := &types.Header{
+		ParentHash:  common.HexToHash(testHash("01")),
+		UncleHash:   types.EmptyUncleHash,
+		Coinbase:    common.HexToAddress(testAddress("02")),
+		Root:        accountRoot,
+		TxHash:      types.EmptyTxsHash,
+		ReceiptHash: types.EmptyReceiptsHash,
+		Bloom:       types.Bloom{},
+		Difficulty:  big.NewInt(0),
+		Number:      new(big.Int).SetUint64(blockNumber),
+		GasLimit:    30_000_000,
+		GasUsed:     0,
+		Time:        1_000,
+		Extra:       []byte{},
+		MixDigest:   common.Hash{},
+		Nonce:       types.BlockNonce{},
+		BaseFee:     new(big.Int).SetUint64(manifestTestBaseFee),
+	}
+	childHeader := &types.Header{
+		ParentHash:  parentHeader.Hash(),
+		UncleHash:   types.EmptyUncleHash,
+		Coinbase:    common.HexToAddress(testAddress("02")),
+		Root:        common.HexToHash(testHash("55")),
+		TxHash:      types.EmptyTxsHash,
+		ReceiptHash: types.EmptyReceiptsHash,
+		Bloom:       types.Bloom{},
+		Difficulty:  big.NewInt(0),
+		Number:      new(big.Int).SetUint64(blockNumber + 1),
+		GasLimit:    30_000_000,
+		GasUsed:     0,
+		Time:        1_012,
+		Extra:       []byte{},
+		MixDigest:   common.Hash{},
+		Nonce:       types.BlockNonce{},
+		BaseFee:     new(big.Int).SetUint64(manifestTestBaseFee),
+	}
+
+	blockJSON := mustRawMessage(t, fmt.Sprintf(`{
+		"header": %s,
+		"body": {"transactions": [], "ommers": [], "withdrawals": []}
+	}`, headerJSON(t, childHeader)))
+	witnessStateJSON, err := json.Marshal(witnessStateNodes)
+	if err != nil {
+		t.Fatalf("marshal witness state: %v", err)
+	}
+
+	input := protocol.ShastaGuestInput{
+		Witnesses: []json.RawMessage{
+			mustRawMessage(t, fmt.Sprintf(`{
+				"block": %s,
+				"chain_spec": {"chain_id": %d, "checkpoint_store_contract": %q},
+				"witness": {"state": %s, "state_indices": [], "codes": [], "headers": [%s]},
+				"accounts": {}
+			}`,
+				blockJSON,
+				chainID,
+				account.Hex(),
+				witnessStateJSON,
+				fmt.Sprintf(`{"header": %s, "hash": %q}`, headerJSON(t, parentHeader), parentHeader.Hash().Hex()),
+			)),
+		},
+		Taiko:                   mustRawMessage(t, fmt.Sprintf(`{"chain_spec": {"chain_id": %d}}`, chainID)),
+		ProposalAncestorHeaders: []json.RawMessage{},
+		ProposalStateNodes:      proposalStateNodes,
+	}
+
+	view := &GuestInputView{Raw: input}
+	witnessView, _, err := decodeGuestInputWitness(input.Witnesses[0])
+	if err != nil {
+		t.Fatalf("decode fixture witness: %v", err)
+	}
+	view.Witnesses = []GuestInputWitnessView{witnessView}
+
+	return view, account, blockNumber, wantHash, wantRoot
+}
+
+func collectTrieNodes(t *testing.T, tr *trie.StateTrie) []string {
+	t.Helper()
+	it, err := tr.NodeIterator(nil)
+	if err != nil {
+		t.Fatalf("iterate trie: %v", err)
+	}
+	nodes := make([]string, 0, 4)
+	for it.Next(true) {
+		if it.Hash() == (common.Hash{}) {
+			continue
+		}
+		blob := it.NodeBlob()
+		if len(blob) == 0 {
+			continue
+		}
+		nodes = append(nodes, "0x"+hex.EncodeToString(blob))
+	}
+	return nodes
+}
+
 func TestShastaCheckpointStorageSlots(t *testing.T) {
 	blockHashSlot, stateRootSlot := shastaCheckpointStorageSlots(24862915)
 	var buf [64]byte

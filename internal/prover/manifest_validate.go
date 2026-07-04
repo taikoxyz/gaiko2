@@ -1078,6 +1078,40 @@ func shastaCheckpointStorageSlots(blockNumber uint64) (common.Hash, common.Hash)
 	return blockHashSlot, stateRootSlot
 }
 
+func verifiedParentShastaCheckpoint(view *GuestInputView, blockNumber uint64) (anchorV4CheckpointView, error) {
+	store, err := decodeWitnessCheckpointStore(view)
+	if err != nil {
+		return anchorV4CheckpointView{}, err
+	}
+	blockHashSlot, stateRootSlot := shastaCheckpointStorageSlots(blockNumber)
+	blockHash, err := readParentL2Storage(view, store, blockHashSlot)
+	if err != nil {
+		return anchorV4CheckpointView{}, fmt.Errorf("read parent CheckpointStore blockHash: %w", err)
+	}
+	stateRoot, err := readParentL2Storage(view, store, stateRootSlot)
+	if err != nil {
+		return anchorV4CheckpointView{}, fmt.Errorf("read parent CheckpointStore stateRoot: %w", err)
+	}
+	if blockHash == (common.Hash{}) {
+		return anchorV4CheckpointView{}, fmt.Errorf("parent CheckpointStore blockHash is zero")
+	}
+	if stateRoot == (common.Hash{}) {
+		return anchorV4CheckpointView{}, fmt.Errorf("parent CheckpointStore stateRoot is zero")
+	}
+	return anchorV4CheckpointView{blockNumber: blockNumber, blockHash: blockHash, stateRoot: stateRoot}, nil
+}
+
+func decodeWitnessCheckpointStore(view *GuestInputView) (common.Address, error) {
+	if len(view.Witnesses) == 0 {
+		return common.Address{}, fmt.Errorf("guest input must include at least one witness")
+	}
+	fields, err := decodeJSONObject(view.Witnesses[0].ChainSpecRaw)
+	if err != nil {
+		return common.Address{}, fmt.Errorf("unmarshal witness.chain_spec: %w", err)
+	}
+	return requireAddress(fields, "checkpoint_store_contract", "checkpointStoreContract")
+}
+
 func decodeGuestInputL1Headers(raw json.RawMessage) (*types.Header, []*types.Header, error) {
 	fields, err := decodeJSONObject(raw)
 	if err != nil {
