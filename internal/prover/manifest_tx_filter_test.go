@@ -8,6 +8,7 @@ import (
 	"testing"
 
 	"github.com/ethereum/go-ethereum/core/types"
+	"github.com/ethereum/go-ethereum/core/vm"
 )
 
 func TestFilterManifestTransactionsMatchesCanonicalBlock(t *testing.T) {
@@ -136,6 +137,26 @@ func TestFilterManifestTransactionsHonorsCanceledContext(t *testing.T) {
 	)
 	if !errors.Is(err, context.Canceled) {
 		t.Fatalf("expected context.Canceled, got %v", err)
+	}
+}
+
+func TestManifestCandidateStateErrorIgnoresNonAnchorZkGasTruncation(t *testing.T) {
+	stateErr := errors.New("missing trie node")
+
+	if err := manifestCandidateStateError(stateErr, vm.ErrZkGasLimitExceeded, true, 1); err != nil {
+		t.Fatalf("expected non-anchor zk-gas truncation to ignore state error, got %v", err)
+	}
+
+	if err := manifestCandidateStateError(stateErr, vm.ErrZkGasLimitExceeded, true, 0); !errors.Is(err, stateErr) {
+		t.Fatalf("expected anchor state error to remain fatal, got %v", err)
+	}
+
+	if err := manifestCandidateStateError(stateErr, errors.New("other apply error"), true, 1); !errors.Is(err, stateErr) {
+		t.Fatalf("expected non-zk-gas state error to remain fatal, got %v", err)
+	}
+
+	if err := manifestCandidateStateError(stateErr, vm.ErrZkGasLimitExceeded, false, 1); !errors.Is(err, stateErr) {
+		t.Fatalf("expected pre-Unzen state error to remain fatal, got %v", err)
 	}
 }
 

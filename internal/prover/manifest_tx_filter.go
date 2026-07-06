@@ -203,7 +203,12 @@ func commitFilteredManifestTransactions(
 		stateSnapshot := statedb.Snapshot()
 		gasSnapshot := *gp
 		_, err = core.ApplyTransactionWithEVM(msg, gp, statedb, blockNumber, blockHash, blockContext.Time, txCopy, evm)
-		if stateErr := manifestWitnessStateError(statedb, manifestTxLabel(index, txCopy)); stateErr != nil {
+		if stateErr := manifestCandidateStateError(
+			manifestWitnessStateError(statedb, manifestTxLabel(index, txCopy)),
+			err,
+			isUnzen,
+			index,
+		); stateErr != nil {
 			return nil, stateErr
 		}
 		if err != nil {
@@ -244,6 +249,18 @@ func manifestWitnessStateError(statedb *state.StateDB, phase string) error {
 		return fmt.Errorf("witness state error during manifest transaction filtering (%s): %w", phase, err)
 	}
 	return nil
+}
+
+func manifestCandidateStateError(
+	stateErr error,
+	applyErr error,
+	isUnzen bool,
+	index int,
+) error {
+	if isUnzen && index > 0 && errors.Is(applyErr, vm.ErrZkGasLimitExceeded) {
+		return nil
+	}
+	return stateErr
 }
 
 func manifestTxLabel(index int, tx *types.Transaction) string {
