@@ -361,14 +361,24 @@ func decodeBlobBackedSourceManifest(dataSource blobSourceDataView, offset uint64
 		return shastaSourceManifest{}, fmt.Errorf("blob-backed derivation source is missing blob data")
 	}
 
-	var concatenated []byte
+	// Blob length is host-input integrity (like raiko2's InvalidBlobLength), so validate every
+	// blob up front and hard-error, mirroring raiko2's collect-then-decode ordering. This keeps
+	// a wrong-length blob a hard error even when another blob is undecodable proposal content.
 	for index, raw := range dataSource.TxDataFromBlob {
+		if len(raw) != shastaBytesPerBlob {
+			return shastaSourceManifest{}, fmt.Errorf("blob %d has invalid length %d; expected %d", index, len(raw), shastaBytesPerBlob)
+		}
+	}
+
+	var concatenated []byte
+	for _, raw := range dataSource.TxDataFromBlob {
 		decoded, err := decodeShastaBlob(raw)
 		if err != nil {
-			if len(raw) != shastaBytesPerBlob {
-				return shastaSourceManifest{}, fmt.Errorf("blob %d has invalid length %d; expected %d", index, len(raw), shastaBytesPerBlob)
-			}
-			return shastaSourceManifest{}, fmt.Errorf("invalid blob encoding")
+			// Undecodable blob content is bound to the on-chain blob hashes, so it is an
+			// objective property of the proposal (not host-controlled). It degrades to the
+			// default manifest exactly like the driver's resolve_source_manifest
+			// (raiko2 #137 / taiko-client-rs #21854) instead of failing derivation.
+			return defaultSourceManifest(), nil
 		}
 		concatenated = append(concatenated, decoded...)
 	}
