@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 
+	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/consensus/misc"
 	"github.com/ethereum/go-ethereum/core"
 	"github.com/ethereum/go-ethereum/core/state"
@@ -15,6 +16,11 @@ import (
 	"github.com/ethereum/go-ethereum/triedb"
 )
 
+type manifestFilterResult struct {
+	transactions     types.Transactions
+	deferredStateErr error
+}
+
 func validateManifestTransactionRoot(
 	ctx context.Context,
 	view *GuestInputView,
@@ -22,7 +28,7 @@ func validateManifestTransactionRoot(
 	witness *ReplayWitness,
 	manifestTxs types.Transactions,
 ) error {
-	filteredTxs, err := filterManifestTransactions(
+	filterResult, err := filterManifestTransactions(
 		ctx,
 		view.GuestInputChainID,
 		canonicalBlock,
@@ -34,13 +40,9 @@ func validateManifestTransactionRoot(
 	}
 
 	header := canonicalBlock.Header()
-	computedRoot := types.DeriveSha(filteredTxs, trie.NewStackTrie(nil))
+	computedRoot := types.DeriveSha(filterResult.transactions, trie.NewStackTrie(nil))
 	if computedRoot != header.TxHash {
-		return fmt.Errorf(
-			"transaction root mismatch: expected %s got %s",
-			header.TxHash.Hex(),
-			computedRoot.Hex(),
-		)
+		return manifestTransactionRootMismatchError(header.TxHash, computedRoot, filterResult.deferredStateErr)
 	}
 	return nil
 }
@@ -51,18 +53,18 @@ func filterManifestTransactions(
 	canonicalBlock *types.Block,
 	manifestTxs types.Transactions,
 	witness *ReplayWitness,
-) (types.Transactions, error) {
+) (manifestFilterResult, error) {
 	if witness == nil || witness.Witness == nil {
-		return nil, fmt.Errorf("missing witness for manifest transaction filtering")
+		return manifestFilterResult{}, fmt.Errorf("missing witness for manifest transaction filtering")
 	}
 	canonicalTxs := canonicalBlock.Transactions()
 	if len(canonicalTxs) == 0 {
-		return nil, fmt.Errorf("missing anchor transaction")
+		return manifestFilterResult{}, fmt.Errorf("missing anchor transaction")
 	}
 
 	config, err := chainConfigFor(chainID)
 	if err != nil {
-		return nil, err
+		return manifestFilterResult{}, err
 	}
 
 	memdb := witness.Witness.MakeHashDB()
@@ -71,17 +73,17 @@ func filterManifestTransactions(
 		state.NewDatabase(triedb.NewDatabase(memdb, triedb.HashDefaults), state.NewCodeDB(memdb)),
 	)
 	if err != nil {
-		return nil, fmt.Errorf("open witness state: %w", err)
+		return manifestFilterResult{}, fmt.Errorf("open witness state: %w", err)
 	}
 
 	executionBlock, _ := replayExecutionBlock(config, canonicalBlock)
 	chain := newReplayChainContext(config, executionBlock, witness)
 	candidates, err := manifestCandidateTransactions(ctx, config, executionBlock.Header(), canonicalTxs[0], manifestTxs)
 	if err != nil {
-		return nil, err
+		return manifestFilterResult{}, err
 	}
 
-	committedTxs, err := commitFilteredManifestTransactions(
+	return commitFilteredManifestTransactions(
 		ctx,
 		chain,
 		config,
@@ -89,7 +91,6 @@ func filterManifestTransactions(
 		statedb,
 		candidates,
 	)
-	return committedTxs, err
 }
 
 func manifestCandidateTransactions(
@@ -124,12 +125,12 @@ func commitFilteredManifestTransactions(
 	block *types.Block,
 	statedb *state.StateDB,
 	candidates types.Transactions,
-) (types.Transactions, error) {
+) (manifestFilterResult, error) {
 	if len(candidates) == 0 {
-		return nil, fmt.Errorf("missing anchor transaction")
+		return manifestFilterResult{}, fmt.Errorf("missing anchor transaction")
 	}
 	if err := ctx.Err(); err != nil {
-		return nil, err
+		return manifestFilterResult{}, err
 	}
 
 	var (
@@ -161,30 +162,31 @@ func commitFilteredManifestTransactions(
 		core.ProcessParentBlockHash(block.ParentHash(), evm)
 	}
 	if err := manifestWitnessStateError(statedb, "system calls"); err != nil {
-		return nil, err
+		return manifestFilterResult{}, err
 	}
 
 	committed := make(types.Transactions, 0, len(candidates))
+	var deferredStateErr error
 	for index, tx := range candidates {
 		if err := ctx.Err(); err != nil {
-			return nil, err
+			return manifestFilterResult{}, err
 		}
 		txCopy := tx
 		if index == 0 {
 			var err error
 			txCopy, err = cloneTransaction(tx)
 			if err != nil {
-				return nil, fmt.Errorf("clone anchor transaction: %w", err)
+				return manifestFilterResult{}, fmt.Errorf("clone anchor transaction: %w", err)
 			}
 			if err := txCopy.MarkAsAnchor(); err != nil {
-				return nil, fmt.Errorf("mark anchor transaction: %w", err)
+				return manifestFilterResult{}, fmt.Errorf("mark anchor transaction: %w", err)
 			}
 		}
 
 		msg, err := core.TransactionToMessage(txCopy, signer, header.BaseFee)
 		if err != nil {
 			if index == 0 {
-				return nil, fmt.Errorf("anchor transaction: %w", err)
+				return manifestFilterResult{}, fmt.Errorf("anchor transaction: %w", err)
 			}
 			continue
 		}
@@ -203,23 +205,29 @@ func commitFilteredManifestTransactions(
 		stateSnapshot := statedb.Snapshot()
 		gasSnapshot := *gp
 		_, err = core.ApplyTransactionWithEVM(msg, gp, statedb, blockNumber, blockHash, blockContext.Time, txCopy, evm)
-		if stateErr := manifestCandidateStateError(
+		stateErr, candidateDeferredStateErr := manifestCandidateStateError(
 			manifestWitnessStateError(statedb, manifestTxLabel(index, txCopy)),
 			err,
 			isUnzen,
 			index,
-		); stateErr != nil {
-			return nil, stateErr
+		)
+		if stateErr != nil {
+			return manifestFilterResult{}, stateErr
 		}
 		if err != nil {
 			if isUnzen && errors.Is(err, vm.ErrZkGasLimitExceeded) && index > 0 {
+				// Keep sticky witness errors from the truncated candidate deferred
+				// until the committed prefix is bound to the canonical tx root.
+				if deferredStateErr == nil {
+					deferredStateErr = candidateDeferredStateErr
+				}
 				cfg.ZkGasMeter.ResetTransaction()
 				evm.ResetZkGasErr()
 				revertManifestCandidate(statedb, gp, stateSnapshot, gasSnapshot)
 				break
 			}
 			if index == 0 {
-				return nil, fmt.Errorf("anchor transaction failed: %w", err)
+				return manifestFilterResult{}, fmt.Errorf("anchor transaction failed: %w", err)
 			}
 			revertManifestCandidate(statedb, gp, stateSnapshot, gasSnapshot)
 			continue
@@ -236,7 +244,10 @@ func commitFilteredManifestTransactions(
 		committed = append(committed, tx)
 	}
 
-	return committed, nil
+	return manifestFilterResult{
+		transactions:     committed,
+		deferredStateErr: deferredStateErr,
+	}, nil
 }
 
 func revertManifestCandidate(statedb *state.StateDB, gp *core.GasPool, stateSnapshot int, gasSnapshot core.GasPool) {
@@ -256,11 +267,30 @@ func manifestCandidateStateError(
 	applyErr error,
 	isUnzen bool,
 	index int,
-) error {
-	if isUnzen && index > 0 && errors.Is(applyErr, vm.ErrZkGasLimitExceeded) {
-		return nil
+) (fatalErr error, deferredErr error) {
+	if stateErr == nil {
+		return nil, nil
 	}
-	return stateErr
+	if isUnzen && index > 0 && errors.Is(applyErr, vm.ErrZkGasLimitExceeded) {
+		return nil, stateErr
+	}
+	return stateErr, nil
+}
+
+func manifestTransactionRootMismatchError(expected common.Hash, computed common.Hash, deferredStateErr error) error {
+	if deferredStateErr != nil {
+		return fmt.Errorf(
+			"transaction root mismatch after zk-gas truncation: expected %s got %s; deferred witness state error: %w",
+			expected.Hex(),
+			computed.Hex(),
+			deferredStateErr,
+		)
+	}
+	return fmt.Errorf(
+		"transaction root mismatch: expected %s got %s",
+		expected.Hex(),
+		computed.Hex(),
+	)
 }
 
 func manifestTxLabel(index int, tx *types.Transaction) string {
