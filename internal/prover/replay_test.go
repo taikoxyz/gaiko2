@@ -5,11 +5,13 @@ import (
 	"encoding/json"
 	"fmt"
 	"math/big"
+	"strings"
 	"testing"
 
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/core/types"
 	"github.com/ethereum/go-ethereum/core/vm"
+	"github.com/ethereum/go-ethereum/crypto"
 	"github.com/ethereum/go-ethereum/params"
 	"github.com/taikoxyz/gaiko2/internal/protocol"
 )
@@ -17,6 +19,7 @@ import (
 type fakeRunner struct {
 	stateRoot   common.Hash
 	receiptRoot common.Hash
+	logs        []*types.Log
 	err         error
 }
 
@@ -25,8 +28,16 @@ func (f fakeRunner) Execute(
 	*params.ChainConfig,
 	*types.Block,
 	*ReplayWitness,
-) (common.Hash, common.Hash, error) {
-	return f.stateRoot, f.receiptRoot, f.err
+) (ReplayResult, error) {
+	receipts := types.Receipts(nil)
+	if f.logs != nil {
+		receipts = types.Receipts{&types.Receipt{Logs: f.logs}}
+	}
+	return ReplayResult{
+		StateRoot:   f.stateRoot,
+		ReceiptRoot: f.receiptRoot,
+		Receipts:    receipts,
+	}, f.err
 }
 
 func TestDecodeReplayBlockBuildsGethTypes(t *testing.T) {
@@ -256,6 +267,39 @@ func TestReplayServiceReturnsSignedProofResult(t *testing.T) {
 	}
 	if result.Input == "" {
 		t.Fatalf("expected input hash, got %+v", result)
+	}
+}
+
+func TestReplayServiceRejectsLastAnchorMismatchFromAnchorEvent(t *testing.T) {
+	const chainID = uint64(167013)
+	validated := sampleValidatedReplayRequestWithGuestLastAnchor(t, chainID, 899)
+
+	service := NewReplayService(fakeRunner{
+		stateRoot:   common.HexToHash("0x2222222222222222222222222222222222222222222222222222222222222222"),
+		receiptRoot: common.HexToHash("0x3333333333333333333333333333333333333333333333333333333333333333"),
+		logs: []*types.Log{
+			anchorEventLog(t, chainID, 900, 901),
+		},
+	})
+	_, err := service.Prove(context.Background(), validated)
+	if err == nil || !strings.Contains(err.Error(), "last_anchor_block_number") {
+		t.Fatalf("expected last anchor mismatch from replay event, got %v", err)
+	}
+}
+
+func TestReplayServiceAcceptsMatchingLastAnchorFromAnchorEvent(t *testing.T) {
+	const chainID = uint64(167013)
+	validated := sampleValidatedReplayRequestWithGuestLastAnchor(t, chainID, 900)
+
+	service := NewReplayService(fakeRunner{
+		stateRoot:   common.HexToHash("0x2222222222222222222222222222222222222222222222222222222222222222"),
+		receiptRoot: common.HexToHash("0x3333333333333333333333333333333333333333333333333333333333333333"),
+		logs: []*types.Log{
+			anchorEventLog(t, chainID, 900, 901),
+		},
+	})
+	if _, err := service.Prove(context.Background(), validated); err != nil {
+		t.Fatalf("prove with matching anchor event: %v", err)
 	}
 }
 
@@ -614,6 +658,116 @@ func validatedReplayRequestForTest(t *testing.T, req protocol.ShastaRequest) *Va
 		Request: req,
 		Carry:   carry,
 		Blocks:  blocks,
+	}
+}
+
+func sampleValidatedReplayRequestWithGuestLastAnchor(
+	t *testing.T,
+	chainID uint64,
+	lastAnchor uint64,
+) *ValidatedRequest {
+	t.Helper()
+
+	parentHash := "0x34fe3e0e24b470b507cd4547aeb65b45bf6dd1de31d3323057e2188dc37fe010"
+	replay := protocol.ReplayBlock{
+		Block: mustRawMessage(t, `{
+			"header": {
+				"parentHash": "`+parentHash+`",
+				"sha3Uncles": "0x1dcc4de8dec75d7aab85b567b6ccd41ad312451b948a7413f0a142fd40d49347",
+				"miner": "0x0000000000000000000000000000000000000000",
+				"stateRoot": "0x2222222222222222222222222222222222222222222222222222222222222222",
+				"transactionsRoot": "0x56e81f171bcc55a6ff8345e692c0f86e5b48e01b996cadc001622fb5e363b421",
+				"receiptsRoot": "0x3333333333333333333333333333333333333333333333333333333333333333",
+				"logsBloom": "0x00000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000",
+				"difficulty": "0x0",
+				"number": "0x2a",
+				"gasLimit": "0x0",
+				"gasUsed": "0x0",
+				"timestamp": "0x0",
+				"extraData": "0x",
+				"mixHash": "0x0000000000000000000000000000000000000000000000000000000000000000",
+				"nonce": "0x0000000000000000",
+				"baseFeePerGas": "0x1"
+			},
+			"body": {"transactions": [], "ommers": [], "withdrawals": null}
+		}`),
+		Witness: mustRawMessage(t, `{
+			"headers": [{
+				"hash": "0xffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+				"header": {
+					"parentHash": "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+					"sha3Uncles": "0x1dcc4de8dec75d7aab85b567b6ccd41ad312451b948a7413f0a142fd40d49347",
+					"miner": "0x0000000000000000000000000000000000000000",
+					"stateRoot": "0xbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+					"transactionsRoot": "0x56e81f171bcc55a6ff8345e692c0f86e5b48e01b996cadc001622fb5e363b421",
+					"receiptsRoot": "0x56e81f171bcc55a6ff8345e692c0f86e5b48e01b996cadc001622fb5e363b421",
+					"logsBloom": "0x00000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000",
+					"difficulty": "0x0",
+					"number": "0x29",
+					"gasLimit": "0x0",
+					"gasUsed": "0x0",
+					"timestamp": "0x0",
+					"extraData": "0x",
+					"mixHash": "0x0000000000000000000000000000000000000000000000000000000000000000",
+					"nonce": "0x0000000000000000",
+					"baseFeePerGas": "0x1"
+				}
+			}],
+			"codes": [],
+			"state": [],
+			"keys": []
+		}`),
+	}
+	blockHash := replayBlockHash(t, replay.Block)
+	req := protocol.ShastaRequest{
+		Schema: protocol.ShastaRequestSchemaV1,
+		Payload: protocol.ShastaPayload{
+			ChainID: chainID,
+			Blocks:  []protocol.ReplayBlock{replay},
+			ProofCarryData: mustRawMessage(t, fmt.Sprintf(`{
+				"chain_id": %d,
+				"verifier": "0x00f9f60C79e38c08b785eE4F1a849900693C6630",
+				"transition_input": {
+					"proposal_id": 42,
+					"proposal_hash": "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+					"parent_proposal_hash": "0xbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+					"parent_block_hash": %q,
+					"actual_prover": "0x1111111111111111111111111111111111111111",
+					"transition": {
+						"proposer": "0x2222222222222222222222222222222222222222",
+						"timestamp": 123
+					},
+					"checkpoint": {
+						"blockNumber": "0x2a",
+						"blockHash": %q,
+						"stateRoot": "0x2222222222222222222222222222222222222222222222222222222222222222"
+					}
+				}
+			}`, chainID, parentHash, blockHash)),
+			GuestInput: &protocol.ShastaGuestInput{
+				Taiko: mustRawMessage(t, fmt.Sprintf(`{
+					"prover_data": {
+						"last_anchor_block_number": %d
+					}
+				}`, lastAnchor)),
+			},
+		},
+	}
+	return validatedReplayRequestForTest(t, req)
+}
+
+func anchorEventLog(t *testing.T, chainID uint64, prevAnchor uint64, anchor uint64) *types.Log {
+	t.Helper()
+
+	data := make([]byte, 96)
+	new(big.Int).SetUint64(prevAnchor).FillBytes(data[:32])
+	new(big.Int).SetUint64(anchor).FillBytes(data[32:64])
+	return &types.Log{
+		Address: testTaikoL2Address(chainID),
+		Topics: []common.Hash{
+			crypto.Keccak256Hash([]byte("Anchored(uint48,uint48,bytes32)")),
+		},
+		Data: data,
 	}
 }
 
