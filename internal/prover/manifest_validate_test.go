@@ -582,12 +582,18 @@ func TestValidateManifestBindingRejectsMismatches(t *testing.T) {
 			wantErr: "anchor checkpoint block number mismatch",
 		},
 		{
-			name: "invalid blob encoding",
+			// An undecodable blob is bound to the on-chain blob hash, so it degrades to the
+			// default manifest (raiko2 #137) and the proposal still binds — instead of
+			// hard-erroring and leaving the proposal permanently unprovable.
+			name: "undecodable blob-backed source degrades to default and binds",
 			mutate: func(f *manifestBindingFixture) {
 				f.blobBacked = true
 				f.corruptBlobEncoding = true
+				f.anchorBlockNumber = 899
+				f.blockCoinbase = f.proposer
+				f.omitUserTx = true
 			},
-			wantErr: "invalid blob encoding",
+			wantErr: "",
 		},
 		{
 			name: "invalid manifest metadata defaults instead of binding malicious metadata",
@@ -634,6 +640,80 @@ func TestValidateManifestBindingRejectsMismatches(t *testing.T) {
 				t.Fatalf("unexpected error: %v", err)
 			}
 		})
+	}
+}
+
+func TestDecodeBlobBackedSourceManifestDefaultsUndecodableBlob(t *testing.T) {
+	// A blob-backed source whose blob is the correct length but fails the Shasta blob codec
+	// degrades to the default manifest instead of hard-erroring, matching the driver's
+	// resolve_source_manifest (raiko2 #137 / taiko-client-rs #21854). Without this, a forced
+	// inclusion carrying an undecodable blob is permanently unprovable and finalization wedges.
+	blob := encodeTestKonaBlob(t, []byte{0x01, 0x02, 0x03})
+	blob[len(blob)-1] = 0x01 // stray non-zero byte past the encoded payload
+
+	dataSource := blobSourceDataView{TxDataFromBlob: [][]byte{blob}}
+
+	manifest, err := decodeBlobBackedSourceManifest(dataSource, 0, shastaDerivationSourceMaxBlocks)
+	if err != nil {
+		t.Fatalf("undecodable blob must degrade to the default manifest, got error: %v", err)
+	}
+	if !isDefaultSourceManifest(manifest) {
+		t.Fatalf("expected default source manifest, got %+v", manifest)
+	}
+}
+
+func TestDecodeBlobBackedSourceManifestDefaultsStrayByteBlob(t *testing.T) {
+	// Mirrors the taiko-client-rs #21854 regression blob (proposal 1812 / L1 block 5167):
+	// the first field element is all zeros (version 0, declared length 0) and a stray
+	// non-zero byte sits past the declared length, so the blob codec rejects it.
+	raw := make([]byte, shastaBytesPerBlob)
+	raw[6] = 0x02
+
+	dataSource := blobSourceDataView{TxDataFromBlob: [][]byte{raw}}
+
+	manifest, err := decodeBlobBackedSourceManifest(dataSource, 0, shastaDerivationSourceMaxBlocks)
+	if err != nil {
+		t.Fatalf("stray-byte forced-inclusion blob must degrade to the default manifest, got error: %v", err)
+	}
+	if !isDefaultSourceManifest(manifest) {
+		t.Fatalf("expected default source manifest, got %+v", manifest)
+	}
+}
+
+func TestDecodeBlobBackedSourceManifestRejectsMissingBlobData(t *testing.T) {
+	// Missing blob bytes are host-input corruption, not proposal content: unlike an
+	// undecodable blob, this stays a hard error (driver analog: a transient fetch failure
+	// that is retried, never defaulted).
+	dataSource := blobSourceDataView{}
+
+	_, err := decodeBlobBackedSourceManifest(dataSource, 0, shastaDerivationSourceMaxBlocks)
+	if err == nil || !strings.Contains(err.Error(), "missing blob data") {
+		t.Fatalf("missing blob data must remain a hard error, got: %v", err)
+	}
+}
+
+func TestDecodeBlobBackedSourceManifestRejectsWrongBlobLength(t *testing.T) {
+	// A wrong-length blob is host-input corruption, not proposal content, and stays a hard error.
+	dataSource := blobSourceDataView{TxDataFromBlob: [][]byte{make([]byte, 10)}}
+
+	_, err := decodeBlobBackedSourceManifest(dataSource, 0, shastaDerivationSourceMaxBlocks)
+	if err == nil || !strings.Contains(err.Error(), "invalid length") {
+		t.Fatalf("wrong-length blob must remain a hard error, got: %v", err)
+	}
+}
+
+func TestDecodeBlobBackedSourceManifestRejectsWrongLengthEvenWithUndecodableBlob(t *testing.T) {
+	// Blob length is validated up front for every blob, matching raiko2's collect-then-decode
+	// ordering: a wrong-length blob (host corruption) stays a hard error even when an earlier
+	// blob is undecodable content that would otherwise degrade to the default manifest. This
+	// keeps gaiko2 and raiko2 in lockstep on which failures are retryable vs. proposal-bound.
+	undecodable := make([]byte, shastaBytesPerBlob)
+	undecodable[6] = 0x02
+	dataSource := blobSourceDataView{TxDataFromBlob: [][]byte{undecodable, make([]byte, 10)}}
+
+	_, err := decodeBlobBackedSourceManifest(dataSource, 0, shastaDerivationSourceMaxBlocks)
+	if err == nil || !strings.Contains(err.Error(), "invalid length") {
+		t.Fatalf("wrong-length blob must remain a hard error regardless of other blobs, got: %v", err)
 	}
 }
 
