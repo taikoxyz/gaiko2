@@ -1048,8 +1048,19 @@ func decodeAnchorV4Checkpoint(input []byte) (anchorV4CheckpointView, error) {
 	if len(input) < 4 || !bytes.Equal(input[:4], selector) {
 		return anchorV4CheckpointView{}, fmt.Errorf("first transaction is not anchorV4")
 	}
-	if len(input) < 4+96 {
-		return anchorV4CheckpointView{}, fmt.Errorf("anchorV4 calldata too short")
+	// The canonical anchor transaction is exactly selector + 96 ABI bytes. Reject
+	// trailing bytes: Solidity ignores them (fully static struct), so they leave
+	// replay unchanged yet change the tx hash and therefore the signed block hash.
+	// This binding runs before replay, so it must not rely on the on-chain uint48
+	// cleanup revert to catch non-canonical encodings.
+	if len(input) != 4+96 {
+		return anchorV4CheckpointView{}, fmt.Errorf(
+			"anchorV4 calldata length %d is not canonical (want %d)", len(input), 4+96)
+	}
+	// The uint48 blockNumber occupies the low 6 bytes of its 32-byte word; the
+	// high 24 bytes must be zero for a canonical ABI encoding.
+	if !bytes.Equal(input[4:4+24], make([]byte, 24)) {
+		return anchorV4CheckpointView{}, fmt.Errorf("anchorV4 blockNumber has non-canonical padding")
 	}
 	blockNumber := binary.BigEndian.Uint64(input[4+24 : 4+32])
 	if blockNumber > maxUint48 {

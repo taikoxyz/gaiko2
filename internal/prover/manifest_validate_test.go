@@ -2258,3 +2258,39 @@ func TestShastaCheckpointStorageSlots(t *testing.T) {
 		t.Fatalf("stateRootSlot: got %s want %s", stateRootSlot.Hex(), wantSR.Hex())
 	}
 }
+
+func TestDecodeAnchorV4CheckpointRejectsNonCanonicalCalldata(t *testing.T) {
+	selector := crypto.Keccak256([]byte("anchorV4((uint48,bytes32,bytes32))"))[:4]
+	blockHash := common.HexToHash(testHash("ab"))
+	stateRoot := common.HexToHash(testHash("cd"))
+	canonical := func() []byte {
+		out := append([]byte{}, selector...)
+		var word [32]byte
+		word[31] = 42 // uint48 blockNumber = 42, right-aligned with zero padding
+		out = append(out, word[:]...)
+		out = append(out, blockHash.Bytes()...)
+		out = append(out, stateRoot.Bytes()...)
+		return out
+	}
+
+	cp, err := decodeAnchorV4Checkpoint(canonical())
+	if err != nil {
+		t.Fatalf("canonical anchorV4 calldata should decode: %v", err)
+	}
+	if cp.blockNumber != 42 || cp.blockHash != blockHash || cp.stateRoot != stateRoot {
+		t.Fatalf("unexpected decoded checkpoint: %+v", cp)
+	}
+
+	trailing := append(canonical(), 0xde, 0xad, 0xbe, 0xef)
+	if _, err := decodeAnchorV4Checkpoint(trailing); err == nil ||
+		!strings.Contains(err.Error(), "not canonical") {
+		t.Fatalf("expected trailing-calldata rejection, got %v", err)
+	}
+
+	dirty := canonical()
+	dirty[4] = 0x01 // high byte of the blockNumber word
+	if _, err := decodeAnchorV4Checkpoint(dirty); err == nil ||
+		!strings.Contains(err.Error(), "padding") {
+		t.Fatalf("expected non-canonical padding rejection, got %v", err)
+	}
+}
