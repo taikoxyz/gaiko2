@@ -515,6 +515,44 @@ func TestDecodeManifestPayloadRejectsTooManyTransactionsInBlock(t *testing.T) {
 	}
 }
 
+func TestValidateManifestBindingIgnoresWitnessShastaTimestampForDerivation(t *testing.T) {
+	fixture := newManifestBindingFixture(t)
+	futureTimestamp := fixture.proposalTimestamp + 100
+	fixture.chainSpecHardForksJSON = fmt.Sprintf(`{"SHASTA": {"Timestamp": %d}}`, futureTimestamp)
+	fixture.manifestTimestamp = futureTimestamp
+	fixture.blockTimestamp = futureTimestamp
+	fixture.blockCoinbase = fixture.proposer
+	fixture.anchorBlockNumber = *fixture.lastAnchorBlockNumber
+	fixture.omitUserTx = true
+
+	err := ValidateGuestInputManifestBinding(fixture.view(t))
+	if err == nil {
+		t.Fatalf("expected canonical Shasta timestamp validation error")
+	}
+	if !strings.Contains(err.Error(), "timestamp mismatch") {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
+func TestValidateManifestBindingIgnoresWitnessUnzenActivationForSourceLimit(t *testing.T) {
+	fixture := newManifestBindingFixture(t)
+	fixture.chainID = params.MasayaDevnetNetworkID.Uint64()
+	fixture.l2Contract = testTaikoL2Address(fixture.chainID)
+	fixture.anchorTo = testTaikoL2Address(fixture.chainID)
+	fixture.proposalTimestamp = 2_000
+	fixture.chainSpecHardForksJSON = `{"SHASTA": {"Block": 0}, "UNZEN": {"Timestamp": 0}}`
+	fixture.manifestBlockCount = shastaDerivationSourceMaxBlocks + 1
+	fixture.manifestTimestamp = fixture.parentHeader.Time + 1
+	fixture.blockTimestamp = fixture.parentHeader.Time + 1
+	fixture.blockCoinbase = fixture.proposer
+	fixture.anchorBlockNumber = *fixture.lastAnchorBlockNumber
+	fixture.omitUserTx = true
+
+	if err := ValidateGuestInputManifestBinding(fixture.view(t)); err != nil {
+		t.Fatalf("expected oversized witness-Unzen manifest to fall back to default with canonical pre-Unzen limit: %v", err)
+	}
+}
+
 func TestValidateManifestBindingRejectsMismatches(t *testing.T) {
 	cases := []struct {
 		name    string
