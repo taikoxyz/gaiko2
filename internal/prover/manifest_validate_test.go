@@ -12,6 +12,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/decred/dcrd/dcrec/secp256k1/v4"
 	"github.com/ethereum/go-ethereum/accounts/abi"
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/core/rawdb"
@@ -785,10 +786,41 @@ func TestValidateManifestBindingRejectsRequestControlledAnchorRecipient(t *testi
 	}
 }
 
+func TestValidateManifestBindingRejectsNonCanonicalAnchorSignature(t *testing.T) {
+	fixture := newManifestBindingFixture(t)
+	fixture.anchorSignatureMode = anchorSignatureGoEthereum
+	view := fixture.view(t)
+
+	err := ValidateGuestInputManifestBinding(view)
+	if err == nil || !strings.Contains(err.Error(), "anchor transaction signature mismatch") {
+		t.Fatalf("expected canonical anchor signature rejection, got %v", err)
+	}
+}
+
+func TestDecodeAnchorV4CheckpointRejectsTrailingCalldata(t *testing.T) {
+	input := anchorInput(t, 900, common.HexToHash(testHash("61")), common.HexToHash(testHash("62")))
+	input = append(input, 0x00)
+
+	_, err := decodeAnchorV4Checkpoint(input)
+	if err == nil || !strings.Contains(err.Error(), "anchorV4 calldata length mismatch") {
+		t.Fatalf("expected trailing anchor calldata rejection, got %v", err)
+	}
+}
+
 func testTaikoL2Address(chainID uint64) common.Address {
 	prefix := strings.TrimPrefix(fmt.Sprintf("%d", chainID), "0")
 	const suffix = "10001"
 	padding := common.AddressLength*2 - len(prefix) - len(suffix)
+	return common.HexToAddress("0x" + prefix + strings.Repeat("0", padding) + suffix)
+}
+
+func testCheckpointStoreAddress(chainID uint64) common.Address {
+	prefix := strings.TrimPrefix(fmt.Sprintf("%d", chainID), "0")
+	const suffix = "5"
+	padding := common.AddressLength*2 - len(prefix) - len(suffix)
+	if padding < 0 {
+		panic("chain ID too large for test checkpoint store address")
+	}
 	return common.HexToAddress("0x" + prefix + strings.Repeat("0", padding) + suffix)
 }
 
@@ -827,6 +859,7 @@ type manifestBindingFixture struct {
 	anchorTo                    common.Address
 	anchorGas                   uint64
 	anchorPrivateKeyHex         string
+	anchorSignatureMode         anchorSignatureMode
 	anchorBlockNumber           uint64
 	lastAnchorBlockNumber       *uint64
 	omitAnchorTx                bool
@@ -849,6 +882,13 @@ type manifestBindingFixture struct {
 	anchorCheckpointStateRoot common.Hash
 	omitL1Headers             bool
 }
+
+type anchorSignatureMode uint8
+
+const (
+	anchorSignatureFixedK anchorSignatureMode = iota
+	anchorSignatureGoEthereum
+)
 
 func newManifestBindingFixture(t *testing.T) *manifestBindingFixture {
 	t.Helper()
@@ -920,6 +960,7 @@ func newManifestBindingFixture(t *testing.T) *manifestBindingFixture {
 		anchorTo:              testTaikoL2Address(chainID),
 		anchorGas:             shastaAnchorGasLimit,
 		anchorPrivateKeyHex:   nativeProofPrivateKey,
+		anchorSignatureMode:   anchorSignatureFixedK,
 		anchorBlockNumber:     900,
 		lastAnchorBlockNumber: manifestUint64Ptr(899),
 		witnessStateNodes:     witnessStateNodes,
@@ -1271,9 +1312,18 @@ func (f *manifestBindingFixture) anchorTxJSON(t *testing.T) json.RawMessage {
 		GasFeeCap: new(big.Int).SetUint64(f.blockBaseFee), Gas: f.anchorGas, To: &f.anchorTo,
 		Value: big.NewInt(0), Data: input,
 	})
-	signed, err := types.SignTx(tx, types.MakeSigner(cfg, new(big.Int).SetUint64(f.blockNumber), f.blockTimestamp), key)
-	if err != nil {
-		t.Fatalf("sign anchor tx: %v", err)
+	signer := types.MakeSigner(cfg, new(big.Int).SetUint64(f.blockNumber), f.blockTimestamp)
+	var signed *types.Transaction
+	switch f.anchorSignatureMode {
+	case anchorSignatureFixedK:
+		signed = signTestAnchorTxFixedK(t, signer, tx, f.anchorPrivateKeyHex)
+	case anchorSignatureGoEthereum:
+		signed, err = types.SignTx(tx, signer, key)
+		if err != nil {
+			t.Fatalf("sign anchor tx: %v", err)
+		}
+	default:
+		t.Fatalf("unknown anchor signature mode %d", f.anchorSignatureMode)
 	}
 	v, r, s := signed.RawSignatureValues()
 	return mustRawMessage(t, fmt.Sprintf(`{
@@ -1283,6 +1333,71 @@ func (f *manifestBindingFixture) anchorTxJSON(t *testing.T) json.RawMessage {
 			"to": %q, "value": "0x0", "input": %q, "access_list": []}}}`,
 		r.Text(16), s.Text(16), v.Text(16), f.chainID, f.blockBaseFee, f.anchorGas,
 		f.anchorTo.Hex(), "0x"+hex.EncodeToString(input)))
+}
+
+func signTestAnchorTxFixedK(t *testing.T, signer types.Signer, tx *types.Transaction, privateKeyHex string) *types.Transaction {
+	t.Helper()
+
+	sig := signTestAnchorPayloadFixedK(t, signer.Hash(tx).Bytes(), privateKeyHex)
+	signed, err := tx.WithSignature(signer, sig)
+	if err != nil {
+		t.Fatalf("sign anchor tx with fixed k: %v", err)
+	}
+	return signed
+}
+
+func signTestAnchorPayloadFixedK(t *testing.T, hash []byte, privateKeyHex string) []byte {
+	t.Helper()
+
+	var priv secp256k1.ModNScalar
+	if overflow := priv.SetByteSlice(common.FromHex(privateKeyHex)); overflow || priv.IsZero() {
+		t.Fatalf("invalid anchor private key")
+	}
+	for _, k := range []uint32{1, 2} {
+		sig, ok := signTestPayloadWithK(hash, &priv, new(secp256k1.ModNScalar).SetInt(k))
+		if ok {
+			return sig
+		}
+	}
+	t.Fatalf("failed to sign anchor tx with fixed k")
+	return nil
+}
+
+func signTestPayloadWithK(hash []byte, priv *secp256k1.ModNScalar, k *secp256k1.ModNScalar) ([]byte, bool) {
+	var kG secp256k1.JacobianPoint
+	secp256k1.ScalarBaseMultNonConst(k, &kG)
+	kG.ToAffine()
+
+	r, overflow := testFieldToModNScalar(&kG.X)
+	pubKeyRecoveryCode := byte(overflow<<1) | byte(kG.Y.IsOddBit())
+
+	kinv := new(secp256k1.ModNScalar).InverseValNonConst(k)
+	partialS := new(secp256k1.ModNScalar).Mul2(priv, &r)
+
+	var e secp256k1.ModNScalar
+	e.SetByteSlice(hash)
+	s := new(secp256k1.ModNScalar).Set(partialS).Add(&e).Mul(kinv)
+	if s.IsZero() {
+		return nil, false
+	}
+	if s.IsOverHalfOrder() {
+		s.Negate()
+		pubKeyRecoveryCode ^= 0x01
+	}
+
+	var sig [65]byte
+	r.PutBytesUnchecked(sig[:32])
+	s.PutBytesUnchecked(sig[32:64])
+	sig[64] = pubKeyRecoveryCode
+	return sig[:], true
+}
+
+func testFieldToModNScalar(v *secp256k1.FieldVal) (secp256k1.ModNScalar, uint32) {
+	var buf [32]byte
+	v.PutBytes(&buf)
+	var s secp256k1.ModNScalar
+	overflow := s.SetBytes(&buf)
+	return s, overflow
 }
 
 func (f *manifestBindingFixture) chainSpecJSON(t *testing.T) json.RawMessage {
@@ -1870,6 +1985,22 @@ func TestValidateAnchorL1LinkageForcedPrefixMatchesParentCheckpoint(t *testing.T
 	}
 }
 
+func TestValidateAnchorL1LinkageRejectsRequestControlledCheckpointStore(t *testing.T) {
+	attackerStore := common.HexToAddress(testAddress("44"))
+	view, _, parentAnchor, wantHash, wantRoot := newCheckpointStoreStateFixtureWithAccount(t, attackerStore)
+	proposal := shastaProposalView{
+		OriginBlockNumber: parentAnchor + 600,
+		OriginBlockHash:   fixtureOriginHash(t, view),
+	}
+	cp := anchorV4CheckpointView{blockNumber: parentAnchor, blockHash: wantHash, stateRoot: wantRoot}
+	spans := []manifestAnchorSourceSpan{{isForcedInclusion: false, blockCount: 1}}
+
+	err := validateAnchorL1Linkage(view, proposal, []anchorV4CheckpointView{cp}, spans, parentAnchor)
+	if err == nil || !strings.Contains(err.Error(), "checkpoint_store_contract mismatch") {
+		t.Fatalf("expected request-controlled checkpoint store rejection, got %v", err)
+	}
+}
+
 func TestReadParentL2StorageReturnsCheckpoint(t *testing.T) {
 	view, account, blockNumber, wantHash, wantRoot := newCheckpointStoreStateFixture(t)
 	blockHashSlot, stateRootSlot := shastaCheckpointStorageSlots(blockNumber)
@@ -2026,7 +2157,13 @@ func newCheckpointStoreStateFixture(t *testing.T) (*GuestInputView, common.Addre
 	t.Helper()
 
 	const chainID = uint64(167001)
-	account := common.HexToAddress("0x1234567890AbcdEF1234567890aBcdef12345678")
+	return newCheckpointStoreStateFixtureWithAccount(t, testCheckpointStoreAddress(chainID))
+}
+
+func newCheckpointStoreStateFixtureWithAccount(t *testing.T, account common.Address) (*GuestInputView, common.Address, uint64, common.Hash, common.Hash) {
+	t.Helper()
+
+	const chainID = uint64(167001)
 	blockNumber := uint64(24862915)
 	wantHash := common.HexToHash(testHash("ab"))
 	wantRoot := common.HexToHash(testHash("cd"))
