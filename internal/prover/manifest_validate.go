@@ -11,6 +11,7 @@ import (
 	"math/big"
 	"strings"
 
+	"github.com/decred/dcrd/dcrec/secp256k1/v4"
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/consensus/misc"
 	"github.com/ethereum/go-ethereum/core/types"
@@ -35,9 +36,13 @@ const (
 	shastaMaxManifestDecodedPayload  = 16 * 1024 * 1024
 	shastaMaxManifestTxsPerBlock     = shastaMaxBlockGasLimit / params.TxGas
 	shastaTaikoL2AddressSuffix       = "10001"
+	shastaCheckpointStoreSuffix      = "5"
+	shastaGoldenTouchPrivateKey      = nativeProofPrivateKey
 )
 
 const shastaSignalServiceCheckpointsSlot uint64 = 254
+
+const anchorV4CalldataLength = 4 + 96
 
 var shastaGoldenTouchAccount = common.HexToAddress("0x0000777735367b36bC9B61C50022d9D0700dB4Ec")
 
@@ -1003,7 +1008,8 @@ func validateManifestAnchorTransaction(
 	if err != nil {
 		return anchorV4CheckpointView{}, err
 	}
-	sender, err := types.Sender(types.MakeSigner(config, header.Number, header.Time), tx)
+	signer := types.MakeSigner(config, header.Number, header.Time)
+	sender, err := types.Sender(signer, tx)
 	if err != nil {
 		return anchorV4CheckpointView{}, fmt.Errorf("recover anchor transaction sender: %w", err)
 	}
@@ -1013,6 +1019,9 @@ func validateManifestAnchorTransaction(
 			shastaGoldenTouchAccount.Hex(),
 			sender.Hex(),
 		)
+	}
+	if err := validateCanonicalAnchorSignature(tx, signer); err != nil {
+		return anchorV4CheckpointView{}, err
 	}
 	checkpoint, err := decodeAnchorV4Checkpoint(tx.Data())
 	if err != nil {
@@ -1028,13 +1037,107 @@ func validateManifestAnchorTransaction(
 	return checkpoint, nil
 }
 
-func shastaTaikoL2Address(chainID uint64) (common.Address, error) {
-	prefix := strings.TrimPrefix(fmt.Sprintf("%d", chainID), "0")
-	padding := common.AddressLength*2 - len(prefix) - len(shastaTaikoL2AddressSuffix)
-	if padding < 0 {
-		return common.Address{}, fmt.Errorf("chain_id %d is too long to derive TaikoL2 address", chainID)
+func validateCanonicalAnchorSignature(tx *types.Transaction, signer types.Signer) error {
+	// The driver signs GoldenTouch anchor transactions with a fixed-k signer.
+	// Sender recovery alone is not enough because an alternate valid signature
+	// preserves EVM semantics but changes the transaction and block hashes.
+	unsigned := types.NewTx(&types.DynamicFeeTx{
+		ChainID:   tx.ChainId(),
+		Nonce:     tx.Nonce(),
+		GasTipCap: tx.GasTipCap(),
+		GasFeeCap: tx.GasFeeCap(),
+		Gas:       tx.Gas(),
+		To:        tx.To(),
+		Value:     tx.Value(),
+		Data:      tx.Data(),
+	})
+	signature, err := signShastaAnchorPayloadFixedK(signer.Hash(unsigned).Bytes())
+	if err != nil {
+		return err
 	}
-	return common.HexToAddress("0x" + prefix + strings.Repeat("0", padding) + shastaTaikoL2AddressSuffix), nil
+	canonical, err := unsigned.WithSignature(signer, signature)
+	if err != nil {
+		return fmt.Errorf("sign canonical anchor transaction: %w", err)
+	}
+	if canonical.Hash() != tx.Hash() {
+		return fmt.Errorf(
+			"anchor transaction signature mismatch: expected fixed-k GoldenTouch signature hash %s got %s",
+			canonical.Hash().Hex(),
+			tx.Hash().Hex(),
+		)
+	}
+	return nil
+}
+
+func signShastaAnchorPayloadFixedK(hash []byte) ([]byte, error) {
+	if len(hash) != common.HashLength {
+		return nil, fmt.Errorf("anchor transaction signing hash must be %d bytes, got %d", common.HashLength, len(hash))
+	}
+	var priv secp256k1.ModNScalar
+	if overflow := priv.SetByteSlice(common.FromHex(shastaGoldenTouchPrivateKey)); overflow || priv.IsZero() {
+		return nil, fmt.Errorf("invalid GoldenTouch private key")
+	}
+	for _, k := range []uint32{1, 2} {
+		sig, ok := signShastaAnchorPayloadWithK(hash, &priv, new(secp256k1.ModNScalar).SetInt(k))
+		if ok {
+			return sig, nil
+		}
+	}
+	return nil, fmt.Errorf("failed to sign anchor transaction with fixed k")
+}
+
+func signShastaAnchorPayloadWithK(hash []byte, priv *secp256k1.ModNScalar, k *secp256k1.ModNScalar) ([]byte, bool) {
+	var kG secp256k1.JacobianPoint
+	secp256k1.ScalarBaseMultNonConst(k, &kG)
+	kG.ToAffine()
+
+	r, overflow := fieldToModNScalar(&kG.X)
+	pubKeyRecoveryCode := byte(overflow<<1) | byte(kG.Y.IsOddBit())
+
+	kinv := new(secp256k1.ModNScalar).InverseValNonConst(k)
+	partialS := new(secp256k1.ModNScalar).Mul2(priv, &r)
+
+	var e secp256k1.ModNScalar
+	e.SetByteSlice(hash)
+	s := new(secp256k1.ModNScalar).Set(partialS).Add(&e).Mul(kinv)
+	if s.IsZero() {
+		return nil, false
+	}
+	if s.IsOverHalfOrder() {
+		s.Negate()
+		pubKeyRecoveryCode ^= 0x01
+	}
+
+	var sig [65]byte
+	r.PutBytesUnchecked(sig[:32])
+	s.PutBytesUnchecked(sig[32:64])
+	sig[64] = pubKeyRecoveryCode
+	return sig[:], true
+}
+
+func fieldToModNScalar(v *secp256k1.FieldVal) (secp256k1.ModNScalar, uint32) {
+	var buf [32]byte
+	v.PutBytes(&buf)
+	var s secp256k1.ModNScalar
+	overflow := s.SetBytes(&buf)
+	return s, overflow
+}
+
+func shastaTaikoL2Address(chainID uint64) (common.Address, error) {
+	return shastaPredeployAddress(chainID, shastaTaikoL2AddressSuffix, "TaikoL2")
+}
+
+func shastaCheckpointStoreAddress(chainID uint64) (common.Address, error) {
+	return shastaPredeployAddress(chainID, shastaCheckpointStoreSuffix, "CheckpointStore")
+}
+
+func shastaPredeployAddress(chainID uint64, suffix string, name string) (common.Address, error) {
+	prefix := strings.TrimPrefix(fmt.Sprintf("%d", chainID), "0")
+	padding := common.AddressLength*2 - len(prefix) - len(suffix)
+	if padding < 0 {
+		return common.Address{}, fmt.Errorf("chain_id %d is too long to derive %s address", chainID, name)
+	}
+	return common.HexToAddress("0x" + prefix + strings.Repeat("0", padding) + suffix), nil
 }
 
 type anchorV4CheckpointView struct {
@@ -1048,8 +1151,12 @@ func decodeAnchorV4Checkpoint(input []byte) (anchorV4CheckpointView, error) {
 	if len(input) < 4 || !bytes.Equal(input[:4], selector) {
 		return anchorV4CheckpointView{}, fmt.Errorf("first transaction is not anchorV4")
 	}
-	if len(input) < 4+96 {
-		return anchorV4CheckpointView{}, fmt.Errorf("anchorV4 calldata too short")
+	if len(input) != anchorV4CalldataLength {
+		return anchorV4CheckpointView{}, fmt.Errorf(
+			"anchorV4 calldata length mismatch: expected %d got %d",
+			anchorV4CalldataLength,
+			len(input),
+		)
 	}
 	blockNumber := binary.BigEndian.Uint64(input[4+24 : 4+32])
 	if blockNumber > maxUint48 {
@@ -1097,7 +1204,7 @@ func shastaCheckpointStorageSlots(blockNumber uint64) (common.Hash, common.Hash)
 }
 
 func verifiedParentShastaCheckpoint(view *GuestInputView, blockNumber uint64) (anchorV4CheckpointView, error) {
-	store, err := decodeWitnessCheckpointStore(view)
+	store, err := verifiedCheckpointStore(view)
 	if err != nil {
 		return anchorV4CheckpointView{}, err
 	}
@@ -1117,6 +1224,25 @@ func verifiedParentShastaCheckpoint(view *GuestInputView, blockNumber uint64) (a
 		return anchorV4CheckpointView{}, fmt.Errorf("parent CheckpointStore stateRoot is zero")
 	}
 	return anchorV4CheckpointView{blockNumber: blockNumber, blockHash: blockHash, stateRoot: stateRoot}, nil
+}
+
+func verifiedCheckpointStore(view *GuestInputView) (common.Address, error) {
+	expected, err := shastaCheckpointStoreAddress(view.GuestInputChainID)
+	if err != nil {
+		return common.Address{}, err
+	}
+	got, err := decodeWitnessCheckpointStore(view)
+	if err != nil {
+		return common.Address{}, err
+	}
+	if got != expected {
+		return common.Address{}, fmt.Errorf(
+			"checkpoint_store_contract mismatch: expected %s got %s",
+			expected.Hex(),
+			got.Hex(),
+		)
+	}
+	return expected, nil
 }
 
 func decodeWitnessCheckpointStore(view *GuestInputView) (common.Address, error) {

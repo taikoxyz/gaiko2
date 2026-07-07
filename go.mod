@@ -3,6 +3,7 @@ module github.com/taikoxyz/gaiko2
 go 1.24.0
 
 require (
+	github.com/decred/dcrd/dcrec/secp256k1/v4 v4.0.1
 	github.com/edgelesssys/ego v1.9.0
 	github.com/ethereum/go-ethereum v1.15.1-0.20250414034424-0431b437fc09
 	github.com/holiman/uint256 v1.3.2
@@ -17,7 +18,6 @@ require (
 	github.com/consensys/gnark-crypto v0.18.1 // indirect
 	github.com/crate-crypto/go-eth-kzg v1.5.0 // indirect
 	github.com/deckarep/golang-set/v2 v2.6.0 // indirect
-	github.com/decred/dcrd/dcrec/secp256k1/v4 v4.0.1 // indirect
 	github.com/emicklei/dot v1.6.2 // indirect
 	github.com/ethereum/c-kzg-4844/v2 v2.1.6 // indirect
 	github.com/ethereum/go-bigmodexpfix v0.0.0-20250911101455-f9e208c548ab // indirect
