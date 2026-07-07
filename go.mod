@@ -5,6 +5,7 @@ go 1.24.0
 require (
 	github.com/edgelesssys/ego v1.9.0
 	github.com/ethereum/go-ethereum v1.15.1-0.20250414034424-0431b437fc09
+	github.com/holiman/uint256 v1.3.2
 )
 
 require (
@@ -28,7 +29,6 @@ require (
 	github.com/gofrs/flock v0.12.1 // indirect
 	github.com/golang/snappy v1.0.0 // indirect
 	github.com/holiman/bloomfilter/v2 v2.0.3 // indirect
-	github.com/holiman/uint256 v1.3.2 // indirect
 	github.com/klauspost/cpuid/v2 v2.0.9 // indirect
 	github.com/minio/sha256-simd v1.0.0 // indirect
 	github.com/mitchellh/mapstructure v1.4.1 // indirect
@@ -46,4 +46,4 @@ require (
 	gopkg.in/yaml.v2 v2.4.0 // indirect
 )
 
-replace github.com/ethereum/go-ethereum => github.com/taikoxyz/taiko-geth v1.18.1-0.20260612022329-f003739ec4e7
+replace github.com/ethereum/go-ethereum => github.com/taikoxyz/taiko-geth v1.18.1-0.20260707021929-6041dc17aeab
