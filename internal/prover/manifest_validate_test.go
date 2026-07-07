@@ -1988,6 +1988,26 @@ func TestValidateAnchorL1LinkageRejectsUnboundWitnessParent(t *testing.T) {
 	}
 }
 
+func TestValidateAnchorL1LinkageRejectsRequestSelectedCheckpointStore(t *testing.T) {
+	view, _, parentAnchor, wantHash, wantRoot := newCheckpointStoreStateFixture(t)
+	proposal := shastaProposalView{
+		OriginBlockNumber: parentAnchor + 600,
+		OriginBlockHash:   fixtureOriginHash(t, view),
+	}
+	// Repoint the request-controlled chain spec at an attacker-chosen store address.
+	// The fix derives the store from chain id (167001 -> ...0005), so this must be
+	// rejected even though the derived address still holds the matching checkpoint.
+	attacker := common.HexToAddress("0x1234567890AbcdEF1234567890aBcdef12345678")
+	view.Witnesses[0].ChainSpecRaw = json.RawMessage(
+		fmt.Sprintf(`{"chain_id":167001,"checkpoint_store_contract":%q}`, attacker.Hex()))
+	cp := anchorV4CheckpointView{blockNumber: parentAnchor, blockHash: wantHash, stateRoot: wantRoot}
+	spans := []manifestAnchorSourceSpan{{isForcedInclusion: false, blockCount: 1}}
+	err := validateAnchorL1Linkage(view, proposal, []anchorV4CheckpointView{cp}, spans, parentAnchor)
+	if err == nil || !strings.Contains(err.Error(), "does not match derived SignalService address") {
+		t.Fatalf("expected request-selected checkpoint store rejection, got %v", err)
+	}
+}
+
 // TestDecodeProposalStateNodesRealFixture gives the forced-inclusion / bypass
 // CheckpointStore decode real-wire coverage. The real mainnet fixture is
 // normal-path, so it never invokes readParentL2Storage, but its ~5.9k
@@ -2026,7 +2046,10 @@ func newCheckpointStoreStateFixture(t *testing.T) (*GuestInputView, common.Addre
 	t.Helper()
 
 	const chainID = uint64(167001)
-	account := common.HexToAddress("0x1234567890AbcdEF1234567890aBcdef12345678")
+	account, err := shastaSignalServiceAddress(chainID)
+	if err != nil {
+		t.Fatalf("derive checkpoint store address: %v", err)
+	}
 	blockNumber := uint64(24862915)
 	wantHash := common.HexToHash(testHash("ab"))
 	wantRoot := common.HexToHash(testHash("cd"))

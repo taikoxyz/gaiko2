@@ -1117,7 +1117,7 @@ func shastaCheckpointStorageSlots(blockNumber uint64) (common.Hash, common.Hash)
 }
 
 func verifiedParentShastaCheckpoint(view *GuestInputView, blockNumber uint64) (anchorV4CheckpointView, error) {
-	store, err := decodeWitnessCheckpointStore(view)
+	store, err := resolveShastaCheckpointStore(view)
 	if err != nil {
 		return anchorV4CheckpointView{}, err
 	}
@@ -1139,15 +1139,32 @@ func verifiedParentShastaCheckpoint(view *GuestInputView, blockNumber uint64) (a
 	return anchorV4CheckpointView{blockNumber: blockNumber, blockHash: blockHash, stateRoot: stateRoot}, nil
 }
 
-func decodeWitnessCheckpointStore(view *GuestInputView) (common.Address, error) {
+// resolveShastaCheckpointStore returns the L2 SignalService address holding the
+// parent checkpoint, derived from the trusted chain id rather than trusted from
+// request-controlled witness.chain_spec. A witness that still carries a
+// checkpoint_store_contract must agree with the derived address.
+func resolveShastaCheckpointStore(view *GuestInputView) (common.Address, error) {
+	derived, err := shastaSignalServiceAddress(view.GuestInputChainID)
+	if err != nil {
+		return common.Address{}, err
+	}
 	if len(view.Witnesses) == 0 {
-		return common.Address{}, fmt.Errorf("guest input must include at least one witness")
+		return derived, nil
 	}
 	fields, err := decodeJSONObject(view.Witnesses[0].ChainSpecRaw)
 	if err != nil {
 		return common.Address{}, fmt.Errorf("unmarshal witness.chain_spec: %w", err)
 	}
-	return requireAddress(fields, "checkpoint_store_contract", "checkpointStoreContract")
+	supplied, err := optionalAddress(fields, "checkpoint_store_contract", "checkpointStoreContract")
+	if err != nil {
+		return common.Address{}, err
+	}
+	if supplied != nil && *supplied != derived {
+		return common.Address{}, fmt.Errorf(
+			"witness.chain_spec.checkpoint_store_contract %s does not match derived SignalService address %s",
+			supplied.Hex(), derived.Hex())
+	}
+	return derived, nil
 }
 
 func decodeGuestInputL1Headers(raw json.RawMessage) (*types.Header, []*types.Header, error) {
