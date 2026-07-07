@@ -35,6 +35,7 @@ const (
 	shastaMaxManifestDecodedPayload  = 16 * 1024 * 1024
 	shastaMaxManifestTxsPerBlock     = shastaMaxBlockGasLimit / params.TxGas
 	shastaTaikoL2AddressSuffix       = "10001"
+	shastaSignalServiceAddressSuffix = "5"
 )
 
 const shastaSignalServiceCheckpointsSlot uint64 = 254
@@ -1028,13 +1029,21 @@ func validateManifestAnchorTransaction(
 	return checkpoint, nil
 }
 
-func shastaTaikoL2Address(chainID uint64) (common.Address, error) {
+func shastaL2PredeployAddress(chainID uint64, suffix string) (common.Address, error) {
 	prefix := strings.TrimPrefix(fmt.Sprintf("%d", chainID), "0")
-	padding := common.AddressLength*2 - len(prefix) - len(shastaTaikoL2AddressSuffix)
+	padding := common.AddressLength*2 - len(prefix) - len(suffix)
 	if padding < 0 {
-		return common.Address{}, fmt.Errorf("chain_id %d is too long to derive TaikoL2 address", chainID)
+		return common.Address{}, fmt.Errorf("chain_id %d is too long to derive L2 predeploy address", chainID)
 	}
-	return common.HexToAddress("0x" + prefix + strings.Repeat("0", padding) + shastaTaikoL2AddressSuffix), nil
+	return common.HexToAddress("0x" + prefix + strings.Repeat("0", padding) + suffix), nil
+}
+
+func shastaTaikoL2Address(chainID uint64) (common.Address, error) {
+	return shastaL2PredeployAddress(chainID, shastaTaikoL2AddressSuffix)
+}
+
+func shastaSignalServiceAddress(chainID uint64) (common.Address, error) {
+	return shastaL2PredeployAddress(chainID, shastaSignalServiceAddressSuffix)
 }
 
 type anchorV4CheckpointView struct {

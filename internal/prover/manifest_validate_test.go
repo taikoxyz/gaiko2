@@ -2294,3 +2294,20 @@ func TestDecodeAnchorV4CheckpointRejectsNonCanonicalCalldata(t *testing.T) {
 		t.Fatalf("expected non-canonical padding rejection, got %v", err)
 	}
 }
+
+func TestShastaSignalServiceAddressDerivesPredeploy(t *testing.T) {
+	got, err := shastaSignalServiceAddress(167000)
+	if err != nil {
+		t.Fatalf("derive signal service address: %v", err)
+	}
+	if want := common.HexToAddress("0x1670000000000000000000000000000000000005"); got != want {
+		t.Fatalf("signal service address mismatch: got %s want %s", got.Hex(), want.Hex())
+	}
+	l2, err := shastaTaikoL2Address(167000)
+	if err != nil {
+		t.Fatalf("derive taikoL2 address: %v", err)
+	}
+	if want := common.HexToAddress("0x1670000000000000000000000000000000010001"); l2 != want {
+		t.Fatalf("taikoL2 address regressed: got %s want %s", l2.Hex(), want.Hex())
+	}
+}
