@@ -36,6 +36,8 @@ Add a focused regression test in `internal/prover/manifest_validate_test.go`.
 The test should:
 
 - Build the existing valid manifest binding fixture.
+- Switch the fixture to Taiko mainnet chain ID and Shasta-era timestamps so canonical Unzen rules are inactive.
+- Keep the synthetic ancestry, L2 contract address, anchor recipient, base fee, and test transaction coherent after the chain switch.
 - Mutate the replay block difficulty to `1`.
 - Let the fixture recompute the proof-carry checkpoint block hash from the mutated block.
 - Call `ValidateGuestInputManifestBinding`.

@@ -69,6 +69,32 @@ func TestValidateManifestBindingDerivesMixHashFromParentDifficulty(t *testing.T)
 	}
 }
 
+func TestValidateManifestBindingRejectsNonzeroPreUnzenDifficulty(t *testing.T) {
+	fixture := newManifestBindingFixture(t)
+	fixture.chainID = params.TaikoMainnetNetworkID.Uint64()
+	fixture.l2Contract = testTaikoL2Address(fixture.chainID)
+	fixture.anchorTo = testTaikoL2Address(fixture.chainID)
+	fixture.proposalTimestamp = 1_775_135_701
+	fixture.grandparentHeader.Time = 1_775_135_698
+	fixture.parentHeader.Time = 1_775_135_700
+	fixture.parentHeader.ParentHash = fixture.grandparentHeader.Hash()
+	fixture.manifestTimestamp = 1_775_135_701
+	fixture.blockTimestamp = 1_775_135_701
+	fixture.blockBaseFee = 10_000_000
+	userTx := manifestUserTxJSONWithGasAndFeeCap(t, fixture.chainID, 0, testAddress("33"), 24_000, 20_000_000)
+	fixture.manifestUserTxJSON = userTx
+	fixture.blockUserTxJSON = userTx
+	fixture.blockDifficulty = big.NewInt(1)
+
+	err := ValidateGuestInputManifestBinding(fixture.view(t))
+	if err == nil {
+		t.Fatalf("expected pre-Unzen difficulty rejection")
+	}
+	if !strings.Contains(err.Error(), "difficulty") {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
 func TestValidateManifestBindingAcceptsTxListFilteredTransactions(t *testing.T) {
 	fixture := newManifestBindingFixture(t)
 	filteredByExecution := manifestUserTxJSON(t, fixture.chainID, 7, testAddress("31"))
@@ -891,6 +917,7 @@ type manifestBindingFixture struct {
 	blockGasLimit               uint64
 	blockExtra                  []byte
 	blockMixDigest              common.Hash
+	blockDifficulty             *big.Int
 	blockBaseFee                uint64
 	omitBlockBaseFee            bool
 	l2Contract                  common.Address
@@ -995,6 +1022,7 @@ func newManifestBindingFixture(t *testing.T) *manifestBindingFixture {
 		blockGasLimit:         manifestGasLimit + 1_000_000,
 		blockExtra:            manifestExtraData(42, proposalID),
 		blockMixDigest:        manifestMixHash(common.BigToHash(parentDifficulty), blockNumber),
+		blockDifficulty:       big.NewInt(0),
 		blockBaseFee:          manifestTestBaseFee,
 		l2Contract:            testTaikoL2Address(chainID),
 		anchorTo:              testTaikoL2Address(chainID),
@@ -1297,7 +1325,7 @@ func (f *manifestBindingFixture) blockJSON(t *testing.T) json.RawMessage {
 		"transactionsRoot": %q,
 		"receiptsRoot": %q,
 		"logsBloom": %q,
-		"difficulty": "0x0",
+		"difficulty": "0x%x",
 		"number": "0x%x",
 		"gasLimit": "0x%x",
 		"gasUsed": "0x0",
@@ -1314,6 +1342,7 @@ func (f *manifestBindingFixture) blockJSON(t *testing.T) json.RawMessage {
 		txRoot.Hex(),
 		testHash("57"),
 		testBloom(),
+		f.blockDifficulty,
 		f.blockNumber,
 		f.blockGasLimit,
 		f.blockTimestamp,
