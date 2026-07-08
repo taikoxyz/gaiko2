@@ -888,6 +888,13 @@ func validateManifestHeaderStaticFields(header *types.Header) error {
 	if header.Nonce != (types.BlockNonce{}) {
 		return fmt.Errorf("block header nonce mismatch: expected 0 got %d", header.Nonce.Uint64())
 	}
+	if header.UncleHash != types.EmptyUncleHash {
+		return fmt.Errorf(
+			"ommers_hash mismatch: expected %s got %s",
+			types.EmptyUncleHash.Hex(),
+			header.UncleHash.Hex(),
+		)
+	}
 	if header.WithdrawalsHash == nil {
 		return fmt.Errorf("withdrawals_root missing")
 	}

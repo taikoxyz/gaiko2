@@ -261,6 +261,16 @@ func TestValidateManifestBindingRejectsInvalidWithdrawalsRoot(t *testing.T) {
 	}
 }
 
+func TestValidateManifestBindingRejectsNonEmptyUncleHash(t *testing.T) {
+	fixture := newManifestBindingFixture(t)
+	fixture.blockUncleHash = common.HexToHash(testHash("15"))
+
+	err := ValidateGuestInputManifestBinding(fixture.view(t))
+	if err == nil || !strings.Contains(err.Error(), "ommers_hash mismatch") {
+		t.Fatalf("expected ommers_hash rejection, got %v", err)
+	}
+}
+
 func TestValidateManifestBindingAcceptsTxListFilteredTransactions(t *testing.T) {
 	fixture := newManifestBindingFixture(t)
 	filteredByExecution := manifestUserTxJSON(t, fixture.chainID, 7, testAddress("31"))
@@ -1112,6 +1122,7 @@ type manifestBindingFixture struct {
 	blockGasLimit               uint64
 	blockExtra                  []byte
 	blockMixDigest              common.Hash
+	blockUncleHash              common.Hash
 	blockNonce                  uint64
 	blockDifficulty             *big.Int
 	blockBaseFee                uint64
@@ -1224,6 +1235,7 @@ func newManifestBindingFixture(t *testing.T) *manifestBindingFixture {
 		blockGasLimit:         manifestGasLimit + 1_000_000,
 		blockExtra:            manifestExtraData(42, proposalID),
 		blockMixDigest:        manifestMixHash(common.BigToHash(parentDifficulty), blockNumber),
+		blockUncleHash:        types.EmptyUncleHash,
 		blockNonce:            0,
 		blockDifficulty:       big.NewInt(0),
 		blockBaseFee:          manifestTestBaseFee,
@@ -1591,7 +1603,7 @@ func (f *manifestBindingFixture) blockJSON(t *testing.T) json.RawMessage {
 		"baseFeePerGas": %s%s
 	}`,
 		f.parentHeader.Hash().Hex(),
-		types.EmptyUncleHash.Hex(),
+		f.blockUncleHash.Hex(),
 		f.blockCoinbase.Hex(),
 		testHash("55"),
 		txRoot.Hex(),
