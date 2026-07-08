@@ -758,10 +758,13 @@ func validateManifestBlockBinding(
 	if err := validateManifestHeaderBaseFee(view.GuestInputChainID, header, parentHeader, grandparentHeader); err != nil {
 		return anchorV4CheckpointView{}, err
 	}
-	if err := validateManifestTransactionRoot(ctx, view, block, witness, expected.Transactions); err != nil {
+	if err := validateManifestHeaderDifficulty(view.GuestInputChainID, header); err != nil {
 		return anchorV4CheckpointView{}, err
 	}
-	if err := validateManifestHeaderDifficulty(view.GuestInputChainID, header); err != nil {
+	if err := validateManifestHeaderForkFields(view.GuestInputChainID, header); err != nil {
+		return anchorV4CheckpointView{}, err
+	}
+	if err := validateManifestTransactionRoot(ctx, view, block, witness, expected.Transactions); err != nil {
 		return anchorV4CheckpointView{}, err
 	}
 
@@ -799,6 +802,81 @@ func validateManifestHeaderDifficulty(chainID uint64, header *types.Header) erro
 	}
 	if header.Difficulty.Sign() != 0 {
 		return fmt.Errorf("pre-Unzen difficulty mismatch: expected 0 got %s", header.Difficulty)
+	}
+	return nil
+}
+
+func validateManifestHeaderForkFields(chainID uint64, header *types.Header) error {
+	config, err := chainConfigFor(chainID)
+	if err != nil {
+		return err
+	}
+	if header.Number == nil {
+		return fmt.Errorf("block header is missing number for fork field validation")
+	}
+	if config.IsUnzen(header.Time) {
+		if err := validateManifestUnzenHeaderFields(header); err != nil {
+			return err
+		}
+	} else if err := validateManifestPreUnzenHeaderFields(header); err != nil {
+		return err
+	}
+	return validateManifestHeaderSlotNumber(config, header)
+}
+
+func validateManifestPreUnzenHeaderFields(header *types.Header) error {
+	if header.BlobGasUsed != nil {
+		return fmt.Errorf("pre-Unzen blob_gas_used must be absent")
+	}
+	if header.ExcessBlobGas != nil {
+		return fmt.Errorf("pre-Unzen excess_blob_gas must be absent")
+	}
+	if header.ParentBeaconRoot != nil {
+		return fmt.Errorf("pre-Unzen parent_beacon_block_root must be absent")
+	}
+	if header.RequestsHash != nil {
+		return fmt.Errorf("pre-Unzen requests_hash must be absent")
+	}
+	return nil
+}
+
+func validateManifestUnzenHeaderFields(header *types.Header) error {
+	if header.BlobGasUsed == nil {
+		return fmt.Errorf("Unzen blob_gas_used missing")
+	}
+	if *header.BlobGasUsed != 0 {
+		return fmt.Errorf("Unzen blob_gas_used mismatch: expected 0 got %d", *header.BlobGasUsed)
+	}
+	if header.ExcessBlobGas == nil {
+		return fmt.Errorf("Unzen excess_blob_gas missing")
+	}
+	if *header.ExcessBlobGas != 0 {
+		return fmt.Errorf("Unzen excess_blob_gas mismatch: expected 0 got %d", *header.ExcessBlobGas)
+	}
+	if header.ParentBeaconRoot == nil {
+		return fmt.Errorf("Unzen parent_beacon_block_root missing")
+	}
+	if *header.ParentBeaconRoot != (common.Hash{}) {
+		return fmt.Errorf("Unzen parent_beacon_block_root mismatch: expected %s got %s", common.Hash{}.Hex(), header.ParentBeaconRoot.Hex())
+	}
+	if header.RequestsHash == nil {
+		return fmt.Errorf("Unzen requests_hash missing")
+	}
+	if *header.RequestsHash != types.EmptyRequestsHash {
+		return fmt.Errorf("Unzen requests_hash mismatch: expected %s got %s", types.EmptyRequestsHash.Hex(), header.RequestsHash.Hex())
+	}
+	return nil
+}
+
+func validateManifestHeaderSlotNumber(config *params.ChainConfig, header *types.Header) error {
+	if config.IsAmsterdam(header.Number, header.Time) {
+		if header.SlotNumber == nil {
+			return fmt.Errorf("Amsterdam slot_number missing")
+		}
+		return nil
+	}
+	if header.SlotNumber != nil {
+		return fmt.Errorf("pre-Amsterdam slot_number must be absent")
 	}
 	return nil
 }
