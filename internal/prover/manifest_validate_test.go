@@ -696,6 +696,10 @@ func TestValidateManifestBindingIgnoresWitnessUnzenActivationForSourceLimit(t *t
 	fixture.blockCoinbase = fixture.proposer
 	fixture.anchorBlockNumber = *fixture.lastAnchorBlockNumber
 	fixture.omitUserTx = true
+	fixture.blockBlobGasUsed = nil
+	fixture.blockExcessBlobGas = nil
+	fixture.blockParentBeaconRoot = nil
+	fixture.blockRequestsHash = nil
 
 	if err := ValidateGuestInputManifestBinding(fixture.view(t)); err != nil {
 		t.Fatalf("expected oversized witness-Unzen manifest to fall back to default with canonical pre-Unzen limit: %v", err)
