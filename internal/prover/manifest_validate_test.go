@@ -515,6 +515,44 @@ func TestDecodeManifestPayloadRejectsTooManyTransactionsInBlock(t *testing.T) {
 	}
 }
 
+func TestValidateManifestBindingIgnoresWitnessShastaTimestampForDerivation(t *testing.T) {
+	fixture := newManifestBindingFixture(t)
+	futureTimestamp := fixture.proposalTimestamp + 100
+	fixture.chainSpecHardForksJSON = fmt.Sprintf(`{"SHASTA": {"Timestamp": %d}}`, futureTimestamp)
+	fixture.manifestTimestamp = futureTimestamp
+	fixture.blockTimestamp = futureTimestamp
+	fixture.blockCoinbase = fixture.proposer
+	fixture.anchorBlockNumber = *fixture.lastAnchorBlockNumber
+	fixture.omitUserTx = true
+
+	err := ValidateGuestInputManifestBinding(fixture.view(t))
+	if err == nil {
+		t.Fatalf("expected canonical Shasta timestamp validation error")
+	}
+	if !strings.Contains(err.Error(), "timestamp mismatch") {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
+func TestValidateManifestBindingIgnoresWitnessUnzenActivationForSourceLimit(t *testing.T) {
+	fixture := newManifestBindingFixture(t)
+	fixture.chainID = params.MasayaDevnetNetworkID.Uint64()
+	fixture.l2Contract = testTaikoL2Address(fixture.chainID)
+	fixture.anchorTo = testTaikoL2Address(fixture.chainID)
+	fixture.proposalTimestamp = 2_000
+	fixture.chainSpecHardForksJSON = `{"SHASTA": {"Block": 0}, "UNZEN": {"Timestamp": 0}}`
+	fixture.manifestBlockCount = shastaDerivationSourceMaxBlocks + 1
+	fixture.manifestTimestamp = fixture.parentHeader.Time + 1
+	fixture.blockTimestamp = fixture.parentHeader.Time + 1
+	fixture.blockCoinbase = fixture.proposer
+	fixture.anchorBlockNumber = *fixture.lastAnchorBlockNumber
+	fixture.omitUserTx = true
+
+	if err := ValidateGuestInputManifestBinding(fixture.view(t)); err != nil {
+		t.Fatalf("expected oversized witness-Unzen manifest to fall back to default with canonical pre-Unzen limit: %v", err)
+	}
+}
+
 func TestValidateManifestBindingRejectsMismatches(t *testing.T) {
 	cases := []struct {
 		name    string
@@ -865,6 +903,8 @@ type manifestBindingFixture struct {
 	omitAnchorTx                bool
 	omitUserTx                  bool
 	addManifestBlock            bool
+	manifestBlockCount          int
+	chainSpecHardForksJSON      string
 	witnessStateNodes           []string
 	witnessCodes                []string
 	omitProposalAncestorHeaders bool
@@ -1198,20 +1238,22 @@ func (f *manifestBindingFixture) manifestPayload(t *testing.T) []byte {
 	for _, rawUserTx := range rawUserTxs {
 		userTxs = append(userTxs, decodeTestTransaction(t, rawUserTx))
 	}
-	blocks := []testManifestBlock{{
-		Timestamp:         f.manifestTimestamp,
-		Coinbase:          f.manifestCoinbase,
-		AnchorBlockNumber: 900,
-		GasLimit:          f.manifestGasLimit,
-		Transactions:      userTxs,
-	}}
+
+	blockCount := 1
 	if f.addManifestBlock {
+		blockCount = 2
+	}
+	if f.manifestBlockCount > 0 {
+		blockCount = f.manifestBlockCount
+	}
+	blocks := make([]testManifestBlock, 0, blockCount)
+	for index := 0; index < blockCount; index++ {
 		blocks = append(blocks, testManifestBlock{
-			Timestamp:         f.manifestTimestamp + 1,
+			Timestamp:         f.manifestTimestamp + uint64(index),
 			Coinbase:          f.manifestCoinbase,
-			AnchorBlockNumber: 901,
+			AnchorBlockNumber: 900,
 			GasLimit:          f.manifestGasLimit,
-			Transactions:      types.Transactions{},
+			Transactions:      userTxs,
 		})
 	}
 	return encodeTestManifestPayload(t, testDerivationSourceManifest{Blocks: blocks})
@@ -1402,12 +1444,16 @@ func testFieldToModNScalar(v *secp256k1.FieldVal) (secp256k1.ModNScalar, uint32)
 
 func (f *manifestBindingFixture) chainSpecJSON(t *testing.T) json.RawMessage {
 	t.Helper()
+	hardForks := f.chainSpecHardForksJSON
+	if hardForks == "" {
+		hardForks = `{"SHASTA": {"Block": 0}}`
+	}
 	return mustRawMessage(t, fmt.Sprintf(`{
 		"chain_id": %d,
 		"l2_contract": %q,
-		"hard_forks": {"SHASTA": {"Block": 0}},
+		"hard_forks": %s,
 		"verifier_address_forks": {"SHASTA": {"SgxGeth": %q}}
-	}`, f.chainID, f.l2Contract.Hex(), testAddress("f9")))
+	}`, f.chainID, f.l2Contract.Hex(), hardForks, testAddress("f9")))
 }
 
 func (f *manifestBindingFixture) parentWitnessHeaderJSON(t *testing.T) string {

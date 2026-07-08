@@ -125,11 +125,7 @@ func ValidateGuestInputManifestBindingWithContext(ctx context.Context, view *Gue
 		GrandparentHeader: grandparentHeader,
 		AnchorBlockNumber: lastAnchor,
 	}
-	forkTimestamp, err := decodeWitnessForkTimestamp(view, "SHASTA")
-	if err != nil {
-		return err
-	}
-	maxBlocks, err := derivationSourceMaxBlocks(view, proposal)
+	forkTimestamp, maxBlocks, err := shastaDerivationConfig(view.GuestInputChainID, proposal.Timestamp)
 	if err != nil {
 		return err
 	}
@@ -705,6 +701,22 @@ func validateManifestGasLimit(
 	return true
 }
 
+func shastaDerivationConfig(chainID uint64, proposalTimestamp uint64) (uint64, int, error) {
+	config, err := chainConfigFor(chainID)
+	if err != nil {
+		return 0, 0, err
+	}
+	if config.ShastaTime == nil {
+		return 0, 0, fmt.Errorf("canonical Shasta fork timestamp missing for chain ID %d", chainID)
+	}
+
+	maxBlocks := shastaDerivationSourceMaxBlocks
+	if config.IsUnzen(proposalTimestamp) {
+		maxBlocks = shastaUnzenDerivationSourceLimit
+	}
+	return *config.ShastaTime, maxBlocks, nil
+}
+
 func manifestGasLimitBounds(parentGasLimit uint64) (uint64, uint64) {
 	denominator := new(big.Int).SetUint64(shastaGasLimitDenominator)
 	upperMultiplier := new(big.Int).SetUint64(shastaGasLimitDenominator + shastaBlockGasLimitMaxChange)
@@ -726,94 +738,6 @@ func manifestGasLimitBounds(parentGasLimit uint64) (uint64, uint64) {
 		lower = upper
 	}
 	return lower.Uint64(), upper.Uint64()
-}
-
-func decodeWitnessForkTimestamp(view *GuestInputView, forkName string) (uint64, error) {
-	raw, ok, err := lookupWitnessFork(view, forkName)
-	if err != nil || !ok {
-		return 0, err
-	}
-	fields, ok, err := decodeForkConditionObject(raw)
-	if err != nil || !ok {
-		return 0, err
-	}
-	timestamp, err := optionalUint64Ptr(fields, "Timestamp", "timestamp")
-	if err != nil {
-		return 0, fmt.Errorf("parse witness.chain_spec.hard_forks.%s.Timestamp: %w", forkName, err)
-	}
-	if timestamp == nil {
-		return 0, nil
-	}
-	return *timestamp, nil
-}
-
-func derivationSourceMaxBlocks(view *GuestInputView, proposal shastaProposalView) (int, error) {
-	active, err := witnessForkActiveAt(view, "UNZEN", proposal.Timestamp)
-	if err != nil {
-		return 0, err
-	}
-	if active {
-		return shastaUnzenDerivationSourceLimit, nil
-	}
-	return shastaDerivationSourceMaxBlocks, nil
-}
-
-func witnessForkActiveAt(view *GuestInputView, forkName string, timestamp uint64) (bool, error) {
-	raw, ok, err := lookupWitnessFork(view, forkName)
-	if err != nil || !ok {
-		return false, err
-	}
-	fields, ok, err := decodeForkConditionObject(raw)
-	if err != nil || !ok {
-		return false, err
-	}
-	forkTimestamp, err := optionalUint64Ptr(fields, "Timestamp", "timestamp")
-	if err != nil {
-		return false, fmt.Errorf("parse witness.chain_spec.hard_forks.%s.Timestamp: %w", forkName, err)
-	}
-	if forkTimestamp != nil {
-		return timestamp >= *forkTimestamp, nil
-	}
-	block, err := optionalUint64Ptr(fields, "Block", "block")
-	if err != nil {
-		return false, fmt.Errorf("parse witness.chain_spec.hard_forks.%s.Block: %w", forkName, err)
-	}
-	return block != nil && *block == 0, nil
-}
-
-func lookupWitnessFork(view *GuestInputView, forkName string) (json.RawMessage, bool, error) {
-	if view == nil || len(view.Witnesses) == 0 {
-		return nil, false, fmt.Errorf("guest input must include at least one witness")
-	}
-	fields, err := decodeJSONObject(view.Witnesses[0].ChainSpecRaw)
-	if err != nil {
-		return nil, false, fmt.Errorf("unmarshal witness.chain_spec: %w", err)
-	}
-	rawHardForks, ok := lookupField(fields, "hard_forks", "hardForks")
-	if !ok {
-		return nil, false, nil
-	}
-	hardForks, err := decodeJSONObject(rawHardForks)
-	if err != nil {
-		return nil, false, fmt.Errorf("unmarshal witness.chain_spec.hard_forks: %w", err)
-	}
-	rawFork, ok := lookupForkCaseInsensitive(hardForks, forkName)
-	return rawFork, ok, nil
-}
-
-func decodeForkConditionObject(raw json.RawMessage) (map[string]json.RawMessage, bool, error) {
-	var text string
-	if err := json.Unmarshal(raw, &text); err == nil {
-		if strings.EqualFold(text, "Tbd") {
-			return nil, false, nil
-		}
-		return nil, false, fmt.Errorf("unknown hard fork string %q", text)
-	}
-	fields, err := decodeJSONObject(raw)
-	if err != nil {
-		return nil, false, err
-	}
-	return fields, true, nil
 }
 
 func validateManifestBlockBinding(
