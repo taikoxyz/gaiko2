@@ -761,6 +761,9 @@ func validateManifestBlockBinding(
 	if err := validateManifestTransactionRoot(ctx, view, block, witness, expected.Transactions); err != nil {
 		return anchorV4CheckpointView{}, err
 	}
+	if err := validateManifestHeaderDifficulty(view.GuestInputChainID, header); err != nil {
+		return anchorV4CheckpointView{}, err
+	}
 
 	if header.Time != expected.Timestamp {
 		return anchorV4CheckpointView{}, fmt.Errorf("timestamp mismatch: expected %d got %d", expected.Timestamp, header.Time)
@@ -781,6 +784,23 @@ func validateManifestBlockBinding(
 	}
 
 	return validateManifestAnchorTransaction(view, txs[0], header, expected)
+}
+
+func validateManifestHeaderDifficulty(chainID uint64, header *types.Header) error {
+	config, err := chainConfigFor(chainID)
+	if err != nil {
+		return err
+	}
+	if config.IsUnzen(header.Time) {
+		return nil
+	}
+	if header.Difficulty == nil {
+		return fmt.Errorf("missing difficulty in pre-Unzen block header")
+	}
+	if header.Difficulty.Sign() != 0 {
+		return fmt.Errorf("pre-Unzen difficulty mismatch: expected 0 got %s", header.Difficulty)
+	}
+	return nil
 }
 
 func validateManifestHeaderBaseFee(
