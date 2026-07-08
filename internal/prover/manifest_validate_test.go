@@ -95,6 +95,129 @@ func TestValidateManifestBindingRejectsNonzeroPreUnzenDifficulty(t *testing.T) {
 	}
 }
 
+func TestValidateManifestBindingRejectsPreUnzenForkHeaderFields(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		mutate func(*manifestBindingFixture)
+		want   string
+	}{
+		{
+			name: "blob gas used present",
+			mutate: func(f *manifestBindingFixture) {
+				f.blockBlobGasUsed = manifestUint64Ptr(0)
+			},
+			want: "pre-Unzen blob_gas_used must be absent",
+		},
+		{
+			name: "excess blob gas present",
+			mutate: func(f *manifestBindingFixture) {
+				f.blockExcessBlobGas = manifestUint64Ptr(0)
+			},
+			want: "pre-Unzen excess_blob_gas must be absent",
+		},
+		{
+			name: "parent beacon root present",
+			mutate: func(f *manifestBindingFixture) {
+				f.blockParentBeaconRoot = manifestHashPtr(common.Hash{})
+			},
+			want: "pre-Unzen parent_beacon_block_root must be absent",
+		},
+		{
+			name: "requests hash present",
+			mutate: func(f *manifestBindingFixture) {
+				f.blockRequestsHash = manifestHashPtr(types.EmptyRequestsHash)
+			},
+			want: "pre-Unzen requests_hash must be absent",
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			fixture := newManifestBindingFixture(t)
+			configureMainnetPreUnzenManifestFixture(t, fixture)
+			tc.mutate(fixture)
+
+			err := ValidateGuestInputManifestBinding(fixture.view(t))
+			if err == nil || !strings.Contains(err.Error(), tc.want) {
+				t.Fatalf("expected %q, got %v", tc.want, err)
+			}
+		})
+	}
+}
+
+func TestValidateManifestBindingRejectsInvalidUnzenForkHeaderFields(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		mutate func(*manifestBindingFixture)
+		want   string
+	}{
+		{
+			name: "missing blob gas used",
+			mutate: func(f *manifestBindingFixture) {
+				f.blockBlobGasUsed = nil
+			},
+			want: "Unzen blob_gas_used missing",
+		},
+		{
+			name: "nonzero blob gas used",
+			mutate: func(f *manifestBindingFixture) {
+				f.blockBlobGasUsed = manifestUint64Ptr(1)
+			},
+			want: "Unzen blob_gas_used mismatch",
+		},
+		{
+			name: "missing excess blob gas",
+			mutate: func(f *manifestBindingFixture) {
+				f.blockExcessBlobGas = nil
+			},
+			want: "Unzen excess_blob_gas missing",
+		},
+		{
+			name: "nonzero excess blob gas",
+			mutate: func(f *manifestBindingFixture) {
+				f.blockExcessBlobGas = manifestUint64Ptr(1)
+			},
+			want: "Unzen excess_blob_gas mismatch",
+		},
+		{
+			name: "missing parent beacon root",
+			mutate: func(f *manifestBindingFixture) {
+				f.blockParentBeaconRoot = nil
+			},
+			want: "Unzen parent_beacon_block_root missing",
+		},
+		{
+			name: "nonzero parent beacon root",
+			mutate: func(f *manifestBindingFixture) {
+				f.blockParentBeaconRoot = manifestHashPtr(common.HexToHash(testHash("13")))
+			},
+			want: "Unzen parent_beacon_block_root mismatch",
+		},
+		{
+			name: "missing requests hash",
+			mutate: func(f *manifestBindingFixture) {
+				f.blockRequestsHash = nil
+			},
+			want: "Unzen requests_hash missing",
+		},
+		{
+			name: "non-empty requests hash",
+			mutate: func(f *manifestBindingFixture) {
+				f.blockRequestsHash = manifestHashPtr(common.HexToHash(testHash("14")))
+			},
+			want: "Unzen requests_hash mismatch",
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			fixture := newManifestBindingFixture(t)
+			tc.mutate(fixture)
+
+			err := ValidateGuestInputManifestBinding(fixture.view(t))
+			if err == nil || !strings.Contains(err.Error(), tc.want) {
+				t.Fatalf("expected %q, got %v", tc.want, err)
+			}
+		})
+	}
+}
+
 func TestValidateManifestBindingAcceptsTxListFilteredTransactions(t *testing.T) {
 	fixture := newManifestBindingFixture(t)
 	filteredByExecution := manifestUserTxJSON(t, fixture.chainID, 7, testAddress("31"))
@@ -579,6 +702,31 @@ func TestValidateManifestBindingIgnoresWitnessUnzenActivationForSourceLimit(t *t
 	}
 }
 
+func TestValidateManifestBindingRejectsPreAmsterdamSlotNumber(t *testing.T) {
+	fixture := newManifestBindingFixture(t)
+	fixture.blockSlotNumber = manifestUint64Ptr(7)
+
+	err := ValidateGuestInputManifestBinding(fixture.view(t))
+	if err == nil || !strings.Contains(err.Error(), "pre-Amsterdam slot_number must be absent") {
+		t.Fatalf("expected pre-Amsterdam slot number rejection, got %v", err)
+	}
+}
+
+func TestValidateManifestHeaderSlotNumberRequiresAmsterdamPresence(t *testing.T) {
+	cfg := cloneChainConfig(params.TaikoChainConfig)
+	cfg.LondonBlock = common.Big0
+	cfg.AmsterdamTime = manifestUint64Ptr(0)
+	header := &types.Header{
+		Number: big.NewInt(1),
+		Time:   1,
+	}
+
+	err := validateManifestHeaderSlotNumber(cfg, header)
+	if err == nil || !strings.Contains(err.Error(), "Amsterdam slot_number missing") {
+		t.Fatalf("expected Amsterdam slot number rejection, got %v", err)
+	}
+}
+
 func TestValidateManifestBindingRejectsMismatches(t *testing.T) {
 	cases := []struct {
 		name    string
@@ -919,6 +1067,11 @@ type manifestBindingFixture struct {
 	blockMixDigest              common.Hash
 	blockDifficulty             *big.Int
 	blockBaseFee                uint64
+	blockBlobGasUsed            *uint64
+	blockExcessBlobGas          *uint64
+	blockParentBeaconRoot       *common.Hash
+	blockRequestsHash           *common.Hash
+	blockSlotNumber             *uint64
 	omitBlockBaseFee            bool
 	l2Contract                  common.Address
 	anchorTo                    common.Address
@@ -1024,6 +1177,10 @@ func newManifestBindingFixture(t *testing.T) *manifestBindingFixture {
 		blockMixDigest:        manifestMixHash(common.BigToHash(parentDifficulty), blockNumber),
 		blockDifficulty:       big.NewInt(0),
 		blockBaseFee:          manifestTestBaseFee,
+		blockBlobGasUsed:      manifestUint64Ptr(0),
+		blockExcessBlobGas:    manifestUint64Ptr(0),
+		blockParentBeaconRoot: manifestHashPtr(common.Hash{}),
+		blockRequestsHash:     manifestHashPtr(types.EmptyRequestsHash),
 		l2Contract:            testTaikoL2Address(chainID),
 		anchorTo:              testTaikoL2Address(chainID),
 		anchorGas:             shastaAnchorGasLimit,
@@ -1035,6 +1192,29 @@ func newManifestBindingFixture(t *testing.T) *manifestBindingFixture {
 	}
 	fixture.parentHeader.ParentHash = fixture.grandparentHeader.Hash()
 	return fixture
+}
+
+func configureMainnetPreUnzenManifestFixture(t *testing.T, fixture *manifestBindingFixture) {
+	t.Helper()
+
+	fixture.chainID = params.TaikoMainnetNetworkID.Uint64()
+	fixture.l2Contract = testTaikoL2Address(fixture.chainID)
+	fixture.anchorTo = testTaikoL2Address(fixture.chainID)
+	fixture.proposalTimestamp = 1_775_135_701
+	fixture.grandparentHeader.Time = 1_775_135_698
+	fixture.parentHeader.Time = 1_775_135_700
+	fixture.parentHeader.ParentHash = fixture.grandparentHeader.Hash()
+	fixture.manifestTimestamp = 1_775_135_701
+	fixture.blockTimestamp = 1_775_135_701
+	fixture.blockBaseFee = 10_000_000
+	userTx := manifestUserTxJSONWithGasAndFeeCap(t, fixture.chainID, 0, testAddress("33"), 24_000, 20_000_000)
+	fixture.manifestUserTxJSON = userTx
+	fixture.blockUserTxJSON = userTx
+	fixture.blockBlobGasUsed = nil
+	fixture.blockExcessBlobGas = nil
+	fixture.blockParentBeaconRoot = nil
+	fixture.blockRequestsHash = nil
+	fixture.blockSlotNumber = nil
 }
 
 // buildL1Chain synthesizes a coherent L1 chain spanning
@@ -1316,6 +1496,26 @@ func (f *manifestBindingFixture) blockJSON(t *testing.T) json.RawMessage {
 	if !f.omitBlockBaseFee {
 		baseFeeJSON = fmt.Sprintf("%q", fmt.Sprintf("0x%x", f.blockBaseFee))
 	}
+	optionalHeaderFields := []string{}
+	if f.blockBlobGasUsed != nil {
+		optionalHeaderFields = append(optionalHeaderFields, fmt.Sprintf(`"blobGasUsed": "0x%x"`, *f.blockBlobGasUsed))
+	}
+	if f.blockExcessBlobGas != nil {
+		optionalHeaderFields = append(optionalHeaderFields, fmt.Sprintf(`"excessBlobGas": "0x%x"`, *f.blockExcessBlobGas))
+	}
+	if f.blockParentBeaconRoot != nil {
+		optionalHeaderFields = append(optionalHeaderFields, fmt.Sprintf(`"parentBeaconBlockRoot": %q`, f.blockParentBeaconRoot.Hex()))
+	}
+	if f.blockRequestsHash != nil {
+		optionalHeaderFields = append(optionalHeaderFields, fmt.Sprintf(`"requestsHash": %q`, f.blockRequestsHash.Hex()))
+	}
+	if f.blockSlotNumber != nil {
+		optionalHeaderFields = append(optionalHeaderFields, fmt.Sprintf(`"slotNumber": "0x%x"`, *f.blockSlotNumber))
+	}
+	optionalHeaderJSON := ""
+	if len(optionalHeaderFields) > 0 {
+		optionalHeaderJSON = ",\n\t\t" + strings.Join(optionalHeaderFields, ",\n\t\t")
+	}
 
 	header := fmt.Sprintf(`{
 		"parentHash": %q,
@@ -1333,7 +1533,7 @@ func (f *manifestBindingFixture) blockJSON(t *testing.T) json.RawMessage {
 		"extraData": %q,
 		"mixHash": %q,
 		"nonce": "0x0000000000000000",
-		"baseFeePerGas": %s
+		"baseFeePerGas": %s%s
 	}`,
 		f.parentHeader.Hash().Hex(),
 		types.EmptyUncleHash.Hex(),
@@ -1349,6 +1549,7 @@ func (f *manifestBindingFixture) blockJSON(t *testing.T) json.RawMessage {
 		"0x"+hex.EncodeToString(f.blockExtra),
 		f.blockMixDigest.Hex(),
 		baseFeeJSON,
+		optionalHeaderJSON,
 	)
 
 	return mustRawMessage(t, fmt.Sprintf(`{
@@ -1850,6 +2051,8 @@ func manifestTestTxSigner(t *testing.T) common.Address {
 }
 
 func manifestUint64Ptr(v uint64) *uint64 { return &v }
+
+func manifestHashPtr(v common.Hash) *common.Hash { return &v }
 
 func witnessStateNodesWithBalance(t *testing.T, address common.Address, balance *big.Int) ([]string, common.Hash) {
 	t.Helper()
