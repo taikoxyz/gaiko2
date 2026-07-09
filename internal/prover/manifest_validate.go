@@ -764,6 +764,9 @@ func validateManifestBlockBinding(
 	if err := validateManifestHeaderForkFields(view.GuestInputChainID, header); err != nil {
 		return anchorV4CheckpointView{}, err
 	}
+	if err := validateManifestHeaderStaticFields(header); err != nil {
+		return anchorV4CheckpointView{}, err
+	}
 	if err := validateManifestTransactionRoot(ctx, view, block, witness, expected.Transactions); err != nil {
 		return anchorV4CheckpointView{}, err
 	}
@@ -877,6 +880,30 @@ func validateManifestHeaderSlotNumber(config *params.ChainConfig, header *types.
 	}
 	if header.SlotNumber != nil {
 		return fmt.Errorf("pre-Amsterdam slot_number must be absent")
+	}
+	return nil
+}
+
+func validateManifestHeaderStaticFields(header *types.Header) error {
+	if header.Nonce != (types.BlockNonce{}) {
+		return fmt.Errorf("block header nonce mismatch: expected 0 got %d", header.Nonce.Uint64())
+	}
+	if header.UncleHash != types.EmptyUncleHash {
+		return fmt.Errorf(
+			"ommers_hash mismatch: expected %s got %s",
+			types.EmptyUncleHash.Hex(),
+			header.UncleHash.Hex(),
+		)
+	}
+	if header.WithdrawalsHash == nil {
+		return fmt.Errorf("withdrawals_root missing")
+	}
+	if *header.WithdrawalsHash != types.EmptyWithdrawalsHash {
+		return fmt.Errorf(
+			"withdrawals_root mismatch: expected %s got %s",
+			types.EmptyWithdrawalsHash.Hex(),
+			header.WithdrawalsHash.Hex(),
+		)
 	}
 	return nil
 }

@@ -218,6 +218,59 @@ func TestValidateManifestBindingRejectsInvalidUnzenForkHeaderFields(t *testing.T
 	}
 }
 
+func TestValidateManifestBindingRejectsNonzeroHeaderNonce(t *testing.T) {
+	fixture := newManifestBindingFixture(t)
+	fixture.blockNonce = 1
+
+	err := ValidateGuestInputManifestBinding(fixture.view(t))
+	if err == nil || !strings.Contains(err.Error(), "block header nonce mismatch") {
+		t.Fatalf("expected nonce rejection, got %v", err)
+	}
+}
+
+func TestValidateManifestBindingRejectsInvalidWithdrawalsRoot(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		mutate func(*manifestBindingFixture)
+		want   string
+	}{
+		{
+			name: "missing withdrawals root",
+			mutate: func(f *manifestBindingFixture) {
+				f.blockWithdrawalsHash = nil
+			},
+			want: "withdrawals_root missing",
+		},
+		{
+			name: "non-empty withdrawals root",
+			mutate: func(f *manifestBindingFixture) {
+				f.blockWithdrawalsHash = manifestHashPtr(common.HexToHash(testHash("15")))
+			},
+			want: "withdrawals_root mismatch",
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			fixture := newManifestBindingFixture(t)
+			tc.mutate(fixture)
+
+			err := ValidateGuestInputManifestBinding(fixture.view(t))
+			if err == nil || !strings.Contains(err.Error(), tc.want) {
+				t.Fatalf("expected %q, got %v", tc.want, err)
+			}
+		})
+	}
+}
+
+func TestValidateManifestBindingRejectsNonEmptyUncleHash(t *testing.T) {
+	fixture := newManifestBindingFixture(t)
+	fixture.blockUncleHash = common.HexToHash(testHash("15"))
+
+	err := ValidateGuestInputManifestBinding(fixture.view(t))
+	if err == nil || !strings.Contains(err.Error(), "ommers_hash mismatch") {
+		t.Fatalf("expected ommers_hash rejection, got %v", err)
+	}
+}
+
 func TestValidateManifestBindingAcceptsTxListFilteredTransactions(t *testing.T) {
 	fixture := newManifestBindingFixture(t)
 	filteredByExecution := manifestUserTxJSON(t, fixture.chainID, 7, testAddress("31"))
@@ -1069,8 +1122,11 @@ type manifestBindingFixture struct {
 	blockGasLimit               uint64
 	blockExtra                  []byte
 	blockMixDigest              common.Hash
+	blockUncleHash              common.Hash
+	blockNonce                  uint64
 	blockDifficulty             *big.Int
 	blockBaseFee                uint64
+	blockWithdrawalsHash        *common.Hash
 	blockBlobGasUsed            *uint64
 	blockExcessBlobGas          *uint64
 	blockParentBeaconRoot       *common.Hash
@@ -1179,8 +1235,11 @@ func newManifestBindingFixture(t *testing.T) *manifestBindingFixture {
 		blockGasLimit:         manifestGasLimit + 1_000_000,
 		blockExtra:            manifestExtraData(42, proposalID),
 		blockMixDigest:        manifestMixHash(common.BigToHash(parentDifficulty), blockNumber),
+		blockUncleHash:        types.EmptyUncleHash,
+		blockNonce:            0,
 		blockDifficulty:       big.NewInt(0),
 		blockBaseFee:          manifestTestBaseFee,
+		blockWithdrawalsHash:  manifestHashPtr(types.EmptyWithdrawalsHash),
 		blockBlobGasUsed:      manifestUint64Ptr(0),
 		blockExcessBlobGas:    manifestUint64Ptr(0),
 		blockParentBeaconRoot: manifestHashPtr(common.Hash{}),
@@ -1218,6 +1277,7 @@ func configureMainnetPreUnzenManifestFixture(t *testing.T, fixture *manifestBind
 	fixture.blockExcessBlobGas = nil
 	fixture.blockParentBeaconRoot = nil
 	fixture.blockRequestsHash = nil
+	fixture.blockWithdrawalsHash = manifestHashPtr(types.EmptyWithdrawalsHash)
 	fixture.blockSlotNumber = nil
 }
 
@@ -1516,6 +1576,9 @@ func (f *manifestBindingFixture) blockJSON(t *testing.T) json.RawMessage {
 	if f.blockSlotNumber != nil {
 		optionalHeaderFields = append(optionalHeaderFields, fmt.Sprintf(`"slotNumber": "0x%x"`, *f.blockSlotNumber))
 	}
+	if f.blockWithdrawalsHash != nil {
+		optionalHeaderFields = append(optionalHeaderFields, fmt.Sprintf(`"withdrawalsRoot": %q`, f.blockWithdrawalsHash.Hex()))
+	}
 	optionalHeaderJSON := ""
 	if len(optionalHeaderFields) > 0 {
 		optionalHeaderJSON = ",\n\t\t" + strings.Join(optionalHeaderFields, ",\n\t\t")
@@ -1536,11 +1599,11 @@ func (f *manifestBindingFixture) blockJSON(t *testing.T) json.RawMessage {
 		"timestamp": "0x%x",
 		"extraData": %q,
 		"mixHash": %q,
-		"nonce": "0x0000000000000000",
+		"nonce": "0x%016x",
 		"baseFeePerGas": %s%s
 	}`,
 		f.parentHeader.Hash().Hex(),
-		types.EmptyUncleHash.Hex(),
+		f.blockUncleHash.Hex(),
 		f.blockCoinbase.Hex(),
 		testHash("55"),
 		txRoot.Hex(),
@@ -1552,6 +1615,7 @@ func (f *manifestBindingFixture) blockJSON(t *testing.T) json.RawMessage {
 		f.blockTimestamp,
 		"0x"+hex.EncodeToString(f.blockExtra),
 		f.blockMixDigest.Hex(),
+		f.blockNonce,
 		baseFeeJSON,
 		optionalHeaderJSON,
 	)
