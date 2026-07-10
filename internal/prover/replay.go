@@ -644,6 +644,7 @@ func chainConfigFor(chainID uint64) (*params.ChainConfig, error) {
 		cfg.OntakeBlock = cloneBigInt(core.MainnetOntakeBlock)
 		cfg.PacayaBlock = cloneBigInt(core.MainnetPacayaBlock)
 		cfg.ShastaTime = cloneUint64(core.MainnetShastaTime)
+		enableUnzenForksFrom(cfg, core.MainnetUnzenTime)
 		return cfg, nil
 	case params.TaikoInternalNetworkID.Uint64():
 		cfg := cloneChainConfig(params.TaikoChainConfig)
