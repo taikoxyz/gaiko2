@@ -1169,6 +1169,11 @@ func decodeAnchorV4Checkpoint(input []byte) (anchorV4CheckpointView, error) {
 			len(input),
 		)
 	}
+	for _, value := range input[4 : 4+26] {
+		if value != 0 {
+			return anchorV4CheckpointView{}, fmt.Errorf("anchorV4 blockNumber has non-canonical uint48 padding")
+		}
+	}
 	blockNumber := binary.BigEndian.Uint64(input[4+24 : 4+32])
 	if blockNumber > maxUint48 {
 		return anchorV4CheckpointView{}, fmt.Errorf("anchorV4 blockNumber exceeds uint48")

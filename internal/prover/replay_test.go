@@ -32,7 +32,7 @@ func (f fakeRunner) Execute(
 ) (ReplayResult, error) {
 	receipts := types.Receipts(nil)
 	if f.logs != nil {
-		receipts = types.Receipts{&types.Receipt{Logs: f.logs}}
+		receipts = types.Receipts{&types.Receipt{Status: types.ReceiptStatusSuccessful, Logs: f.logs}}
 	}
 	return ReplayResult{
 		StateRoot:   f.stateRoot,
@@ -325,6 +325,133 @@ func TestReplayServiceSignsValidatedCarryWhenRawCarryContainsAlias(t *testing.T)
 	}
 	if result.Input != expectedInput {
 		t.Fatalf("signed input hash mismatch: got %s want %s", result.Input, expectedInput)
+	}
+}
+
+func TestReplayServiceRejectsCarryMutationAfterValidation(t *testing.T) {
+	fixture := newManifestBindingFixture(t)
+	input := fixture.view(t).Raw
+	validated, err := ValidateRequest(protocol.ShastaRequest{
+		Schema:  protocol.ShastaRequestSchemaV1,
+		Payload: protocol.ShastaPayload{GuestInput: &input},
+	})
+	if err != nil {
+		t.Fatalf("validate request: %v", err)
+	}
+	validated.Carry.TransitionInput.ProposalHash = common.HexToHash(testHash("fe"))
+
+	service := NewReplayService(fakeRunner{
+		stateRoot:   common.HexToHash(testHash("55")),
+		receiptRoot: common.HexToHash(testHash("57")),
+		logs: []*types.Log{
+			anchorEventLog(t, fixture.chainID, 899, 900),
+		},
+	})
+	_, err = service.Prove(context.Background(), validated)
+	if err == nil || !strings.Contains(err.Error(), "validation binding") {
+		t.Fatalf("expected carry validation binding rejection, got %v", err)
+	}
+}
+
+func TestReplayServiceRejectsGuestInputRemovalAfterValidation(t *testing.T) {
+	fixture := newManifestBindingFixture(t)
+	input := fixture.view(t).Raw
+	validated, err := ValidateRequest(protocol.ShastaRequest{
+		Schema:  protocol.ShastaRequestSchemaV1,
+		Payload: protocol.ShastaPayload{GuestInput: &input},
+	})
+	if err != nil {
+		t.Fatalf("validate request: %v", err)
+	}
+	validated.Request.Payload.GuestInput = nil
+
+	service := NewReplayService(fakeRunner{
+		stateRoot:   common.HexToHash(testHash("55")),
+		receiptRoot: common.HexToHash(testHash("57")),
+		logs: []*types.Log{
+			anchorEventLog(t, fixture.chainID, 899, 900),
+		},
+	})
+	_, err = service.Prove(context.Background(), validated)
+	if err == nil || !strings.Contains(err.Error(), "validation binding") {
+		t.Fatalf("expected guest input validation binding rejection, got %v", err)
+	}
+}
+
+func TestReplayServiceRejectsRawReplayBlockMutationAfterValidation(t *testing.T) {
+	fixture := newManifestBindingFixture(t)
+	input := fixture.view(t).Raw
+	validated, err := ValidateRequest(protocol.ShastaRequest{
+		Schema:  protocol.ShastaRequestSchemaV1,
+		Payload: protocol.ShastaPayload{GuestInput: &input},
+	})
+	if err != nil {
+		t.Fatalf("validate request: %v", err)
+	}
+	validated.Request.Payload.Blocks[0].Witness = mustRawMessage(t, `{"headers":[]}`)
+
+	service := NewReplayService(fakeRunner{
+		stateRoot:   common.HexToHash(testHash("55")),
+		receiptRoot: common.HexToHash(testHash("57")),
+		logs: []*types.Log{
+			anchorEventLog(t, fixture.chainID, 899, 900),
+		},
+	})
+	_, err = service.Prove(context.Background(), validated)
+	if err == nil || !strings.Contains(err.Error(), "validation binding") {
+		t.Fatalf("expected raw replay block validation binding rejection, got %v", err)
+	}
+}
+
+func TestValidateFirstReplayAnchorEventRejectsFailedReceipt(t *testing.T) {
+	const chainID = uint64(167013)
+	validated := sampleValidatedReplayRequestWithGuestLastAnchor(t, chainID, 900)
+	receipts := types.Receipts{&types.Receipt{
+		Status: types.ReceiptStatusFailed,
+		Logs:   []*types.Log{anchorEventLog(t, chainID, 900, 901)},
+	}}
+
+	_, err := validateFirstReplayAnchorEvent(validated, receipts)
+	if err == nil || !strings.Contains(err.Error(), "failed") {
+		t.Fatalf("expected failed anchor receipt rejection, got %v", err)
+	}
+}
+
+func TestReplayAnchorEventSequenceAcceptsStayThenAdvance(t *testing.T) {
+	const chainID = uint64(167013)
+	validated := sampleValidatedReplayRequestWithGuestLastAnchor(t, chainID, 900)
+	stayReceipts := types.Receipts{&types.Receipt{
+		Status: types.ReceiptStatusSuccessful,
+		Logs:   []*types.Log{anchorEventLog(t, chainID, 900, 900)},
+	}}
+	advanceReceipts := types.Receipts{&types.Receipt{
+		Status: types.ReceiptStatusSuccessful,
+		Logs:   []*types.Log{anchorEventLog(t, chainID, 900, 901)},
+	}}
+
+	anchor, err := validateFirstReplayAnchorEvent(validated, stayReceipts)
+	if err != nil {
+		t.Fatalf("validate stay anchor: %v", err)
+	}
+	anchor, err = validateSubsequentReplayAnchorEvent(chainID, anchor, advanceReceipts)
+	if err != nil {
+		t.Fatalf("validate advancing anchor: %v", err)
+	}
+	if anchor != 901 {
+		t.Fatalf("unexpected final anchor: %d", anchor)
+	}
+}
+
+func TestReplayAnchorEventSequenceRejectsBrokenContinuity(t *testing.T) {
+	const chainID = uint64(167013)
+	receipts := types.Receipts{&types.Receipt{
+		Status: types.ReceiptStatusSuccessful,
+		Logs:   []*types.Log{anchorEventLog(t, chainID, 899, 901)},
+	}}
+
+	_, err := validateSubsequentReplayAnchorEvent(chainID, 900, receipts)
+	if err == nil || !strings.Contains(err.Error(), "continuity") {
+		t.Fatalf("expected anchor continuity rejection, got %v", err)
 	}
 }
 
@@ -706,11 +833,13 @@ func validatedReplayRequestForTest(t *testing.T, req protocol.ShastaRequest) *Va
 		blocks = append(blocks, view)
 	}
 
-	return &ValidatedRequest{
+	validated := &ValidatedRequest{
 		Request: req,
 		Carry:   carry,
 		Blocks:  blocks,
 	}
+	sealValidatedRequest(validated)
+	return validated
 }
 
 func sampleValidatedReplayRequestWithGuestLastAnchor(

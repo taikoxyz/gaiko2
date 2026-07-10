@@ -1109,6 +1109,16 @@ func TestDecodeAnchorV4CheckpointRejectsTrailingCalldata(t *testing.T) {
 	}
 }
 
+func TestDecodeAnchorV4CheckpointRejectsNonCanonicalUint48Padding(t *testing.T) {
+	input := anchorInput(t, 900, common.HexToHash(testHash("61")), common.HexToHash(testHash("62")))
+	input[4] = 0x01
+
+	_, err := decodeAnchorV4Checkpoint(input)
+	if err == nil || !strings.Contains(err.Error(), "non-canonical uint48") {
+		t.Fatalf("expected non-canonical uint48 padding rejection, got %v", err)
+	}
+}
+
 func testTaikoL2Address(chainID uint64) common.Address {
 	prefix := strings.TrimPrefix(fmt.Sprintf("%d", chainID), "0")
 	const suffix = "10001"

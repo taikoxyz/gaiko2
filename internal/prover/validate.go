@@ -8,33 +8,6 @@ import (
 	"github.com/taikoxyz/gaiko2/internal/protocol"
 )
 
-type rawProofCarryData struct {
-	ChainID         uint64             `json:"chain_id"`
-	Verifier        string             `json:"verifier"`
-	TransitionInput rawTransitionInput `json:"transition_input"`
-}
-
-type rawTransitionInput struct {
-	ProposalID         uint64        `json:"proposal_id"`
-	ProposalHash       string        `json:"proposal_hash"`
-	ParentProposalHash string        `json:"parent_proposal_hash"`
-	ParentBlockHash    string        `json:"parent_block_hash"`
-	ActualProver       string        `json:"actual_prover"`
-	Transition         rawTransition `json:"transition"`
-	Checkpoint         rawCheckpoint `json:"checkpoint"`
-}
-
-type rawTransition struct {
-	Proposer  string `json:"proposer"`
-	Timestamp uint64 `json:"timestamp"`
-}
-
-type rawCheckpoint struct {
-	BlockNumber quantityValue `json:"blockNumber"`
-	BlockHash   string        `json:"blockHash"`
-	StateRoot   string        `json:"stateRoot"`
-}
-
 func ValidateRequest(req protocol.ShastaRequest) (*ValidatedRequest, error) {
 	return ValidateRequestWithContext(context.Background(), req)
 }
@@ -86,12 +59,72 @@ func validateGuestInputRequest(ctx context.Context, req protocol.ShastaRequest) 
 		},
 	}
 
-	return &ValidatedRequest{
+	validated := &ValidatedRequest{
 		Request:     normalized,
 		Carry:       view.Carry,
-		Blocks:      view.Blocks,
+		Blocks:      append([]BlockView(nil), view.Blocks...),
 		LogMetadata: metadata,
-	}, nil
+	}
+	sealValidatedRequest(validated)
+	return validated, nil
+}
+
+func sealValidatedRequest(req *ValidatedRequest) {
+	req.validated = true
+	req.validatedCarry = req.Carry
+	req.validatedBlocks = append([]BlockView(nil), req.Blocks...)
+	req.validatedRawBlocks = replayBlockBindings(req.Request.Payload.Blocks)
+	req.validatedGuestInput = req.Request.Payload.GuestInput != nil
+	if req.validatedGuestInput {
+		req.validatedTaiko = string(req.Request.Payload.GuestInput.Taiko)
+	}
+}
+
+func validateRequestSigningBinding(req *ValidatedRequest) error {
+	if req == nil || !req.validated {
+		return fmt.Errorf("request validation binding is missing")
+	}
+	if req.Carry != req.validatedCarry {
+		return fmt.Errorf("request validation binding mismatch: proof carry changed after validation")
+	}
+	if len(req.Blocks) != len(req.validatedBlocks) {
+		return fmt.Errorf("request validation binding mismatch: replay block count changed after validation")
+	}
+	for index := range req.Blocks {
+		if req.Blocks[index] != req.validatedBlocks[index] {
+			return fmt.Errorf("request validation binding mismatch: replay block %d changed after validation", index)
+		}
+	}
+	rawBlocks := replayBlockBindings(req.Request.Payload.Blocks)
+	if len(rawBlocks) != len(req.validatedRawBlocks) {
+		return fmt.Errorf("request validation binding mismatch: raw replay block count changed after validation")
+	}
+	for index := range rawBlocks {
+		if rawBlocks[index] != req.validatedRawBlocks[index] {
+			return fmt.Errorf("request validation binding mismatch: raw replay block %d changed after validation", index)
+		}
+	}
+	hasGuestInput := req.Request.Payload.GuestInput != nil
+	if hasGuestInput != req.validatedGuestInput {
+		return fmt.Errorf("request validation binding mismatch: guest input presence changed after validation")
+	}
+	if hasGuestInput && string(req.Request.Payload.GuestInput.Taiko) != req.validatedTaiko {
+		return fmt.Errorf("request validation binding mismatch: taiko guest input changed after validation")
+	}
+	return nil
+}
+
+func replayBlockBindings(blocks []protocol.ReplayBlock) []replayBlockBinding {
+	bindings := make([]replayBlockBinding, len(blocks))
+	for index, block := range blocks {
+		bindings[index] = replayBlockBinding{
+			Block:     string(block.Block),
+			ChainSpec: string(block.ChainSpec),
+			Witness:   string(block.Witness),
+			Accounts:  string(block.Accounts),
+		}
+	}
+	return bindings
 }
 
 func requestLogMetadata(req protocol.ShastaRequest) RequestLogMetadata {
@@ -192,62 +225,5 @@ func decodeBlock(block protocol.ReplayBlock) (BlockView, error) {
 }
 
 func decodeCarry(raw json.RawMessage) (CarryView, error) {
-	var decoded rawProofCarryData
-	if err := json.Unmarshal(raw, &decoded); err != nil {
-		return CarryView{}, fmt.Errorf("unmarshal proof_carry_data: %w", err)
-	}
-
-	verifier, err := parseAddressString(decoded.Verifier)
-	if err != nil {
-		return CarryView{}, fmt.Errorf("parse proof_carry_data.verifier: %w", err)
-	}
-	proposalHash, err := parseHashString(decoded.TransitionInput.ProposalHash)
-	if err != nil {
-		return CarryView{}, fmt.Errorf("parse proof_carry_data.transition_input.proposal_hash: %w", err)
-	}
-	parentProposalHash, err := parseHashString(decoded.TransitionInput.ParentProposalHash)
-	if err != nil {
-		return CarryView{}, fmt.Errorf("parse proof_carry_data.transition_input.parent_proposal_hash: %w", err)
-	}
-	parentBlockHash, err := parseHashString(decoded.TransitionInput.ParentBlockHash)
-	if err != nil {
-		return CarryView{}, fmt.Errorf("parse proof_carry_data.transition_input.parent_block_hash: %w", err)
-	}
-	actualProver, err := parseAddressString(decoded.TransitionInput.ActualProver)
-	if err != nil {
-		return CarryView{}, fmt.Errorf("parse proof_carry_data.transition_input.actual_prover: %w", err)
-	}
-	proposer, err := parseAddressString(decoded.TransitionInput.Transition.Proposer)
-	if err != nil {
-		return CarryView{}, fmt.Errorf("parse proof_carry_data.transition_input.transition.proposer: %w", err)
-	}
-	checkpointBlockHash, err := parseHashString(decoded.TransitionInput.Checkpoint.BlockHash)
-	if err != nil {
-		return CarryView{}, fmt.Errorf("parse proof_carry_data.transition_input.checkpoint.blockHash: %w", err)
-	}
-	checkpointStateRoot, err := parseHashString(decoded.TransitionInput.Checkpoint.StateRoot)
-	if err != nil {
-		return CarryView{}, fmt.Errorf("parse proof_carry_data.transition_input.checkpoint.stateRoot: %w", err)
-	}
-
-	return CarryView{
-		ChainID:  decoded.ChainID,
-		Verifier: verifier,
-		TransitionInput: TransitionInputView{
-			ProposalID:         decoded.TransitionInput.ProposalID,
-			ProposalHash:       proposalHash,
-			ParentProposalHash: parentProposalHash,
-			ParentBlockHash:    parentBlockHash,
-			ActualProver:       actualProver,
-			Transition: TransitionView{
-				Proposer:  proposer,
-				Timestamp: decoded.TransitionInput.Transition.Timestamp,
-			},
-			Checkpoint: CheckpointView{
-				BlockNumber: uint64(decoded.TransitionInput.Checkpoint.BlockNumber),
-				BlockHash:   checkpointBlockHash,
-				StateRoot:   checkpointStateRoot,
-			},
-		},
-	}, nil
+	return decodeCarryStrict(raw)
 }

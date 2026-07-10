@@ -2,8 +2,8 @@ package prover
 
 import (
 	"context"
-	"encoding/json"
 	"encoding/hex"
+	"encoding/json"
 	"strings"
 	"testing"
 
@@ -129,6 +129,131 @@ func TestReplayServiceReturnsSignedAggregationProofResult(t *testing.T) {
 	}
 	if result.InstanceAddress == nil || *result.InstanceAddress != common.HexToAddress("0x0000777735367b36bC9B61C50022d9D0700dB4Ec").Hex() {
 		t.Fatalf("unexpected instance address: %+v", result.InstanceAddress)
+	}
+}
+
+func TestReplayServiceRejectsAggregateCarryMutationAfterValidation(t *testing.T) {
+	carry := mustRawMessage(t, `{
+		"chain_id": 167013,
+		"verifier": "0x00f9f60C79e38c08b785eE4F1a849900693C6630",
+		"transition_input": {
+			"proposal_id": 7,
+			"proposal_hash": "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+			"parent_proposal_hash": "0xbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+			"parent_block_hash": "0xcccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+			"actual_prover": "0x0000777735367b36bC9B61C50022d9D0700dB4Ec",
+			"transition": {"proposer": "0x1111111111111111111111111111111111111111", "timestamp": 123},
+			"checkpoint": {
+				"blockNumber": "0x2a",
+				"blockHash": "0xdddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+				"stateRoot": "0xeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee"
+			}
+		}
+	}`)
+	childHash, err := hashShastaSubproofInput(carry)
+	if err != nil {
+		t.Fatalf("hash child: %v", err)
+	}
+	child, err := buildProofResult(childHash, NewNativeProofSigner(shastaNativeMockInstance))
+	if err != nil {
+		t.Fatalf("build child: %v", err)
+	}
+	validated, err := ValidateAggregateRequest(protocol.ShastaAggregateRequest{
+		Schema: protocol.ShastaAggregateRequestSchemaV1,
+		Payload: protocol.ShastaAggregatePayload{Proofs: []protocol.AggregateProof{{
+			Input: child.Input, Proof: *child.Proof, ProofCarryData: carry,
+		}}},
+	})
+	if err != nil {
+		t.Fatalf("validate aggregate: %v", err)
+	}
+	validated.Proofs[0].Carry.TransitionInput.Checkpoint.StateRoot = common.HexToHash("0xffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff")
+
+	_, err = NewReplayService(nil).Aggregate(context.Background(), validated)
+	if err == nil || !strings.Contains(err.Error(), "input mismatch") {
+		t.Fatalf("expected child carry binding rejection, got %v", err)
+	}
+}
+
+func TestReplayServiceRejectsAggregateUint48MutationAfterValidation(t *testing.T) {
+	carry := mustRawMessage(t, `{
+		"chain_id": 167013,
+		"verifier": "0x00f9f60C79e38c08b785eE4F1a849900693C6630",
+		"transition_input": {
+			"proposal_id": 7,
+			"proposal_hash": "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+			"parent_proposal_hash": "0xbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+			"parent_block_hash": "0xcccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+			"actual_prover": "0x0000777735367b36bC9B61C50022d9D0700dB4Ec",
+			"transition": {"proposer": "0x1111111111111111111111111111111111111111", "timestamp": 123},
+			"checkpoint": {
+				"blockNumber": "0x2a",
+				"blockHash": "0xdddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+				"stateRoot": "0xeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee"
+			}
+		}
+	}`)
+	childHash, err := hashShastaSubproofInput(carry)
+	if err != nil {
+		t.Fatalf("hash child: %v", err)
+	}
+	child, err := buildProofResult(childHash, NewNativeProofSigner(shastaNativeMockInstance))
+	if err != nil {
+		t.Fatalf("build child: %v", err)
+	}
+	validated, err := ValidateAggregateRequest(protocol.ShastaAggregateRequest{
+		Schema: protocol.ShastaAggregateRequestSchemaV1,
+		Payload: protocol.ShastaAggregatePayload{Proofs: []protocol.AggregateProof{{
+			Input: child.Input, Proof: *child.Proof, ProofCarryData: carry,
+		}}},
+	})
+	if err != nil {
+		t.Fatalf("validate aggregate: %v", err)
+	}
+	validated.Proofs[0].Carry.TransitionInput.Transition.Timestamp += uint64(1) << 48
+
+	_, err = NewReplayService(nil).Aggregate(context.Background(), validated)
+	if err == nil || !strings.Contains(err.Error(), "invalid shasta proof carry data") {
+		t.Fatalf("expected post-validation uint48 rejection, got %v", err)
+	}
+}
+
+func TestValidateAggregateRequestRejectsUint48Overflow(t *testing.T) {
+	low := mustRawMessage(t, `{
+		"chain_id": 167013,
+		"verifier": "0x00f9f60C79e38c08b785eE4F1a849900693C6630",
+		"transition_input": {
+			"proposal_id": 7,
+			"proposal_hash": "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+			"parent_proposal_hash": "0xbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+			"parent_block_hash": "0xcccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+			"actual_prover": "0x0000777735367b36bC9B61C50022d9D0700dB4Ec",
+			"transition": {"proposer": "0x1111111111111111111111111111111111111111", "timestamp": 123},
+			"checkpoint": {
+				"blockNumber": "0x2a",
+				"blockHash": "0xdddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+				"stateRoot": "0xeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee"
+			}
+		}
+	}`)
+	childHash, err := hashShastaSubproofInput(low)
+	if err != nil {
+		t.Fatalf("hash child: %v", err)
+	}
+	child, err := buildProofResult(childHash, NewNativeProofSigner(shastaNativeMockInstance))
+	if err != nil {
+		t.Fatalf("build child: %v", err)
+	}
+	high := json.RawMessage(strings.Replace(string(low), `"timestamp": 123`, `"timestamp": 281474976710779`, 1))
+
+	_, err = ValidateAggregateRequest(protocol.ShastaAggregateRequest{
+		Schema: protocol.ShastaAggregateRequestSchemaV1,
+		Payload: protocol.ShastaAggregatePayload{Proofs: []protocol.AggregateProof{{
+			Input: child.Input, Proof: *child.Proof, ProofCarryData: high,
+		}}},
+	})
+	if err == nil || !strings.Contains(err.Error(), "uint48") {
+		t.Fatalf("expected uint48 overflow rejection, got %v", err)
 	}
 }
 

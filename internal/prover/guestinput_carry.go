@@ -98,6 +98,17 @@ func ValidateGuestInputCarry(view *GuestInputView) error {
 	if err != nil {
 		return err
 	}
+	if view.Carry.TransitionInput.ProposalID != proposal.ID ||
+		view.Taiko.ProposalID != proposal.ID ||
+		view.Taiko.ProposalEventProposalID != proposal.ID {
+		return fmt.Errorf(
+			"proposal id representations mismatch: carry=%d taiko=%d event=%d canonical=%d",
+			view.Carry.TransitionInput.ProposalID,
+			view.Taiko.ProposalID,
+			view.Taiko.ProposalEventProposalID,
+			proposal.ID,
+		)
+	}
 	proposalHash, err := hashShastaProposal(proposal)
 	if err != nil {
 		return fmt.Errorf("hash taiko.proposal_event.proposal: %w", err)
@@ -216,7 +227,7 @@ func decodeCarryStrict(raw json.RawMessage) (CarryView, error) {
 		return CarryView{}, fmt.Errorf("parse proof_carry_data.transition_input: %w", err)
 	}
 
-	proposalID, err := requireUint64(transitionFields, "proposal_id")
+	proposalID, err := requireUint48(transitionFields, "proposal_id")
 	if err != nil {
 		return CarryView{}, fmt.Errorf("parse proof_carry_data.transition_input.proposal_id: %w", err)
 	}
@@ -245,7 +256,7 @@ func decodeCarryStrict(raw json.RawMessage) (CarryView, error) {
 	if err != nil {
 		return CarryView{}, fmt.Errorf("parse proof_carry_data.transition_input.transition.proposer: %w", err)
 	}
-	timestamp, err := requireUint64(transition, "timestamp")
+	timestamp, err := requireUint48(transition, "timestamp")
 	if err != nil {
 		return CarryView{}, fmt.Errorf("parse proof_carry_data.transition_input.transition.timestamp: %w", err)
 	}
@@ -254,7 +265,7 @@ func decodeCarryStrict(raw json.RawMessage) (CarryView, error) {
 	if err != nil {
 		return CarryView{}, fmt.Errorf("parse proof_carry_data.transition_input.checkpoint: %w", err)
 	}
-	blockNumber, err := requireUint64(checkpoint, "blockNumber")
+	blockNumber, err := requireUint48(checkpoint, "blockNumber")
 	if err != nil {
 		return CarryView{}, fmt.Errorf("parse proof_carry_data.transition_input.checkpoint.blockNumber: %w", err)
 	}
