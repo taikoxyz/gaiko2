@@ -29,11 +29,6 @@ const (
 	shastaNativeMockInstance = 0xDEADC0DE
 )
 
-const (
-	internalDevnetUnzenTime uint64 = 0
-	masayaDevnetUnzenTime   uint64 = 1778158800
-)
-
 var anchoredEventTopic = crypto.Keccak256Hash([]byte("Anchored(uint48,uint48,bytes32)"))
 
 type Runner interface {
@@ -652,7 +647,7 @@ func chainConfigFor(chainID uint64) (*params.ChainConfig, error) {
 		cfg.OntakeBlock = cloneBigInt(core.InternalDevnetOntakeBlock)
 		cfg.PacayaBlock = cloneBigInt(core.InternalDevnetPacayaBlock)
 		cfg.ShastaTime = cloneUint64(core.InternalShastaTime)
-		enableUnzenForksFrom(cfg, internalDevnetUnzenTime)
+		enableUnzenForksFrom(cfg, core.DevnetUnzenTime)
 		return cfg, nil
 	case params.MasayaDevnetNetworkID.Uint64():
 		cfg := cloneChainConfig(params.TaikoChainConfig)
@@ -660,7 +655,7 @@ func chainConfigFor(chainID uint64) (*params.ChainConfig, error) {
 		cfg.OntakeBlock = cloneBigInt(core.MasayaDevnetOntakeBlock)
 		cfg.PacayaBlock = cloneBigInt(core.MasayaDevnetPacayaBlock)
 		cfg.ShastaTime = cloneUint64(core.MasayaShastaTime)
-		enableUnzenForksFrom(cfg, masayaDevnetUnzenTime)
+		enableUnzenForksFrom(cfg, core.MasayaUnzenTime)
 		return cfg, nil
 	case params.TaikoHoodiNetworkID.Uint64():
 		cfg := cloneChainConfig(params.TaikoChainConfig)

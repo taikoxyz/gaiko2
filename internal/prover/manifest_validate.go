@@ -33,8 +33,6 @@ const (
 	shastaDerivationSourceMaxBlocks  = 192
 	shastaUnzenDerivationSourceLimit = 768
 	shastaMaxManifestOffset          = shastaBytesPerBlob - 64
-	shastaMaxManifestDecodedPayload  = 16 * 1024 * 1024
-	shastaMaxManifestTxsPerBlock     = shastaMaxBlockGasLimit / params.TxGas
 	shastaTaikoL2AddressSuffix       = "10001"
 	shastaCheckpointStoreSuffix      = "5"
 	shastaGoldenTouchPrivateKey      = nativeProofPrivateKey
@@ -310,9 +308,7 @@ func prepareSourceManifest(
 		manifest shastaSourceManifest
 		err      error
 	)
-	if len(source.BlobSlice.BlobHashes) == 0 {
-		manifest = decodeInlineSourceManifest(dataSource, source.BlobSlice.Offset, maxBlocks)
-	} else if source.BlobSlice.Offset > shastaMaxManifestOffset {
+	if len(source.BlobSlice.BlobHashes) == 0 || source.BlobSlice.Offset > shastaMaxManifestOffset {
 		manifest = defaultSourceManifest()
 	} else {
 		manifest, err = decodeBlobBackedSourceManifest(dataSource, source.BlobSlice.Offset, maxBlocks)
@@ -334,27 +330,6 @@ func prepareSourceManifest(
 	}
 
 	return manifest, nil
-}
-
-func decodeInlineSourceManifest(dataSource blobSourceDataView, offset uint64, maxBlocks int) shastaSourceManifest {
-	if len(dataSource.TxDataFromCalldata) != 0 {
-		manifest, err := decodeManifestPayload(dataSource.TxDataFromCalldata, offset, maxBlocks)
-		if err == nil {
-			return manifest
-		}
-		return defaultSourceManifest()
-	}
-	if len(dataSource.TxDataFromBlob) != 0 {
-		var concatenated []byte
-		for _, chunk := range dataSource.TxDataFromBlob {
-			concatenated = append(concatenated, chunk...)
-		}
-		manifest, err := decodeManifestPayload(concatenated, offset, maxBlocks)
-		if err == nil {
-			return manifest
-		}
-	}
-	return defaultSourceManifest()
 }
 
 func decodeBlobBackedSourceManifest(dataSource blobSourceDataView, offset uint64, maxBlocks int) (shastaSourceManifest, error) {
@@ -402,7 +377,7 @@ func decodeManifestPayload(payload []byte, offset uint64, maxBlocks int) (shasta
 	if !bytes.Equal(payload[:24], make([]byte, 24)) {
 		return shastaSourceManifest{}, fmt.Errorf("manifest payload version exceeds uint64")
 	}
-	if version := binary.BigEndian.Uint64(payload[24:32]); version != shastaPayloadVersion {
+	if version := uint32(binary.BigEndian.Uint64(payload[24:32])); version != uint32(shastaPayloadVersion) {
 		return shastaSourceManifest{}, fmt.Errorf("unsupported manifest payload version %d", version)
 	}
 	size := binary.BigEndian.Uint64(payload[56:64])
@@ -414,12 +389,9 @@ func decodeManifestPayload(payload []byte, offset uint64, maxBlocks int) (shasta
 		return shastaSourceManifest{}, fmt.Errorf("open manifest zlib stream: %w", err)
 	}
 	defer zr.Close()
-	decoded, err := io.ReadAll(io.LimitReader(zr, shastaMaxManifestDecodedPayload+1))
+	decoded, err := io.ReadAll(zr)
 	if err != nil {
 		return shastaSourceManifest{}, fmt.Errorf("decompress manifest payload: %w", err)
-	}
-	if len(decoded) > shastaMaxManifestDecodedPayload {
-		return shastaSourceManifest{}, fmt.Errorf("decompressed manifest payload exceeds %d bytes", shastaMaxManifestDecodedPayload)
 	}
 
 	var manifest shastaSourceManifest
@@ -428,16 +400,6 @@ func decodeManifestPayload(payload []byte, offset uint64, maxBlocks int) (shasta
 	}
 	if len(manifest.Blocks) > maxBlocks {
 		return shastaSourceManifest{}, fmt.Errorf("manifest block count %d exceeds max %d", len(manifest.Blocks), maxBlocks)
-	}
-	for index, block := range manifest.Blocks {
-		if len(block.Transactions) > int(shastaMaxManifestTxsPerBlock) {
-			return shastaSourceManifest{}, fmt.Errorf(
-				"manifest block %d transaction count %d exceeds max %d",
-				index,
-				len(block.Transactions),
-				shastaMaxManifestTxsPerBlock,
-			)
-		}
 	}
 	return manifest, nil
 }

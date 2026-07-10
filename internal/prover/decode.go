@@ -12,6 +12,7 @@ import (
 	"github.com/ethereum/go-ethereum/common/hexutil"
 	"github.com/ethereum/go-ethereum/core/stateless"
 	"github.com/ethereum/go-ethereum/core/types"
+	"github.com/holiman/uint256"
 )
 
 type rawBlockEnvelope struct {
@@ -237,10 +238,158 @@ func decodeTransaction(raw json.RawMessage) (*types.Transaction, error) {
 	if encoded, ok := envelope.Transaction["Eip1559"]; ok {
 		return decodeDynamicFeeTransaction(encoded, envelope.Signature)
 	}
+	if encoded, ok := envelope.Transaction["Eip2930"]; ok {
+		return decodeAccessListTransaction(encoded, envelope.Signature)
+	}
+	if encoded, ok := envelope.Transaction["Eip7702"]; ok {
+		return decodeSetCodeTransaction(encoded, envelope.Signature)
+	}
 	if encoded, ok := envelope.Transaction["Legacy"]; ok {
 		return decodeLegacyTransaction(encoded, envelope.Signature)
 	}
 	return nil, fmt.Errorf("unsupported transaction variants: %v", keysOf(envelope.Transaction))
+}
+
+func decodeAccessListTransaction(
+	raw json.RawMessage,
+	signature rawTransactionSignature,
+) (*types.Transaction, error) {
+	fields, err := decodeJSONObject(raw)
+	if err != nil {
+		return nil, fmt.Errorf("unmarshal Eip2930 transaction: %w", err)
+	}
+	chainID, err := requireBigInt(fields, "chain_id", "chainId")
+	if err != nil {
+		return nil, err
+	}
+	nonce, err := requireUint64(fields, "nonce")
+	if err != nil {
+		return nil, err
+	}
+	gasPrice, err := requireBigInt(fields, "gas_price", "gasPrice")
+	if err != nil {
+		return nil, err
+	}
+	gasLimit, err := requireUint64(fields, "gas_limit", "gas")
+	if err != nil {
+		return nil, err
+	}
+	to, err := optionalAddress(fields, "to")
+	if err != nil {
+		return nil, err
+	}
+	value, err := optionalBigIntWithDefault(fields, "value")
+	if err != nil {
+		return nil, err
+	}
+	input, err := requireBytes(fields, "input", "data")
+	if err != nil {
+		return nil, err
+	}
+	accessList, err := optionalAccessList(fields, "access_list", "accessList")
+	if err != nil {
+		return nil, err
+	}
+	v, r, s, err := decodeSignature(signature)
+	if err != nil {
+		return nil, err
+	}
+
+	return types.NewTx(&types.AccessListTx{
+		ChainID:    chainID,
+		Nonce:      nonce,
+		GasPrice:   gasPrice,
+		Gas:        gasLimit,
+		To:         to,
+		Value:      value,
+		Data:       input,
+		AccessList: accessList,
+		V:          v,
+		R:          r,
+		S:          s,
+	}), nil
+}
+
+func decodeSetCodeTransaction(
+	raw json.RawMessage,
+	signature rawTransactionSignature,
+) (*types.Transaction, error) {
+	fields, err := decodeJSONObject(raw)
+	if err != nil {
+		return nil, fmt.Errorf("unmarshal Eip7702 transaction: %w", err)
+	}
+	chainID, err := requireUint256(fields, "chain_id", "chainId")
+	if err != nil {
+		return nil, err
+	}
+	nonce, err := requireUint64(fields, "nonce")
+	if err != nil {
+		return nil, err
+	}
+	gasTipCap, err := requireUint256(fields, "max_priority_fee_per_gas", "maxPriorityFeePerGas")
+	if err != nil {
+		return nil, err
+	}
+	gasFeeCap, err := requireUint256(fields, "max_fee_per_gas", "maxFeePerGas")
+	if err != nil {
+		return nil, err
+	}
+	gasLimit, err := requireUint64(fields, "gas_limit", "gas")
+	if err != nil {
+		return nil, err
+	}
+	to, err := requireAddress(fields, "to")
+	if err != nil {
+		return nil, err
+	}
+	value, err := optionalUint256WithDefault(fields, "value")
+	if err != nil {
+		return nil, err
+	}
+	input, err := requireBytes(fields, "input", "data")
+	if err != nil {
+		return nil, err
+	}
+	accessList, err := optionalAccessList(fields, "access_list", "accessList")
+	if err != nil {
+		return nil, err
+	}
+	authorizations, err := requireSetCodeAuthorizations(fields, "authorization_list", "authorizationList")
+	if err != nil {
+		return nil, err
+	}
+	vBig, rBig, sBig, err := decodeSignature(signature)
+	if err != nil {
+		return nil, err
+	}
+	v, err := bigIntToUint256(vBig, "signature.yParity")
+	if err != nil {
+		return nil, err
+	}
+	r, err := bigIntToUint256(rBig, "signature.r")
+	if err != nil {
+		return nil, err
+	}
+	s, err := bigIntToUint256(sBig, "signature.s")
+	if err != nil {
+		return nil, err
+	}
+
+	return types.NewTx(&types.SetCodeTx{
+		ChainID:    chainID,
+		Nonce:      nonce,
+		GasTipCap:  gasTipCap,
+		GasFeeCap:  gasFeeCap,
+		Gas:        gasLimit,
+		To:         to,
+		Value:      value,
+		Data:       input,
+		AccessList: accessList,
+		AuthList:   authorizations,
+		V:          v,
+		R:          r,
+		S:          s,
+	}), nil
 }
 
 func decodeDynamicFeeTransaction(
@@ -531,6 +680,36 @@ func optionalBigIntWithDefault(fields map[string]json.RawMessage, names ...strin
 	return value, nil
 }
 
+func requireUint256(fields map[string]json.RawMessage, names ...string) (*uint256.Int, error) {
+	value, err := requireBigInt(fields, names...)
+	if err != nil {
+		return nil, err
+	}
+	return bigIntToUint256(value, names[0])
+}
+
+func optionalUint256WithDefault(fields map[string]json.RawMessage, names ...string) (*uint256.Int, error) {
+	value, err := optionalBigInt(fields, names...)
+	if err != nil {
+		return nil, err
+	}
+	if value == nil {
+		return new(uint256.Int), nil
+	}
+	return bigIntToUint256(value, names[0])
+}
+
+func bigIntToUint256(value *big.Int, field string) (*uint256.Int, error) {
+	if value == nil || value.Sign() < 0 {
+		return nil, fmt.Errorf("field %q is not an unsigned 256-bit integer", field)
+	}
+	converted, overflow := uint256.FromBig(value)
+	if overflow {
+		return nil, fmt.Errorf("field %q exceeds uint256", field)
+	}
+	return converted, nil
+}
+
 func requireBytes(fields map[string]json.RawMessage, names ...string) ([]byte, error) {
 	raw, ok := lookupField(fields, names...)
 	if !ok {
@@ -633,6 +812,71 @@ func optionalAccessList(
 		}
 	}
 	return accessList, nil
+}
+
+func requireSetCodeAuthorizations(
+	fields map[string]json.RawMessage,
+	names ...string,
+) ([]types.SetCodeAuthorization, error) {
+	raw, ok := lookupField(fields, names...)
+	if !ok || bytes.Equal(raw, []byte("null")) {
+		return nil, fmt.Errorf("missing required field %q", names[0])
+	}
+	var encoded []json.RawMessage
+	if err := json.Unmarshal(raw, &encoded); err != nil {
+		return nil, fmt.Errorf("parse field %q: %w", names[0], err)
+	}
+	authorizations := make([]types.SetCodeAuthorization, len(encoded))
+	for index, item := range encoded {
+		authorizationFields, err := decodeJSONObject(item)
+		if err != nil {
+			return nil, fmt.Errorf("parse field %q[%d]: %w", names[0], index, err)
+		}
+		inner, ok := lookupField(authorizationFields, "inner")
+		if !ok || bytes.Equal(inner, []byte("null")) {
+			return nil, fmt.Errorf("parse field %q[%d]: missing required field %q", names[0], index, "inner")
+		}
+		innerFields, err := decodeJSONObject(inner)
+		if err != nil {
+			return nil, fmt.Errorf("parse field %q[%d].inner: %w", names[0], index, err)
+		}
+		chainID, err := requireUint256(innerFields, "chain_id", "chainId")
+		if err != nil {
+			return nil, fmt.Errorf("parse field %q[%d].inner: %w", names[0], index, err)
+		}
+		address, err := requireAddress(innerFields, "address")
+		if err != nil {
+			return nil, fmt.Errorf("parse field %q[%d].inner: %w", names[0], index, err)
+		}
+		nonce, err := requireUint64(innerFields, "nonce")
+		if err != nil {
+			return nil, fmt.Errorf("parse field %q[%d].inner: %w", names[0], index, err)
+		}
+		parity, err := requireUint64(authorizationFields, "yParity", "v")
+		if err != nil {
+			return nil, fmt.Errorf("parse field %q[%d]: %w", names[0], index, err)
+		}
+		if parity > 255 {
+			return nil, fmt.Errorf("parse field %q[%d]: yParity exceeds uint8", names[0], index)
+		}
+		r, err := requireUint256(authorizationFields, "r")
+		if err != nil {
+			return nil, fmt.Errorf("parse field %q[%d]: %w", names[0], index, err)
+		}
+		s, err := requireUint256(authorizationFields, "s")
+		if err != nil {
+			return nil, fmt.Errorf("parse field %q[%d]: %w", names[0], index, err)
+		}
+		authorizations[index] = types.SetCodeAuthorization{
+			ChainID: *chainID,
+			Address: address,
+			Nonce:   nonce,
+			V:       uint8(parity),
+			R:       *r,
+			S:       *s,
+		}
+	}
+	return authorizations, nil
 }
 
 func decodeSignature(signature rawTransactionSignature) (*big.Int, *big.Int, *big.Int, error) {

@@ -4,10 +4,13 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"math/big"
 	"testing"
 
+	"github.com/ethereum/go-ethereum/core"
 	"github.com/ethereum/go-ethereum/core/types"
+	"github.com/ethereum/go-ethereum/core/vm"
 )
 
 func TestFilterManifestTransactionsMatchesCanonicalBlock(t *testing.T) {
@@ -136,6 +139,53 @@ func TestFilterManifestTransactionsHonorsCanceledContext(t *testing.T) {
 	)
 	if !errors.Is(err, context.Canceled) {
 		t.Fatalf("expected context.Canceled, got %v", err)
+	}
+}
+
+func TestIsRecoverableNonAnchorTxError(t *testing.T) {
+	recoverable := []error{
+		vm.ErrZkGasLimitExceeded,
+		core.ErrGasLimitReached,
+		core.ErrGasLimitOverflow,
+		core.ErrNonceTooLow,
+		core.ErrNonceTooHigh,
+		core.ErrNonceMax,
+		core.ErrInsufficientFunds,
+		core.ErrInsufficientFundsForTransfer,
+		core.ErrInsufficientBalanceWitness,
+		core.ErrGasUintOverflow,
+		core.ErrIntrinsicGas,
+		core.ErrFloorDataGas,
+		core.ErrTxTypeNotSupported,
+		core.ErrTipAboveFeeCap,
+		core.ErrTipVeryHigh,
+		core.ErrFeeCapVeryHigh,
+		core.ErrFeeCapTooLow,
+		core.ErrSenderNoEOA,
+		core.ErrBlobFeeCapTooLow,
+		core.ErrMissingBlobHashes,
+		core.ErrTooManyBlobs,
+		core.ErrBlobTxCreate,
+		core.ErrEmptyAuthList,
+		core.ErrSetCodeTxCreate,
+		core.ErrGasLimitTooHigh,
+		vm.ErrMaxInitCodeSizeExceeded,
+	}
+	for _, err := range recoverable {
+		if !isRecoverableNonAnchorTxError(err) {
+			t.Fatalf("expected %v to be recoverable", err)
+		}
+		if !isRecoverableNonAnchorTxError(fmt.Errorf("wrapped: %w", err)) {
+			t.Fatalf("expected wrapped %v to be recoverable", err)
+		}
+	}
+
+	fatal := errors.New("fatal execution error")
+	if isRecoverableNonAnchorTxError(fatal) {
+		t.Fatal("unrelated error must be fatal")
+	}
+	if isRecoverableNonAnchorTxError(fmt.Errorf("wrapped: %w", fatal)) {
+		t.Fatal("wrapped unrelated error must be fatal")
 	}
 }
 

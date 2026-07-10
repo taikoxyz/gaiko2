@@ -13,7 +13,6 @@ import (
 )
 
 type blobSourceDataView struct {
-	TxDataFromCalldata     []byte
 	TxDataFromBlob         [][]byte
 	BlobCommitments        [][]byte
 	BlobCommitmentsPresent bool
@@ -112,8 +111,7 @@ func decodeBlobSourceData(raw json.RawMessage) (blobSourceDataView, error) {
 		return blobSourceDataView{}, fmt.Errorf("unmarshal data source: %w", err)
 	}
 
-	calldata, err := optionalByteSliceField(fields, "tx_data_from_calldata")
-	if err != nil {
+	if _, err := optionalByteSliceField(fields, "tx_data_from_calldata"); err != nil {
 		return blobSourceDataView{}, err
 	}
 	blobData, _, err := optionalByteSlicesField(fields, "tx_data_from_blob")
@@ -130,7 +128,6 @@ func decodeBlobSourceData(raw json.RawMessage) (blobSourceDataView, error) {
 	}
 
 	return blobSourceDataView{
-		TxDataFromCalldata:     calldata,
 		TxDataFromBlob:         blobData,
 		BlobCommitments:        commitments,
 		BlobCommitmentsPresent: commitmentsPresent,

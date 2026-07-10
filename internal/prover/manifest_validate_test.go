@@ -15,6 +15,7 @@ import (
 	"github.com/decred/dcrd/dcrec/secp256k1/v4"
 	"github.com/ethereum/go-ethereum/accounts/abi"
 	"github.com/ethereum/go-ethereum/common"
+	"github.com/ethereum/go-ethereum/core"
 	"github.com/ethereum/go-ethereum/core/rawdb"
 	"github.com/ethereum/go-ethereum/core/state"
 	"github.com/ethereum/go-ethereum/core/tracing"
@@ -36,11 +37,12 @@ const (
 	manifestTestLowGasBalance = uint64(250_000_000_000)
 )
 
-func TestValidateManifestBindingAcceptsInlineCalldataSource(t *testing.T) {
-	view := newManifestBindingFixture(t).view(t)
+func TestValidateManifestBindingRejectsUncommittedInlineManifest(t *testing.T) {
+	fixture := newManifestBindingFixture(t)
+	fixture.blobBacked = false
 
-	if err := ValidateGuestInputManifestBinding(view); err != nil {
-		t.Fatalf("validate manifest binding: %v", err)
+	if err := ValidateGuestInputManifestBinding(fixture.view(t)); err == nil {
+		t.Fatal("expected uncommitted inline manifest to be ignored")
 	}
 }
 
@@ -686,21 +688,49 @@ func TestValidateManifestBindingRejectsMissingLastAnchorBlockNumber(t *testing.T
 	}
 }
 
-func TestDecodeManifestPayloadRejectsOversizedDecodedPayload(t *testing.T) {
-	payload := encodeCompressedManifestBytes(t, bytes.Repeat([]byte{0}, shastaMaxManifestDecodedPayload+1))
+func TestDecodeManifestPayloadAcceptsUint32TruncatedVersion(t *testing.T) {
+	payload := encodeTestManifestPayload(t, testDerivationSourceManifest{
+		Blocks: []testManifestBlock{{GasLimit: 30_000_000}},
+	})
+	binary.BigEndian.PutUint64(payload[24:32], (uint64(1)<<32)+shastaPayloadVersion)
 
-	_, err := decodeManifestPayload(payload, 0, 1)
-	if err == nil {
-		t.Fatalf("expected decoded payload size error")
+	manifest, err := decodeManifestPayload(payload, 0, 1)
+	if err != nil {
+		t.Fatalf("decode manifest: %v", err)
 	}
-	if !strings.Contains(err.Error(), "decompressed manifest payload exceeds") {
-		t.Fatalf("unexpected error: %v", err)
+	if len(manifest.Blocks) != 1 || manifest.Blocks[0].GasLimit != 30_000_000 {
+		t.Fatalf("unexpected manifest: %+v", manifest)
 	}
 }
 
-func TestDecodeManifestPayloadRejectsTooManyTransactionsInBlock(t *testing.T) {
+func TestDecodeManifestPayloadAcceptsLargeDecodedManifest(t *testing.T) {
+	to := common.HexToAddress(testAddress("31"))
+	largeData := bytes.Repeat([]byte{0}, 16*1024*1024+1)
+	tx := types.NewTx(&types.DynamicFeeTx{
+		ChainID:   big.NewInt(167001),
+		GasTipCap: big.NewInt(1),
+		GasFeeCap: big.NewInt(2),
+		Gas:       24_000,
+		To:        &to,
+		Value:     big.NewInt(0),
+		Data:      largeData,
+	})
+	payload := encodeTestManifestPayload(t, testDerivationSourceManifest{
+		Blocks: []testManifestBlock{{Transactions: types.Transactions{tx}}},
+	})
+
+	manifest, err := decodeManifestPayload(payload, 0, 1)
+	if err != nil {
+		t.Fatalf("decode large manifest: %v", err)
+	}
+	if got := len(manifest.Blocks[0].Transactions[0].Data()); got != len(largeData) {
+		t.Fatalf("transaction data length mismatch: got %d want %d", got, len(largeData))
+	}
+}
+
+func TestDecodeManifestPayloadAcceptsMoreTransactionsThanBlockGasCanFit(t *testing.T) {
 	tx := decodeTestTransaction(t, manifestUserTxJSON(t, 167001, 0, testAddress("31")))
-	txs := make(types.Transactions, int(shastaMaxManifestTxsPerBlock)+1)
+	txs := make(types.Transactions, int(shastaMaxBlockGasLimit/params.TxGas)+1)
 	for index := range txs {
 		txs[index] = tx
 	}
@@ -708,12 +738,12 @@ func TestDecodeManifestPayloadRejectsTooManyTransactionsInBlock(t *testing.T) {
 		Blocks: []testManifestBlock{{Transactions: txs}},
 	})
 
-	_, err := decodeManifestPayload(payload, 0, 1)
-	if err == nil {
-		t.Fatalf("expected transaction count error")
+	manifest, err := decodeManifestPayload(payload, 0, 1)
+	if err != nil {
+		t.Fatalf("decode transaction-heavy manifest: %v", err)
 	}
-	if !strings.Contains(err.Error(), "transaction count") {
-		t.Fatalf("unexpected error: %v", err)
+	if got := len(manifest.Blocks[0].Transactions); got != len(txs) {
+		t.Fatalf("transaction count mismatch: got %d want %d", got, len(txs))
 	}
 }
 
@@ -738,10 +768,13 @@ func TestValidateManifestBindingIgnoresWitnessShastaTimestampForDerivation(t *te
 
 func TestValidateManifestBindingIgnoresWitnessUnzenActivationForSourceLimit(t *testing.T) {
 	fixture := newManifestBindingFixture(t)
-	fixture.chainID = params.MasayaDevnetNetworkID.Uint64()
+	fixture.chainID = params.TaikoHoodiNetworkID.Uint64()
 	fixture.l2Contract = testTaikoL2Address(fixture.chainID)
 	fixture.anchorTo = testTaikoL2Address(fixture.chainID)
-	fixture.proposalTimestamp = 2_000
+	fixture.proposalTimestamp = core.HoodiShastaTime + 100
+	fixture.grandparentHeader.Time = fixture.proposalTimestamp - 3
+	fixture.parentHeader.Time = fixture.proposalTimestamp - 2
+	fixture.parentHeader.ParentHash = fixture.grandparentHeader.Hash()
 	fixture.chainSpecHardForksJSON = `{"SHASTA": {"Block": 0}, "UNZEN": {"Timestamp": 0}}`
 	fixture.manifestBlockCount = shastaDerivationSourceMaxBlocks + 1
 	fixture.manifestTimestamp = fixture.parentHeader.Time + 1
@@ -1252,6 +1285,7 @@ func newManifestBindingFixture(t *testing.T) *manifestBindingFixture {
 		anchorBlockNumber:     900,
 		lastAnchorBlockNumber: manifestUint64Ptr(899),
 		witnessStateNodes:     witnessStateNodes,
+		blobBacked:            true,
 	}
 	fixture.parentHeader.ParentHash = fixture.grandparentHeader.Hash()
 	return fixture

@@ -9,6 +9,7 @@ import (
 	"testing"
 
 	"github.com/ethereum/go-ethereum/common"
+	"github.com/ethereum/go-ethereum/core"
 	"github.com/ethereum/go-ethereum/core/types"
 	"github.com/ethereum/go-ethereum/core/vm"
 	"github.com/ethereum/go-ethereum/crypto"
@@ -601,7 +602,7 @@ func TestReplayServiceRejectsTransactionRootMismatch(t *testing.T) {
 }
 
 func TestChainConfigForMasayaEnablesBlobForkAtUnzen(t *testing.T) {
-	const unzenTime uint64 = 1778158800
+	const unzenTime uint64 = 0
 
 	cfg, err := chainConfigFor(params.MasayaDevnetNetworkID.Uint64())
 	if err != nil {
@@ -623,14 +624,8 @@ func TestChainConfigForMasayaEnablesBlobForkAtUnzen(t *testing.T) {
 	if cfg.BlobScheduleConfig == nil || cfg.BlobScheduleConfig.Cancun == nil || cfg.BlobScheduleConfig.Prague == nil || cfg.BlobScheduleConfig.Osaka == nil {
 		t.Fatalf("missing blob schedule config: %+v", cfg.BlobScheduleConfig)
 	}
-	if cfg.IsCancun(common.Big0, unzenTime-1) {
-		t.Fatalf("unexpected cancun activation before unzen")
-	}
 	if !cfg.IsCancun(common.Big0, unzenTime) {
 		t.Fatalf("expected cancun activation at unzen")
-	}
-	if cfg.IsUnzen(unzenTime - 1) {
-		t.Fatalf("unexpected unzen activation before unzen")
 	}
 	if !cfg.IsUnzen(unzenTime) {
 		t.Fatalf("expected unzen activation at unzen")
@@ -907,7 +902,7 @@ func TestReplayExecutionBlockZeroesDifficultyForUnzen(t *testing.T) {
 
 	originalBlock := types.NewBlockWithHeader(&types.Header{
 		Number:     big.NewInt(4140811),
-		Time:       masayaDevnetUnzenTime,
+		Time:       core.MasayaUnzenTime,
 		Difficulty: big.NewInt(1236639),
 	})
 	executionBlock, expectedDifficulty := replayExecutionBlock(cfg, originalBlock)
@@ -921,12 +916,16 @@ func TestReplayExecutionBlockZeroesDifficultyForUnzen(t *testing.T) {
 		t.Fatalf("expected original difficulty to remain unchanged, got %s", originalBlock.Difficulty())
 	}
 
+	hoodiConfig, err := chainConfigFor(params.TaikoHoodiNetworkID.Uint64())
+	if err != nil {
+		t.Fatalf("hoodi chain config: %v", err)
+	}
 	preUnzenBlock := types.NewBlockWithHeader(&types.Header{
 		Number:     big.NewInt(4140810),
-		Time:       masayaDevnetUnzenTime - 1,
+		Time:       core.HoodiUnzenTime - 1,
 		Difficulty: big.NewInt(7),
 	})
-	preExecutionBlock, preExpectedDifficulty := replayExecutionBlock(cfg, preUnzenBlock)
+	preExecutionBlock, preExpectedDifficulty := replayExecutionBlock(hoodiConfig, preUnzenBlock)
 	if preExpectedDifficulty != nil {
 		t.Fatalf("expected no separate imported difficulty before Unzen, got %v", preExpectedDifficulty)
 	}

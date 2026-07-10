@@ -15,6 +15,47 @@ import (
 	"github.com/ethereum/go-ethereum/triedb"
 )
 
+// recoverableNonAnchorTxErrors mirrors the pinned taiko-geth tx-list witness
+// classifier. These are the failures canonical block construction skips for a
+// non-anchor transaction; every other execution error is fatal.
+var recoverableNonAnchorTxErrors = []error{
+	vm.ErrZkGasLimitExceeded,
+	core.ErrGasLimitReached,
+	core.ErrGasLimitOverflow,
+	core.ErrNonceTooLow,
+	core.ErrNonceTooHigh,
+	core.ErrNonceMax,
+	core.ErrInsufficientFunds,
+	core.ErrInsufficientFundsForTransfer,
+	core.ErrInsufficientBalanceWitness,
+	core.ErrGasUintOverflow,
+	core.ErrIntrinsicGas,
+	core.ErrFloorDataGas,
+	core.ErrTxTypeNotSupported,
+	core.ErrTipAboveFeeCap,
+	core.ErrTipVeryHigh,
+	core.ErrFeeCapVeryHigh,
+	core.ErrFeeCapTooLow,
+	core.ErrSenderNoEOA,
+	core.ErrBlobFeeCapTooLow,
+	core.ErrMissingBlobHashes,
+	core.ErrTooManyBlobs,
+	core.ErrBlobTxCreate,
+	core.ErrEmptyAuthList,
+	core.ErrSetCodeTxCreate,
+	core.ErrGasLimitTooHigh,
+	vm.ErrMaxInitCodeSizeExceeded,
+}
+
+func isRecoverableNonAnchorTxError(err error) bool {
+	for _, target := range recoverableNonAnchorTxErrors {
+		if errors.Is(err, target) {
+			return true
+		}
+	}
+	return false
+}
+
 func validateManifestTransactionRoot(
 	ctx context.Context,
 	view *GuestInputView,
@@ -186,6 +227,9 @@ func commitFilteredManifestTransactions(
 			if index == 0 {
 				return nil, fmt.Errorf("anchor transaction: %w", err)
 			}
+			if !isRecoverableNonAnchorTxError(err) {
+				return nil, fmt.Errorf("non-anchor transaction %d message failed: %w", index, err)
+			}
 			continue
 		}
 		if config.IsShasta(header.Time) {
@@ -207,21 +251,26 @@ func commitFilteredManifestTransactions(
 			return nil, stateErr
 		}
 		if err != nil {
-			if isUnzen && errors.Is(err, vm.ErrZkGasLimitExceeded) && index > 0 {
-				cfg.ZkGasMeter.ResetTransaction()
-				evm.ResetZkGasErr()
-				revertManifestCandidate(statedb, gp, stateSnapshot, gasSnapshot)
-				break
-			}
 			if index == 0 {
 				return nil, fmt.Errorf("anchor transaction failed: %w", err)
 			}
 			revertManifestCandidate(statedb, gp, stateSnapshot, gasSnapshot)
+			if !isRecoverableNonAnchorTxError(err) {
+				return nil, fmt.Errorf("non-anchor transaction %d failed: %w", index, err)
+			}
+			if isUnzen && errors.Is(err, vm.ErrZkGasLimitExceeded) {
+				cfg.ZkGasMeter.ResetTransaction()
+				evm.ResetZkGasErr()
+				break
+			}
 			continue
 		}
 
 		if isUnzen {
-			if commitErr := cfg.ZkGasMeter.CommitTransaction(); commitErr != nil && index > 0 {
+			if commitErr := cfg.ZkGasMeter.CommitTransaction(); commitErr != nil {
+				if index == 0 {
+					return nil, fmt.Errorf("anchor transaction failed: %w", commitErr)
+				}
 				cfg.ZkGasMeter.ResetTransaction()
 				revertManifestCandidate(statedb, gp, stateSnapshot, gasSnapshot)
 				break
