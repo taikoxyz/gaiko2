@@ -271,6 +271,63 @@ func TestReplayServiceReturnsSignedProofResult(t *testing.T) {
 	}
 }
 
+func TestReplayServiceRejectsValidatedRequestWithoutReplayBlocks(t *testing.T) {
+	validated := sampleValidatedReplayRequestWithGuestLastAnchor(t, 167013, 900)
+	validated.Request.Payload.Blocks = nil
+	validated.Blocks = nil
+
+	service := NewReplayService(fakeRunner{
+		stateRoot:   common.HexToHash("0x2222222222222222222222222222222222222222222222222222222222222222"),
+		receiptRoot: common.HexToHash("0x3333333333333333333333333333333333333333333333333333333333333333"),
+	})
+	_, err := service.Prove(context.Background(), validated)
+	if err == nil || !strings.Contains(err.Error(), "replay block") {
+		t.Fatalf("expected empty replay block rejection, got %v", err)
+	}
+}
+
+func TestReplayServiceSignsValidatedCarryWhenRawCarryContainsAlias(t *testing.T) {
+	fixture := newManifestBindingFixture(t)
+	input := fixture.view(t).Raw
+	original := string(input.ProofCarryData)
+	mutated := strings.Replace(
+		original,
+		`"stateRoot": "0x5555555555555555555555555555555555555555555555555555555555555555"`,
+		`"stateRoot": "0x5555555555555555555555555555555555555555555555555555555555555555", "STATEROOT": "0x6666666666666666666666666666666666666666666666666666666666666666"`,
+		1,
+	)
+	if mutated == original {
+		t.Fatal("failed to add alternate-case state root")
+	}
+	input.ProofCarryData = []byte(mutated)
+
+	validated, err := ValidateRequest(protocol.ShastaRequest{
+		Schema: protocol.ShastaRequestSchemaV1,
+		Payload: protocol.ShastaPayload{
+			GuestInput: &input,
+		},
+	})
+	if err != nil {
+		t.Fatalf("validate request: %v", err)
+	}
+
+	expectedInput := hashShastaSubproofCarry(validated.Carry).Hex()
+	service := NewReplayService(fakeRunner{
+		stateRoot:   common.HexToHash("0x5555555555555555555555555555555555555555555555555555555555555555"),
+		receiptRoot: common.HexToHash(testHash("57")),
+		logs: []*types.Log{
+			anchorEventLog(t, fixture.chainID, 899, 900),
+		},
+	})
+	result, err := service.Prove(context.Background(), validated)
+	if err != nil {
+		t.Fatalf("prove: %v", err)
+	}
+	if result.Input != expectedInput {
+		t.Fatalf("signed input hash mismatch: got %s want %s", result.Input, expectedInput)
+	}
+}
+
 func TestReplayServiceRejectsLastAnchorMismatchFromAnchorEvent(t *testing.T) {
 	const chainID = uint64(167013)
 	validated := sampleValidatedReplayRequestWithGuestLastAnchor(t, chainID, 899)
