@@ -273,6 +273,19 @@ func (s ReplayService) Prove(
 	ctx context.Context,
 	req *ValidatedRequest,
 ) (protocol.ProofResult, error) {
+	if req == nil {
+		return protocol.ProofResult{}, fmt.Errorf("validated request is nil")
+	}
+	if len(req.Blocks) == 0 || len(req.Request.Payload.Blocks) == 0 {
+		return protocol.ProofResult{}, fmt.Errorf("validated request must include at least one replay block")
+	}
+	if len(req.Blocks) != len(req.Request.Payload.Blocks) {
+		return protocol.ProofResult{}, fmt.Errorf(
+			"validated replay block count mismatch: views=%d raw=%d",
+			len(req.Blocks),
+			len(req.Request.Payload.Blocks),
+		)
+	}
 	config, err := chainConfigFor(req.Carry.ChainID)
 	if err != nil {
 		return protocol.ProofResult{}, err
@@ -282,6 +295,9 @@ func (s ReplayService) Prove(
 		block, witness, err := decodeReplayBlock(replay)
 		if err != nil {
 			return protocol.ProofResult{}, fmt.Errorf("decode replay block %d: %w", index, err)
+		}
+		if err := validateReplayBlockMatchesView(block, req.Blocks[index], index); err != nil {
+			return protocol.ProofResult{}, err
 		}
 		if err := validateReplayWitness(block, witness); err != nil {
 			return protocol.ProofResult{}, fmt.Errorf("validate replay block %d: %w", index, err)
@@ -317,11 +333,55 @@ func (s ReplayService) Prove(
 		}
 	}
 
-	inputHash, err := hashShastaSubproofInput(req.Request.Payload.ProofCarryData)
-	if err != nil {
-		return protocol.ProofResult{}, err
+	if err := validateBlockViews(req.Blocks, req.Carry); err != nil {
+		return protocol.ProofResult{}, fmt.Errorf("validated carry block binding: %w", err)
 	}
+	inputHash := hashShastaSubproofCarry(req.Carry)
 	return buildProofResult(inputHash, s.signer)
+}
+
+func validateReplayBlockMatchesView(block *types.Block, view BlockView, index int) error {
+	if block.NumberU64() != view.Number {
+		return fmt.Errorf(
+			"validated replay block %d number mismatch: raw=%d view=%d",
+			index,
+			block.NumberU64(),
+			view.Number,
+		)
+	}
+	if block.Hash() != view.Hash {
+		return fmt.Errorf(
+			"validated replay block %d hash mismatch: raw=%s view=%s",
+			index,
+			block.Hash().Hex(),
+			view.Hash.Hex(),
+		)
+	}
+	if block.ParentHash() != view.ParentHash {
+		return fmt.Errorf(
+			"validated replay block %d parent hash mismatch: raw=%s view=%s",
+			index,
+			block.ParentHash().Hex(),
+			view.ParentHash.Hex(),
+		)
+	}
+	if block.Root() != view.StateRoot {
+		return fmt.Errorf(
+			"validated replay block %d state root mismatch: raw=%s view=%s",
+			index,
+			block.Root().Hex(),
+			view.StateRoot.Hex(),
+		)
+	}
+	if block.ReceiptHash() != view.ReceiptsRoot {
+		return fmt.Errorf(
+			"validated replay block %d receipt root mismatch: raw=%s view=%s",
+			index,
+			block.ReceiptHash().Hex(),
+			view.ReceiptsRoot.Hex(),
+		)
+	}
+	return nil
 }
 
 func validateFirstReplayAnchorEvent(req *ValidatedRequest, receipts types.Receipts) error {
