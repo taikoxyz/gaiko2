@@ -246,7 +246,7 @@ func commitFilteredManifestTransactions(
 
 		stateSnapshot := statedb.Snapshot()
 		gasSnapshot := *gp
-		_, err = core.ApplyTransactionWithEVM(msg, gp, statedb, blockNumber, blockHash, blockContext.Time, txCopy, evm)
+		receipt, err := core.ApplyTransactionWithEVM(msg, gp, statedb, blockNumber, blockHash, blockContext.Time, txCopy, evm)
 		if stateErr := manifestWitnessStateError(statedb, manifestTxLabel(index, txCopy)); stateErr != nil {
 			return nil, stateErr
 		}
@@ -264,6 +264,11 @@ func commitFilteredManifestTransactions(
 				break
 			}
 			continue
+		}
+		if index == 0 {
+			if err := validateSuccessfulAnchorReceipt(receipt); err != nil {
+				return nil, err
+			}
 		}
 
 		if isUnzen {

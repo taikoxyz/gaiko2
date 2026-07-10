@@ -1,7 +1,6 @@
 package prover
 
 import (
-	"encoding/json"
 	"math/big"
 
 	"github.com/ethereum/go-ethereum/common"
@@ -14,11 +13,20 @@ type ValidatedRequest struct {
 	Carry       CarryView
 	Blocks      []BlockView
 	LogMetadata RequestLogMetadata
+
+	validated           bool
+	validatedCarry      CarryView
+	validatedBlocks     []BlockView
+	validatedRawBlocks  []replayBlockBinding
+	validatedGuestInput bool
+	validatedTaiko      string
 }
 
 type ValidatedAggregateRequest struct {
 	Request protocol.ShastaAggregateRequest
 	Proofs  []AggregateProofView
+
+	validated bool
 }
 
 type RequestLogMetadata struct {
@@ -75,13 +83,19 @@ type BlockView struct {
 	ReceiptsRoot common.Hash
 }
 
+type replayBlockBinding struct {
+	Block     string
+	ChainSpec string
+	Witness   string
+	Accounts  string
+}
+
 type AggregateProofView struct {
 	InputHash       common.Hash
 	ProofBytes      []byte
 	InstanceID      uint32
 	InstanceAddress common.Address
 	Signature       []byte
-	RawCarry        json.RawMessage
 	Carry           CarryView
 }
 

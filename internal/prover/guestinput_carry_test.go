@@ -185,6 +185,25 @@ func TestGuestInputCarryRejectsMissingGuestInputChainID(t *testing.T) {
 	}
 }
 
+func TestGuestInputCarryRejectsProposalIDParserSplit(t *testing.T) {
+	fixture := newGuestInputCarryFixture(t)
+	const claimedProposalID = uint64(54321)
+	fixture.proposalID = claimedProposalID
+	fixture.taiko = mustRawMessage(t, fmt.Sprintf(`{
+		"chain_spec": {"chain_id": 167013},
+		"proposal_id": %d,
+		"proposal_event": {"proposal": %s},
+		"PROPOSAL_EVENT": {"proposal": {"id": %d}},
+		"prover_data": {"actual_prover": %q}
+	}`, claimedProposalID, shastaProposalKnownVectorJSON, claimedProposalID, fixture.actualProver))
+	view := decodeGuestInputCarryView(t, fixture)
+
+	err := ValidateGuestInputCarry(view)
+	if err == nil || !strings.Contains(err.Error(), "proposal id") {
+		t.Fatalf("expected split proposal id rejection, got %v", err)
+	}
+}
+
 func TestGuestInputCarryRejectsMissingVerifier(t *testing.T) {
 	fixture := newGuestInputCarryFixture(t)
 	fixture.witnessChainSpec = mustRawMessage(t, `{

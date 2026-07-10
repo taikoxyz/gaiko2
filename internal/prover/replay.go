@@ -276,6 +276,9 @@ func (s ReplayService) Prove(
 	if req == nil {
 		return protocol.ProofResult{}, fmt.Errorf("validated request is nil")
 	}
+	if err := validateRequestSigningBinding(req); err != nil {
+		return protocol.ProofResult{}, err
+	}
 	if len(req.Blocks) == 0 || len(req.Request.Payload.Blocks) == 0 {
 		return protocol.ProofResult{}, fmt.Errorf("validated request must include at least one replay block")
 	}
@@ -291,6 +294,7 @@ func (s ReplayService) Prove(
 		return protocol.ProofResult{}, err
 	}
 
+	var previousAnchor uint64
 	for index, replay := range req.Request.Payload.Blocks {
 		block, witness, err := decodeReplayBlock(replay)
 		if err != nil {
@@ -326,8 +330,17 @@ func (s ReplayService) Prove(
 				block.ReceiptHash(),
 			)
 		}
-		if index == 0 {
-			if err := validateFirstReplayAnchorEvent(req, result.Receipts); err != nil {
+		if req.validatedGuestInput {
+			if index == 0 {
+				previousAnchor, err = validateFirstReplayAnchorEvent(req, result.Receipts)
+			} else {
+				previousAnchor, err = validateSubsequentReplayAnchorEvent(
+					req.Carry.ChainID,
+					previousAnchor,
+					result.Receipts,
+				)
+			}
+			if err != nil {
 				return protocol.ProofResult{}, fmt.Errorf("replay block %d anchor event: %w", index, err)
 			}
 		}
@@ -384,31 +397,67 @@ func validateReplayBlockMatchesView(block *types.Block, view BlockView, index in
 	return nil
 }
 
-func validateFirstReplayAnchorEvent(req *ValidatedRequest, receipts types.Receipts) error {
+func validateFirstReplayAnchorEvent(req *ValidatedRequest, receipts types.Receipts) (uint64, error) {
 	if req.Request.Payload.GuestInput == nil {
-		return nil
+		return 0, nil
 	}
 	lastAnchor, err := decodeGuestInputLastAnchorBlockNumber(req.Request.Payload.GuestInput.Taiko)
 	if err != nil {
-		return err
+		return 0, err
 	}
 	if lastAnchor == nil {
-		return fmt.Errorf("missing taiko.prover_data.last_anchor_block_number")
-	}
-	if len(receipts) == 0 || receipts[0] == nil {
-		return fmt.Errorf("missing first transaction receipt")
+		return 0, fmt.Errorf("missing taiko.prover_data.last_anchor_block_number")
 	}
 
-	prevAnchor, _, err := replayAnchoredEvent(req.Carry.ChainID, receipts[0].Logs)
+	prevAnchor, anchor, err := replayAnchorTransition(req.Carry.ChainID, receipts)
 	if err != nil {
-		return err
+		return 0, err
 	}
 	if prevAnchor != *lastAnchor {
-		return fmt.Errorf(
+		return 0, fmt.Errorf(
 			"prover_data.last_anchor_block_number mismatch: expected %d (first Anchor event prevAnchorBlockNumber), got %d",
 			prevAnchor,
 			*lastAnchor,
 		)
+	}
+	return anchor, nil
+}
+
+func validateSubsequentReplayAnchorEvent(
+	chainID uint64,
+	expectedPreviousAnchor uint64,
+	receipts types.Receipts,
+) (uint64, error) {
+	prevAnchor, anchor, err := replayAnchorTransition(chainID, receipts)
+	if err != nil {
+		return 0, err
+	}
+	if prevAnchor != expectedPreviousAnchor {
+		return 0, fmt.Errorf(
+			"anchor continuity mismatch: expected previous anchor %d got %d",
+			expectedPreviousAnchor,
+			prevAnchor,
+		)
+	}
+	return anchor, nil
+}
+
+func replayAnchorTransition(chainID uint64, receipts types.Receipts) (uint64, uint64, error) {
+	if len(receipts) == 0 || receipts[0] == nil {
+		return 0, 0, fmt.Errorf("missing first transaction receipt")
+	}
+	if err := validateSuccessfulAnchorReceipt(receipts[0]); err != nil {
+		return 0, 0, err
+	}
+	return replayAnchoredEvent(chainID, receipts[0].Logs)
+}
+
+func validateSuccessfulAnchorReceipt(receipt *types.Receipt) error {
+	if receipt == nil {
+		return fmt.Errorf("missing anchor transaction receipt")
+	}
+	if receipt.Status != types.ReceiptStatusSuccessful {
+		return fmt.Errorf("anchor transaction receipt failed")
 	}
 	return nil
 }

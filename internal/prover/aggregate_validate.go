@@ -66,7 +66,6 @@ func ValidateAggregateRequest(req protocol.ShastaAggregateRequest) (*ValidatedAg
 			InstanceID:      instanceID,
 			InstanceAddress: instanceAddress,
 			Signature:       signature,
-			RawCarry:        item.ProofCarryData,
 			Carry:           carry,
 		})
 	}
@@ -96,8 +95,9 @@ func ValidateAggregateRequest(req protocol.ShastaAggregateRequest) (*ValidatedAg
 	}
 
 	return &ValidatedAggregateRequest{
-		Request: req,
-		Proofs:  proofs,
+		Request:   req,
+		Proofs:    proofs,
+		validated: true,
 	}, nil
 }
 
@@ -107,6 +107,9 @@ func validateShastaProofCarryDataVec(carries []CarryView) bool {
 	}
 	expectedProver := carries[0].TransitionInput.ActualProver
 	for _, item := range carries {
+		if !carryFitsShastaWidths(item) {
+			return false
+		}
 		if item.TransitionInput.ActualProver != expectedProver {
 			return false
 		}
@@ -114,7 +117,8 @@ func validateShastaProofCarryDataVec(carries []CarryView) bool {
 	for i := 1; i < len(carries); i++ {
 		prev := carries[i-1]
 		next := carries[i]
-		if prev.TransitionInput.ProposalID+1 != next.TransitionInput.ProposalID {
+		expectedProposalID, ok := checkedIncrementProposalID(prev.TransitionInput.ProposalID)
+		if !ok || expectedProposalID != next.TransitionInput.ProposalID {
 			return false
 		}
 		if prev.TransitionInput.ProposalHash != next.TransitionInput.ParentProposalHash {
@@ -131,6 +135,19 @@ func validateShastaProofCarryDataVec(carries []CarryView) bool {
 		}
 	}
 	return true
+}
+
+func carryFitsShastaWidths(carry CarryView) bool {
+	return carry.TransitionInput.ProposalID <= maxUint48 &&
+		carry.TransitionInput.Transition.Timestamp <= maxUint48 &&
+		carry.TransitionInput.Checkpoint.BlockNumber <= maxUint48
+}
+
+func checkedIncrementProposalID(proposalID uint64) (uint64, bool) {
+	if proposalID >= maxUint48 {
+		return 0, false
+	}
+	return proposalID + 1, true
 }
 
 func parseHashHex(value string) (common.Hash, error) {

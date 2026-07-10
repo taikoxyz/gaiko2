@@ -2,7 +2,6 @@ package prover
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 
 	"github.com/ethereum/go-ethereum/common"
@@ -14,14 +13,17 @@ func (s ReplayService) Aggregate(
 	_ context.Context,
 	req *ValidatedAggregateRequest,
 ) (protocol.ProofResult, error) {
+	if req == nil || !req.validated {
+		return protocol.ProofResult{}, fmt.Errorf("aggregate request validation binding is missing")
+	}
 	identity, err := s.signer.Identity()
 	if err != nil {
 		return protocol.ProofResult{}, err
 	}
 
-	rawCarries := make([]json.RawMessage, 0, len(req.Proofs))
+	carries := make([]CarryView, 0, len(req.Proofs))
 	for _, proof := range req.Proofs {
-		rawCarries = append(rawCarries, proof.RawCarry)
+		carries = append(carries, proof.Carry)
 	}
 	if len(req.Proofs) > 0 {
 		first := req.Proofs[0]
@@ -40,7 +42,7 @@ func (s ReplayService) Aggregate(
 			)
 		}
 	}
-	aggregationHash, err := hashShastaAggregationInput(rawCarries, identity.InstanceAddress)
+	aggregationHash, err := hashShastaAggregationCarries(carries, identity.InstanceAddress)
 	if err != nil {
 		return protocol.ProofResult{}, err
 	}
@@ -62,6 +64,15 @@ func validateAggregateProofSignatures(
 	expectedInstance common.Address,
 ) error {
 	for index, proof := range proofs {
+		expectedInputHash := hashShastaSubproofCarry(proof.Carry)
+		if proof.InputHash != expectedInputHash {
+			return fmt.Errorf(
+				"aggregate proof %d input mismatch: got %s expected %s",
+				index,
+				proof.InputHash.Hex(),
+				expectedInputHash.Hex(),
+			)
+		}
 		if proof.InstanceID != expectedInstanceID {
 			return fmt.Errorf(
 				"aggregate proof %d instance id mismatch: got %d expected %d",
