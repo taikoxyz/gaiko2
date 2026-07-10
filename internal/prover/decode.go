@@ -832,17 +832,25 @@ func requireSetCodeAuthorizations(
 		if err != nil {
 			return nil, fmt.Errorf("parse field %q[%d]: %w", names[0], index, err)
 		}
-		chainID, err := requireUint256(authorizationFields, "chain_id", "chainId")
-		if err != nil {
-			return nil, fmt.Errorf("parse field %q[%d]: %w", names[0], index, err)
+		inner, ok := lookupField(authorizationFields, "inner")
+		if !ok || bytes.Equal(inner, []byte("null")) {
+			return nil, fmt.Errorf("parse field %q[%d]: missing required field %q", names[0], index, "inner")
 		}
-		address, err := requireAddress(authorizationFields, "address")
+		innerFields, err := decodeJSONObject(inner)
 		if err != nil {
-			return nil, fmt.Errorf("parse field %q[%d]: %w", names[0], index, err)
+			return nil, fmt.Errorf("parse field %q[%d].inner: %w", names[0], index, err)
 		}
-		nonce, err := requireUint64(authorizationFields, "nonce")
+		chainID, err := requireUint256(innerFields, "chain_id", "chainId")
 		if err != nil {
-			return nil, fmt.Errorf("parse field %q[%d]: %w", names[0], index, err)
+			return nil, fmt.Errorf("parse field %q[%d].inner: %w", names[0], index, err)
+		}
+		address, err := requireAddress(innerFields, "address")
+		if err != nil {
+			return nil, fmt.Errorf("parse field %q[%d].inner: %w", names[0], index, err)
+		}
+		nonce, err := requireUint64(innerFields, "nonce")
+		if err != nil {
+			return nil, fmt.Errorf("parse field %q[%d].inner: %w", names[0], index, err)
 		}
 		parity, err := requireUint64(authorizationFields, "yParity", "v")
 		if err != nil {

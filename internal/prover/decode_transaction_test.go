@@ -97,7 +97,7 @@ func TestDecodeTransactionEip7702(t *testing.T) {
 			"value": "0x11", "input": "0xabcd",
 			"access_list": [{"address": %q, "storage_keys": []}],
 			"authorization_list": [{
-				"chain_id": "0x%s", "address": %q, "nonce": "0x3",
+				"inner": {"chain_id": "0x%s", "address": %q, "nonce": "0x3"},
 				"yParity": "0x%x", "r": "0x%s", "s": "0x%s"
 			}]
 		}}
