@@ -310,9 +310,7 @@ func prepareSourceManifest(
 		manifest shastaSourceManifest
 		err      error
 	)
-	if len(source.BlobSlice.BlobHashes) == 0 {
-		manifest = decodeInlineSourceManifest(dataSource, source.BlobSlice.Offset, maxBlocks)
-	} else if source.BlobSlice.Offset > shastaMaxManifestOffset {
+	if len(source.BlobSlice.BlobHashes) == 0 || source.BlobSlice.Offset > shastaMaxManifestOffset {
 		manifest = defaultSourceManifest()
 	} else {
 		manifest, err = decodeBlobBackedSourceManifest(dataSource, source.BlobSlice.Offset, maxBlocks)
@@ -334,27 +332,6 @@ func prepareSourceManifest(
 	}
 
 	return manifest, nil
-}
-
-func decodeInlineSourceManifest(dataSource blobSourceDataView, offset uint64, maxBlocks int) shastaSourceManifest {
-	if len(dataSource.TxDataFromCalldata) != 0 {
-		manifest, err := decodeManifestPayload(dataSource.TxDataFromCalldata, offset, maxBlocks)
-		if err == nil {
-			return manifest
-		}
-		return defaultSourceManifest()
-	}
-	if len(dataSource.TxDataFromBlob) != 0 {
-		var concatenated []byte
-		for _, chunk := range dataSource.TxDataFromBlob {
-			concatenated = append(concatenated, chunk...)
-		}
-		manifest, err := decodeManifestPayload(concatenated, offset, maxBlocks)
-		if err == nil {
-			return manifest
-		}
-	}
-	return defaultSourceManifest()
 }
 
 func decodeBlobBackedSourceManifest(dataSource blobSourceDataView, offset uint64, maxBlocks int) (shastaSourceManifest, error) {

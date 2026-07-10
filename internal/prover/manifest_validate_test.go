@@ -36,11 +36,12 @@ const (
 	manifestTestLowGasBalance = uint64(250_000_000_000)
 )
 
-func TestValidateManifestBindingAcceptsInlineCalldataSource(t *testing.T) {
-	view := newManifestBindingFixture(t).view(t)
+func TestValidateManifestBindingRejectsUncommittedInlineManifest(t *testing.T) {
+	fixture := newManifestBindingFixture(t)
+	fixture.blobBacked = false
 
-	if err := ValidateGuestInputManifestBinding(view); err != nil {
-		t.Fatalf("validate manifest binding: %v", err)
+	if err := ValidateGuestInputManifestBinding(fixture.view(t)); err == nil {
+		t.Fatal("expected uncommitted inline manifest to be ignored")
 	}
 }
 
@@ -1252,6 +1253,7 @@ func newManifestBindingFixture(t *testing.T) *manifestBindingFixture {
 		anchorBlockNumber:     900,
 		lastAnchorBlockNumber: manifestUint64Ptr(899),
 		witnessStateNodes:     witnessStateNodes,
+		blobBacked:            true,
 	}
 	fixture.parentHeader.ParentHash = fixture.grandparentHeader.Hash()
 	return fixture
