@@ -808,6 +808,40 @@ func TestChainConfigForHoodiEnablesBlobForkAtUnzen(t *testing.T) {
 	}
 }
 
+func TestChainConfigForMainnetEnablesBlobForkAtUnzen(t *testing.T) {
+	const unzenTime uint64 = 1786021200
+
+	cfg, err := chainConfigFor(params.TaikoMainnetNetworkID.Uint64())
+	if err != nil {
+		t.Fatalf("chain config: %v", err)
+	}
+
+	if cfg.UnzenTime == nil || *cfg.UnzenTime != unzenTime {
+		t.Fatalf("unexpected unzen time: %v", cfg.UnzenTime)
+	}
+	if cfg.CancunTime == nil || *cfg.CancunTime != unzenTime {
+		t.Fatalf("unexpected cancun time: %v", cfg.CancunTime)
+	}
+	if cfg.PragueTime == nil || *cfg.PragueTime != unzenTime {
+		t.Fatalf("unexpected prague time: %v", cfg.PragueTime)
+	}
+	if cfg.OsakaTime == nil || *cfg.OsakaTime != unzenTime {
+		t.Fatalf("unexpected osaka time: %v", cfg.OsakaTime)
+	}
+	if cfg.IsCancun(common.Big0, unzenTime-1) {
+		t.Fatalf("unexpected cancun activation before unzen")
+	}
+	if !cfg.IsCancun(common.Big0, unzenTime) {
+		t.Fatalf("expected cancun activation at unzen")
+	}
+	if cfg.IsUnzen(unzenTime - 1) {
+		t.Fatalf("unexpected unzen activation before unzen")
+	}
+	if !cfg.IsUnzen(unzenTime) {
+		t.Fatalf("expected unzen activation at unzen")
+	}
+}
+
 func TestUnzenZkGasScheduleForFollowsTaikoGethDefaultSchedule(t *testing.T) {
 	for _, tc := range []struct {
 		name    string
