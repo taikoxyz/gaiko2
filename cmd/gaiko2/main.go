@@ -1,15 +1,20 @@
 package main
 
 import (
+	"context"
 	"encoding/json"
+	"errors"
 	"flag"
 	"fmt"
 	"io"
 	"net"
 	"net/http"
 	"os"
+	"os/signal"
 	"strconv"
 	"strings"
+	"syscall"
+	"time"
 
 	"github.com/taikoxyz/gaiko2/internal/api"
 	"github.com/taikoxyz/gaiko2/internal/prover"
@@ -18,7 +23,7 @@ import (
 
 var (
 	listenFn           = net.Listen
-	serveFn            = http.Serve
+	serveFn            = serveHTTP
 	newReplayServiceFn = func(cfg prover.ServiceConfig, runner prover.Runner) (prover.Service, error) {
 		return prover.NewConfiguredReplayService(cfg, runner)
 	}
@@ -28,18 +33,62 @@ var (
 )
 
 const (
+	serverReadHeaderTimeout = 10 * time.Second
+	serverIdleTimeout       = 2 * time.Minute
+	serverShutdownGrace     = 30 * time.Second
+)
+
+func newHTTPServer(handler http.Handler) *http.Server {
+	// ReadTimeout/WriteTimeout stay unset: request bodies reach ~92MB and
+	// proving runs for minutes, so only header reads and idle keep-alives
+	// are bounded here.
+	return &http.Server{
+		Handler:           handler,
+		ReadHeaderTimeout: serverReadHeaderTimeout,
+		IdleTimeout:       serverIdleTimeout,
+	}
+}
+
+func serveHTTP(ctx context.Context, listener net.Listener, handler http.Handler) error {
+	server := newHTTPServer(handler)
+
+	serveErr := make(chan error, 1)
+	go func() {
+		serveErr <- server.Serve(listener)
+	}()
+
+	select {
+	case err := <-serveErr:
+		if errors.Is(err, http.ErrServerClosed) {
+			return nil
+		}
+		return err
+	case <-ctx.Done():
+		shutdownCtx, cancel := context.WithTimeout(context.Background(), serverShutdownGrace)
+		defer cancel()
+		if err := server.Shutdown(shutdownCtx); err != nil {
+			return fmt.Errorf("shutdown http server: %w", err)
+		}
+		return nil
+	}
+}
+
+const (
 	envPort            = "GAIKO2_PORT"
 	envAttestationPath = "GAIKO2_ATTESTATION_PATH"
 )
 
 func main() {
-	if err := run(os.Args[1:], os.Stdout); err != nil {
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
+
+	if err := run(ctx, os.Args[1:], os.Stdout); err != nil {
 		fmt.Fprintln(os.Stderr, err)
 		os.Exit(1)
 	}
 }
 
-func run(args []string, stdout io.Writer) error {
+func run(ctx context.Context, args []string, stdout io.Writer) error {
 	if len(args) == 0 || args[0] == "help" || args[0] == "-h" || args[0] == "--help" {
 		printUsage(stdout)
 		return nil
@@ -84,7 +133,7 @@ func run(args []string, stdout io.Writer) error {
 			return err
 		}
 		_, _ = fmt.Fprintf(stdout, "listening on %s\n", formatListeningAddr(listener.Addr()))
-		return serveFn(listener, api.NewServer(service))
+		return serveFn(ctx, listener, api.NewServer(service))
 	default:
 		return fmt.Errorf("unknown command %q", args[0])
 	}

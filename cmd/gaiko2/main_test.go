@@ -2,6 +2,7 @@ package main
 
 import (
 	"bytes"
+	"context"
 	"errors"
 	"io"
 	"net"
@@ -10,6 +11,7 @@ import (
 	"os"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/taikoxyz/gaiko2/internal/prover"
 )
@@ -31,12 +33,12 @@ func TestRunServerPrintsStartupSummary(t *testing.T) {
 	listenFn = func(network, addr string) (net.Listener, error) {
 		return fakeListener{addr: fakeAddr("127.0.0.1:18080")}, nil
 	}
-	serveFn = func(net.Listener, http.Handler) error {
+	serveFn = func(context.Context, net.Listener, http.Handler) error {
 		return errors.New("stop server")
 	}
 
 	var stdout bytes.Buffer
-	err := run([]string{"server", ":18080"}, &stdout)
+	err := run(context.Background(), []string{"server", ":18080"}, &stdout)
 	if err == nil || err.Error() != "stop server" {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -63,12 +65,12 @@ func TestRunServerPrintsListeningAddress(t *testing.T) {
 	listenFn = func(network, addr string) (net.Listener, error) {
 		return fakeListener{addr: fakeAddr("127.0.0.1:18080")}, nil
 	}
-	serveFn = func(net.Listener, http.Handler) error {
+	serveFn = func(context.Context, net.Listener, http.Handler) error {
 		return errors.New("stop server")
 	}
 
 	var stdout bytes.Buffer
-	err := run([]string{"server", ":18080"}, &stdout)
+	err := run(context.Background(), []string{"server", ":18080"}, &stdout)
 	if err == nil || err.Error() != "stop server" {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -105,12 +107,12 @@ func TestRunServerUsesPortFromEnv(t *testing.T) {
 		}
 		return fakeListener{addr: fakeAddr("127.0.0.1:19090")}, nil
 	}
-	serveFn = func(net.Listener, http.Handler) error {
+	serveFn = func(context.Context, net.Listener, http.Handler) error {
 		return errors.New("stop server")
 	}
 
 	var stdout bytes.Buffer
-	err := run([]string{"server"}, &stdout)
+	err := run(context.Background(), []string{"server"}, &stdout)
 	if err == nil || err.Error() != "stop server" {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -137,7 +139,7 @@ func TestRunServerRejectsV1WithoutGuestInput(t *testing.T) {
 	newReplayServiceFn = func(cfg prover.ServiceConfig, runner prover.Runner) (prover.Service, error) {
 		return prover.StubService{}, nil
 	}
-	serveFn = func(_ net.Listener, handler http.Handler) error {
+	serveFn = func(_ context.Context, _ net.Listener, handler http.Handler) error {
 		req := httptest.NewRequest(http.MethodPost, "/prove/shasta", bytes.NewBufferString(`{
 			"schema":"raiko2-shasta-request-v1",
 			"payload":{}
@@ -157,10 +159,83 @@ func TestRunServerRejectsV1WithoutGuestInput(t *testing.T) {
 	}
 
 	var stdout bytes.Buffer
-	err := run([]string{"server", ":18080"}, &stdout)
+	err := run(context.Background(), []string{"server", ":18080"}, &stdout)
 	if err == nil || err.Error() != "stop server" {
 		t.Fatalf("unexpected error: %v", err)
 	}
+}
+
+func TestNewHTTPServerSetsConnectionTimeouts(t *testing.T) {
+	server := newHTTPServer(http.NewServeMux())
+	if server.ReadHeaderTimeout <= 0 {
+		t.Fatalf("expected positive ReadHeaderTimeout, got %v", server.ReadHeaderTimeout)
+	}
+	if server.IdleTimeout <= 0 {
+		t.Fatalf("expected positive IdleTimeout, got %v", server.IdleTimeout)
+	}
+}
+
+func TestRunServerShutsDownGracefullyOnContextCancel(t *testing.T) {
+	prevListen := listenFn
+	t.Cleanup(func() {
+		listenFn = prevListen
+	})
+
+	addrCh := make(chan net.Addr, 1)
+	listenFn = func(network, _ string) (net.Listener, error) {
+		listener, err := net.Listen(network, "127.0.0.1:0")
+		if err != nil {
+			return nil, err
+		}
+		addrCh <- listener.Addr()
+		return listener, nil
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	done := make(chan error, 1)
+	var stdout bytes.Buffer
+	go func() {
+		done <- run(ctx, []string{"server", ":0"}, &stdout)
+	}()
+
+	var addr net.Addr
+	select {
+	case addr = <-addrCh:
+	case err := <-done:
+		t.Fatalf("run exited before listening: %v", err)
+	case <-time.After(5 * time.Second):
+		t.Fatal("server never started listening")
+	}
+	waitForHealthz(t, addr)
+
+	cancel()
+
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatalf("expected clean shutdown, got %v", err)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("run did not return after context cancel")
+	}
+}
+
+func waitForHealthz(t *testing.T, addr net.Addr) {
+	t.Helper()
+	deadline := time.Now().Add(5 * time.Second)
+	for time.Now().Before(deadline) {
+		resp, err := http.Get("http://" + addr.String() + "/healthz")
+		if err == nil {
+			_ = resp.Body.Close()
+			if resp.StatusCode == http.StatusOK {
+				return
+			}
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	t.Fatal("server never became healthy")
 }
 
 func TestRunBootstrapDispatchesLifecycleCommand(t *testing.T) {
@@ -180,7 +255,7 @@ func TestRunBootstrapDispatchesLifecycleCommand(t *testing.T) {
 	}
 
 	var stdout bytes.Buffer
-	if err := run([]string{"bootstrap"}, &stdout); err != nil {
+	if err := run(context.Background(), []string{"bootstrap"}, &stdout); err != nil {
 		t.Fatalf("run bootstrap: %v", err)
 	}
 	if !called {
@@ -208,7 +283,7 @@ func TestRunCheckDispatchesLifecycleCommand(t *testing.T) {
 	}
 
 	var stdout bytes.Buffer
-	if err := run([]string{"check"}, &stdout); err != nil {
+	if err := run(context.Background(), []string{"check"}, &stdout); err != nil {
 		t.Fatalf("run check: %v", err)
 	}
 	if !called {
@@ -236,7 +311,7 @@ func TestRunMetadataDispatchesLifecycleCommand(t *testing.T) {
 	}
 
 	var stdout bytes.Buffer
-	if err := run([]string{"metadata"}, &stdout); err != nil {
+	if err := run(context.Background(), []string{"metadata"}, &stdout); err != nil {
 		t.Fatalf("run metadata: %v", err)
 	}
 	if !called {
