@@ -2,8 +2,8 @@ package prover
 
 import (
 	"context"
-	"encoding/json"
 	"encoding/hex"
+	"encoding/json"
 	"strings"
 	"testing"
 
