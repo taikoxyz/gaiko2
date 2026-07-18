@@ -17,7 +17,15 @@ const (
 	proveShastaAggregatePath = "/prove/shasta-aggregate"
 )
 
+// maxRequestBodyBytes bounds /prove request bodies. Legitimate GuestInput
+// payloads already reach ~92MB, so the cap is generous rather than tight.
+const maxRequestBodyBytes int64 = 512 << 20
+
 func NewServer(service prover.Service) http.Handler {
+	return newServer(service, maxRequestBodyBytes)
+}
+
+func newServer(service prover.Service, bodyLimit int64) http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc(healthzPath, func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodGet {
@@ -37,10 +45,12 @@ func NewServer(service prover.Service) http.Handler {
 			return
 		}
 
+		r.Body = http.MaxBytesReader(w, r.Body, bodyLimit)
 		var req protocol.ShastaRequest
 		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-			log.Printf("failed prove/shasta request code=%s message=%q", "INVALID_JSON", err.Error())
-			writeError(w, http.StatusBadRequest, "INVALID_JSON", err.Error())
+			code, statusCode := decodeErrorResponse(err)
+			log.Printf("failed prove/shasta request code=%s message=%q", code, err.Error())
+			writeError(w, statusCode, code, err.Error())
 			return
 		}
 		validated, err := prover.ValidateRequestWithContext(r.Context(), req)
@@ -93,10 +103,12 @@ func NewServer(service prover.Service) http.Handler {
 			return
 		}
 
+		r.Body = http.MaxBytesReader(w, r.Body, bodyLimit)
 		var req protocol.ShastaAggregateRequest
 		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-			log.Printf("failed prove/shasta-aggregate request code=%s message=%q", "INVALID_JSON", err.Error())
-			writeError(w, http.StatusBadRequest, "INVALID_JSON", err.Error())
+			code, statusCode := decodeErrorResponse(err)
+			log.Printf("failed prove/shasta-aggregate request code=%s message=%q", code, err.Error())
+			writeError(w, statusCode, code, err.Error())
 			return
 		}
 
@@ -141,6 +153,14 @@ func NewServer(service prover.Service) http.Handler {
 		writeJSON(w, http.StatusOK, protocol.Success(result))
 	})
 	return mux
+}
+
+func decodeErrorResponse(err error) (code string, statusCode int) {
+	var maxBytesErr *http.MaxBytesError
+	if errors.As(err, &maxBytesErr) {
+		return "REQUEST_TOO_LARGE", http.StatusRequestEntityTooLarge
+	}
+	return "INVALID_JSON", http.StatusBadRequest
 }
 
 func aggregateProposalIDSummary(proofs []prover.AggregateProofView) string {

@@ -97,6 +97,46 @@ func TestNewServerRejectsV1WithoutGuestInput(t *testing.T) {
 	}
 }
 
+func TestNewServerRejectsOversizedProveBody(t *testing.T) {
+	server := newServer(fakeService{}, 64)
+	body := append([]byte(`{"schema":"`), bytes.Repeat([]byte("a"), 128)...)
+	req := httptest.NewRequest(http.MethodPost, "/prove/shasta", bytes.NewReader(body))
+	recorder := httptest.NewRecorder()
+
+	server.ServeHTTP(recorder, req)
+
+	if recorder.Code != http.StatusRequestEntityTooLarge {
+		t.Fatalf("unexpected status: %d", recorder.Code)
+	}
+	var resp protocol.ProofResponse
+	if err := json.Unmarshal(recorder.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+	if resp.Error == nil || resp.Error.Code != "REQUEST_TOO_LARGE" {
+		t.Fatalf("unexpected error payload: %+v", resp.Error)
+	}
+}
+
+func TestNewServerRejectsOversizedAggregateBody(t *testing.T) {
+	server := newServer(fakeService{}, 64)
+	body := append([]byte(`{"schema":"`), bytes.Repeat([]byte("a"), 128)...)
+	req := httptest.NewRequest(http.MethodPost, "/prove/shasta-aggregate", bytes.NewReader(body))
+	recorder := httptest.NewRecorder()
+
+	server.ServeHTTP(recorder, req)
+
+	if recorder.Code != http.StatusRequestEntityTooLarge {
+		t.Fatalf("unexpected status: %d", recorder.Code)
+	}
+	var resp protocol.ProofResponse
+	if err := json.Unmarshal(recorder.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+	if resp.Error == nil || resp.Error.Code != "REQUEST_TOO_LARGE" {
+		t.Fatalf("unexpected error payload: %+v", resp.Error)
+	}
+}
+
 func TestNewServerReturnsSuccessEnvelope(t *testing.T) {
 	server := NewServer(fakeService{
 		result: protocol.ProofResult{
