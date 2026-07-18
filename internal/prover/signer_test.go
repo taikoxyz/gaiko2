@@ -112,6 +112,30 @@ func TestNewConfiguredReplayServiceTEERequiresBootstrappedKeyAtStartup(t *testin
 	}
 }
 
+func TestNewConfiguredReplayServiceTEERequiresInstanceIDAtStartup(t *testing.T) {
+	prev := newTEEProviderFn
+	t.Cleanup(func() {
+		newTEEProviderFn = prev
+	})
+
+	privateKey, err := crypto.GenerateKey()
+	if err != nil {
+		t.Fatalf("generate key: %v", err)
+	}
+	newTEEProviderFn = func(tee.Config) (tee.Provider, error) {
+		return &fakeTEEProvider{privateKey: privateKey}, nil
+	}
+
+	_, err = NewConfiguredReplayService(ServiceConfig{
+		Mode:      ProvingModeTEE,
+		TeeType:   tee.TypeEGo,
+		SecretDir: t.TempDir(),
+	}, nil)
+	if err == nil || err.Error() != "tee proving requires GAIKO2_INSTANCE_ID or a registered GAIKO2_FORK mapping" {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
 func TestNewConfiguredReplayServiceTEELoadsBootstrappedKeyAtStartup(t *testing.T) {
 	prev := newTEEProviderFn
 	t.Cleanup(func() {
@@ -128,10 +152,11 @@ func TestNewConfiguredReplayServiceTEELoadsBootstrappedKeyAtStartup(t *testing.T
 	}
 
 	_, err = NewConfiguredReplayService(ServiceConfig{
-		Mode:       ProvingModeTEE,
-		TeeType:    tee.TypeEGo,
-		SecretDir:  t.TempDir(),
-		InstanceID: 0x12345678,
+		Mode:                 ProvingModeTEE,
+		TeeType:              tee.TypeEGo,
+		SecretDir:            t.TempDir(),
+		InstanceID:           0x12345678,
+		InstanceIDConfigured: true,
 	}, nil)
 	if err != nil {
 		t.Fatalf("new configured replay service: %v", err)

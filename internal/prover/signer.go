@@ -100,6 +100,9 @@ func NewConfiguredReplayService(cfg ServiceConfig, runner Runner) (ReplayService
 		if err != nil {
 			return ReplayService{}, fmt.Errorf("tee bootstrap required: %w", err)
 		}
+		if !cfg.InstanceIDConfigured {
+			return ReplayService{}, fmt.Errorf("tee proving requires %s or a registered %s mapping", envInstanceID, envFork)
+		}
 		signer = newTEEProofSignerFromConfig(privateKey, cfg)
 	default:
 		return ReplayService{}, fmt.Errorf("unsupported proving mode %q", cfg.Mode)
