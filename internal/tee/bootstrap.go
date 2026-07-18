@@ -2,6 +2,7 @@ package tee
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -24,19 +25,36 @@ type BootstrapData struct {
 
 type RegisteredForks map[string]uint64
 
-func Bootstrap(provider Provider) (BootstrapData, error) {
+// ErrPrivateKeyExists is returned by Bootstrap when a sealed key is already
+// present and force was not requested.
+var ErrPrivateKeyExists = errors.New("tee private key already exists")
+
+func Bootstrap(provider Provider, force bool) (BootstrapData, error) {
+	if !force {
+		exists, err := provider.HasPrivateKey()
+		if err != nil {
+			return BootstrapData{}, fmt.Errorf("check existing tee private key: %w", err)
+		}
+		if exists {
+			return BootstrapData{}, ErrPrivateKeyExists
+		}
+	}
+
 	privateKey, err := crypto.GenerateKey()
 	if err != nil {
 		return BootstrapData{}, fmt.Errorf("generate tee private key: %w", err)
 	}
-	if err := provider.SavePrivateKey(privateKey); err != nil {
-		return BootstrapData{}, fmt.Errorf("save tee private key: %w", err)
-	}
 
+	// Fetch the quote before persisting anything so a quote failure cannot
+	// leave a fresh key on disk that no saved bootstrap data describes.
 	instanceAddress := crypto.PubkeyToAddress(privateKey.PublicKey)
 	quote, err := provider.LoadQuote(instanceAddress)
 	if err != nil {
 		return BootstrapData{}, fmt.Errorf("load tee quote: %w", err)
+	}
+
+	if err := provider.SavePrivateKey(privateKey); err != nil {
+		return BootstrapData{}, fmt.Errorf("save tee private key: %w", err)
 	}
 
 	return BootstrapData{
@@ -106,7 +124,42 @@ func writeJSON(path string, value any) error {
 		return err
 	}
 	encoded = append(encoded, '\n')
-	return os.WriteFile(path, encoded, 0o644)
+	return atomicWriteFile(path, encoded, 0o644)
+}
+
+// atomicWriteFile writes via a temp file in the target directory and renames
+// it into place, so a crash mid-write can never leave a truncated key or
+// torn JSON behind.
+func atomicWriteFile(path string, data []byte, perm os.FileMode) error {
+	tmp, err := os.CreateTemp(filepath.Dir(path), filepath.Base(path)+".tmp-*")
+	if err != nil {
+		return err
+	}
+	tmpName := tmp.Name()
+
+	writeErr := func() error {
+		if _, err := tmp.Write(data); err != nil {
+			return err
+		}
+		if err := tmp.Chmod(perm); err != nil {
+			return err
+		}
+		if err := tmp.Sync(); err != nil {
+			return err
+		}
+		return tmp.Close()
+	}()
+	if writeErr != nil {
+		_ = tmp.Close()
+		_ = os.Remove(tmpName)
+		return writeErr
+	}
+
+	if err := os.Rename(tmpName, path); err != nil {
+		_ = os.Remove(tmpName)
+		return err
+	}
+	return nil
 }
 
 func readJSON(path string, value any) error {

@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/taikoxyz/gaiko2/internal/prover"
+	"github.com/taikoxyz/gaiko2/internal/tee"
 )
 
 func TestRunServerPrintsStartupSummary(t *testing.T) {
@@ -263,6 +264,52 @@ func TestRunBootstrapDispatchesLifecycleCommand(t *testing.T) {
 	}
 	if stdout.String() != "bootstrapped\n" {
 		t.Fatalf("unexpected bootstrap output: %q", stdout.String())
+	}
+}
+
+func TestRunBootstrapCommandExplainsForceOnExistingKey(t *testing.T) {
+	prev := teeBootstrapFn
+	t.Cleanup(func() {
+		teeBootstrapFn = prev
+	})
+
+	teeBootstrapFn = func(tee.Provider, bool) (tee.BootstrapData, error) {
+		return tee.BootstrapData{}, tee.ErrPrivateKeyExists
+	}
+
+	var stdout bytes.Buffer
+	err := run(context.Background(), []string{
+		"bootstrap", "--secret-dir", t.TempDir(), "--config-dir", t.TempDir(),
+	}, &stdout)
+	if !errors.Is(err, tee.ErrPrivateKeyExists) {
+		t.Fatalf("expected ErrPrivateKeyExists, got %v", err)
+	}
+	if !strings.Contains(err.Error(), "--force") {
+		t.Fatalf("expected guidance mentioning --force, got %q", err.Error())
+	}
+}
+
+func TestRunBootstrapCommandForwardsForceFlag(t *testing.T) {
+	prev := teeBootstrapFn
+	t.Cleanup(func() {
+		teeBootstrapFn = prev
+	})
+
+	var gotForce bool
+	teeBootstrapFn = func(_ tee.Provider, force bool) (tee.BootstrapData, error) {
+		gotForce = force
+		return tee.BootstrapData{}, nil
+	}
+
+	var stdout bytes.Buffer
+	err := run(context.Background(), []string{
+		"bootstrap", "--force", "--secret-dir", t.TempDir(), "--config-dir", t.TempDir(),
+	}, &stdout)
+	if err != nil {
+		t.Fatalf("run bootstrap --force: %v", err)
+	}
+	if !gotForce {
+		t.Fatalf("expected --force to be forwarded to tee.Bootstrap")
 	}
 }
 

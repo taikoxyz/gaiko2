@@ -2,7 +2,9 @@ package tee
 
 import (
 	"crypto/ecdsa"
+	"errors"
 	"fmt"
+	"io/fs"
 	"os"
 	"path/filepath"
 
@@ -32,6 +34,17 @@ func (p *EGoProvider) LoadQuote(instance common.Address) (Quote, error) {
 	return StaticQuote(report[16:]), nil
 }
 
+func (p *EGoProvider) HasPrivateKey() (bool, error) {
+	_, err := os.Stat(filepath.Join(p.secretDir, privateKeyFilename))
+	if errors.Is(err, fs.ErrNotExist) {
+		return false, nil
+	}
+	if err != nil {
+		return false, err
+	}
+	return true, nil
+}
+
 func (p *EGoProvider) LoadPrivateKey() (*ecdsa.PrivateKey, error) {
 	sealedText, err := os.ReadFile(filepath.Join(p.secretDir, privateKeyFilename))
 	if err != nil {
@@ -54,5 +67,5 @@ func (p *EGoProvider) SavePrivateKey(privKey *ecdsa.PrivateKey) error {
 	if err := os.MkdirAll(p.secretDir, 0o700); err != nil {
 		return err
 	}
-	return os.WriteFile(filepath.Join(p.secretDir, privateKeyFilename), sealedText, 0o600)
+	return atomicWriteFile(filepath.Join(p.secretDir, privateKeyFilename), sealedText, 0o600)
 }

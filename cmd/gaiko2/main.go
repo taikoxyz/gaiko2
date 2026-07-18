@@ -30,6 +30,7 @@ var (
 	bootstrapCommandFn = runBootstrapCommand
 	checkCommandFn     = runCheckCommand
 	metadataCommandFn  = runMetadataCommand
+	teeBootstrapFn     = tee.Bootstrap
 )
 
 const (
@@ -189,6 +190,7 @@ func runBootstrapCommand(args []string, stdout io.Writer) error {
 	teeType := flags.String("tee-type", strings.TrimSpace(os.Getenv("GAIKO2_TEE_TYPE")), "tee provider type")
 	secretDir := flags.String("secret-dir", envOrDefault("GAIKO2_SECRET_DIR", tee.DefaultSecretDir()), "directory for sealed keys")
 	configDir := flags.String("config-dir", envOrDefault("GAIKO2_CONFIG_DIR", tee.DefaultConfigDir()), "directory for bootstrap metadata")
+	force := flags.Bool("force", false, "regenerate the tee key even if a sealed key already exists")
 	if err := flags.Parse(args); err != nil {
 		return err
 	}
@@ -201,8 +203,11 @@ func runBootstrapCommand(args []string, stdout io.Writer) error {
 		return err
 	}
 
-	data, err := tee.Bootstrap(provider)
+	data, err := teeBootstrapFn(provider, *force)
 	if err != nil {
+		if errors.Is(err, tee.ErrPrivateKeyExists) {
+			return fmt.Errorf("%w; re-run with --force to replace it (the old key and any on-chain registration bound to it become unusable)", err)
+		}
 		return err
 	}
 	if err := tee.SaveBootstrapData(*configDir, data); err != nil {

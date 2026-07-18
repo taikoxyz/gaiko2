@@ -194,6 +194,10 @@ func (f *fakeTEEProvider) SavePrivateKey(*ecdsa.PrivateKey) error {
 	return nil
 }
 
+func (f *fakeTEEProvider) HasPrivateKey() (bool, error) {
+	return f.privateKey != nil, nil
+}
+
 func normalizeRecoveryID(sig [65]byte) []byte {
 	out := sig[:]
 	out[64] -= 27
