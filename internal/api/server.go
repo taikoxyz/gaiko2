@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"log"
 	"net/http"
 
@@ -45,9 +46,8 @@ func newServer(service prover.Service, bodyLimit int64) http.Handler {
 			return
 		}
 
-		r.Body = http.MaxBytesReader(w, r.Body, bodyLimit)
 		var req protocol.ShastaRequest
-		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		if err := decodeRequest(w, r, bodyLimit, &req); err != nil {
 			code, statusCode := decodeErrorResponse(err)
 			log.Printf("failed prove/shasta request code=%s message=%q", code, err.Error())
 			writeError(w, statusCode, code, err.Error())
@@ -103,9 +103,8 @@ func newServer(service prover.Service, bodyLimit int64) http.Handler {
 			return
 		}
 
-		r.Body = http.MaxBytesReader(w, r.Body, bodyLimit)
 		var req protocol.ShastaAggregateRequest
-		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		if err := decodeRequest(w, r, bodyLimit, &req); err != nil {
 			code, statusCode := decodeErrorResponse(err)
 			log.Printf("failed prove/shasta-aggregate request code=%s message=%q", code, err.Error())
 			writeError(w, statusCode, code, err.Error())
@@ -153,6 +152,27 @@ func newServer(service prover.Service, bodyLimit int64) http.Handler {
 		writeJSON(w, http.StatusOK, protocol.Success(result))
 	})
 	return mux
+}
+
+func decodeRequest(w http.ResponseWriter, r *http.Request, limit int64, dst any) error {
+	if r.ContentLength > limit {
+		return &http.MaxBytesError{Limit: limit}
+	}
+	r.Body = http.MaxBytesReader(w, r.Body, limit)
+	decoder := json.NewDecoder(r.Body)
+	if err := decoder.Decode(dst); err != nil {
+		return err
+	}
+
+	var extra struct{}
+	err := decoder.Decode(&extra)
+	if errors.Is(err, io.EOF) {
+		return nil
+	}
+	if err == nil {
+		return errors.New("request body must contain exactly one JSON value")
+	}
+	return err
 }
 
 func decodeErrorResponse(err error) (code string, statusCode int) {
