@@ -18,6 +18,7 @@ import (
 type fakeProvider struct {
 	hasKey    bool
 	savedKey  *ecdsa.PrivateKey
+	loadErr   error
 	quote     []byte
 	quoteErr  error
 	saveErr   error
@@ -40,10 +41,26 @@ func (f *fakeProvider) LoadQuote(common.Address) (Quote, error) {
 
 func (f *fakeProvider) LoadPrivateKey() (*ecdsa.PrivateKey, error) {
 	f.calls = append(f.calls, "load")
+	if f.loadErr != nil {
+		return nil, f.loadErr
+	}
 	if f.savedKey == nil {
 		return nil, errors.New("missing key")
 	}
 	return f.savedKey, nil
+}
+
+func TestBootstrapDataForExistingKeyMarksUnreadablePrivateKey(t *testing.T) {
+	unsealErr := errors.New("sealed key belongs to another enclave")
+	provider := &fakeProvider{loadErr: unsealErr}
+
+	_, _, err := BootstrapDataForExistingKey(provider, t.TempDir())
+	if !errors.Is(err, ErrPrivateKeyUnavailable) {
+		t.Fatalf("expected ErrPrivateKeyUnavailable, got %v", err)
+	}
+	if !errors.Is(err, unsealErr) {
+		t.Fatalf("expected unseal cause, got %v", err)
+	}
 }
 
 func (f *fakeProvider) SavePrivateKey(privKey *ecdsa.PrivateKey, overwrite bool) error {

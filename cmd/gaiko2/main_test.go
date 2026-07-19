@@ -305,6 +305,36 @@ func TestRunBootstrapCommandExplainsForceOnExistingKey(t *testing.T) {
 	}
 }
 
+func TestRunBootstrapCommandExplainsForceWhenExistingKeyIsUnavailable(t *testing.T) {
+	prevBootstrap := teeBootstrapFn
+	prevExisting := teeBootstrapDataForExistingKeyFn
+	t.Cleanup(func() {
+		teeBootstrapFn = prevBootstrap
+		teeBootstrapDataForExistingKeyFn = prevExisting
+	})
+
+	teeBootstrapFn = func(tee.Provider, bool) (tee.BootstrapData, error) {
+		return tee.BootstrapData{}, tee.ErrPrivateKeyExists
+	}
+	unsealErr := errors.New("sealed key belongs to another enclave")
+	teeBootstrapDataForExistingKeyFn = func(tee.Provider, string) (tee.BootstrapData, bool, error) {
+		return tee.BootstrapData{}, false, errors.Join(tee.ErrPrivateKeyUnavailable, unsealErr)
+	}
+
+	err := run(context.Background(), []string{
+		"bootstrap", "--secret-dir", t.TempDir(), "--config-dir", t.TempDir(),
+	}, io.Discard)
+	if !errors.Is(err, tee.ErrPrivateKeyExists) {
+		t.Fatalf("expected ErrPrivateKeyExists, got %v", err)
+	}
+	if !errors.Is(err, unsealErr) {
+		t.Fatalf("expected unseal cause, got %v", err)
+	}
+	if !strings.Contains(err.Error(), "--force") {
+		t.Fatalf("expected guidance mentioning --force, got %q", err.Error())
+	}
+}
+
 func TestRunBootstrapCommandRecoversMetadataWithoutRotatingKey(t *testing.T) {
 	prevBootstrap := teeBootstrapFn
 	prevExisting := teeBootstrapDataForExistingKeyFn

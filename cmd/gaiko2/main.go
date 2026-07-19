@@ -222,6 +222,13 @@ func runBootstrapCommand(args []string, stdout io.Writer) error {
 	if errors.Is(err, tee.ErrPrivateKeyExists) {
 		recovered, matches, recoverErr := teeBootstrapDataForExistingKeyFn(provider, *configDir)
 		if recoverErr != nil {
+			if errors.Is(recoverErr, tee.ErrPrivateKeyUnavailable) {
+				return fmt.Errorf(
+					"%w; recover bootstrap data: %w; re-run with --force to replace it (the old key and any on-chain registration bound to it become unusable)",
+					err,
+					recoverErr,
+				)
+			}
 			return fmt.Errorf("recover bootstrap data: %w", recoverErr)
 		}
 		if matches {

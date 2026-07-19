@@ -92,6 +92,25 @@ The bootstrap command writes:
   `GAIKO2_ATTESTATION_PATH` is available in the image
 - `priv.gaiko2.key` under `GAIKO2_SECRET_DIR`
 
+Re-running bootstrap without `--force` never rotates an existing tee key. If
+the bootstrap JSON is missing, malformed, or identifies a different key, the
+command rebuilds it from the existing sealed key and a fresh quote. Matching
+metadata is left unchanged. If the sealed key cannot be loaded, for example
+because it belongs to a different enclave identity, the error retains the
+underlying cause and explains that `--force` can replace it.
+
+To intentionally generate and install a replacement key, run:
+
+```bash
+GAIKO2_PROVING_MODE=tee GAIKO2_TEE_TYPE=ego \
+  GAIKO2_CONFIG_DIR=/tmp/gaiko2-config \
+  GAIKO2_SECRET_DIR=/tmp/gaiko2-secrets \
+  go run ./cmd/gaiko2 bootstrap --force
+```
+
+Before replacement starts, the command writes a warning to stderr. Replacing
+the key makes the old key and any on-chain registration bound to it unusable.
+
 For tee Docker deployments, the container entrypoint copies the embedded
 `attestation.json` into `GAIKO2_CONFIG_DIR/attestation.gaiko2.json` before the
 enclave bootstrap runs.

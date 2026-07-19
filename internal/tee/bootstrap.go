@@ -32,6 +32,10 @@ type RegisteredForks map[string]uint64
 // present and force was not requested.
 var ErrPrivateKeyExists = errors.New("tee private key already exists")
 
+// ErrPrivateKeyUnavailable identifies an existing sealed key that cannot be
+// loaded, including keys sealed to a different enclave identity.
+var ErrPrivateKeyUnavailable = errors.New("tee private key is unavailable")
+
 func Bootstrap(provider Provider, force bool) (BootstrapData, error) {
 	if !force {
 		exists, err := provider.HasPrivateKey()
@@ -78,7 +82,11 @@ func bootstrapData(provider Provider, privateKey *ecdsa.PrivateKey) (BootstrapDa
 func BootstrapDataForExistingKey(provider Provider, configDir string) (BootstrapData, bool, error) {
 	privateKey, err := provider.LoadPrivateKey()
 	if err != nil {
-		return BootstrapData{}, false, fmt.Errorf("load existing tee private key: %w", err)
+		return BootstrapData{}, false, fmt.Errorf(
+			"%w: load existing tee private key: %w",
+			ErrPrivateKeyUnavailable,
+			err,
+		)
 	}
 	publicKey := crypto.FromECDSAPub(&privateKey.PublicKey)
 	address := crypto.PubkeyToAddress(privateKey.PublicKey)
