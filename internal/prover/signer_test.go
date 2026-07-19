@@ -190,7 +190,7 @@ func (f *fakeTEEProvider) LoadPrivateKey() (*ecdsa.PrivateKey, error) {
 	return f.privateKey, nil
 }
 
-func (f *fakeTEEProvider) SavePrivateKey(*ecdsa.PrivateKey) error {
+func (f *fakeTEEProvider) SavePrivateKey(*ecdsa.PrivateKey, bool) error {
 	return nil
 }
 

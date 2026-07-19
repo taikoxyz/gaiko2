@@ -53,7 +53,7 @@ func Bootstrap(provider Provider, force bool) (BootstrapData, error) {
 		return BootstrapData{}, fmt.Errorf("load tee quote: %w", err)
 	}
 
-	if err := provider.SavePrivateKey(privateKey); err != nil {
+	if err := provider.SavePrivateKey(privateKey, force); err != nil {
 		return BootstrapData{}, fmt.Errorf("save tee private key: %w", err)
 	}
 
@@ -124,43 +124,69 @@ func writeJSON(path string, value any) error {
 		return err
 	}
 	encoded = append(encoded, '\n')
-	return atomicWriteFile(path, encoded, 0o644)
+	return atomicWriteFile(path, encoded, 0o644, true)
 }
 
-// atomicWriteFile writes via a temp file in the target directory and renames
-// it into place, so a crash mid-write can never leave a truncated key or
-// torn JSON behind.
-func atomicWriteFile(path string, data []byte, perm os.FileMode) error {
-	tmp, err := os.CreateTemp(filepath.Dir(path), filepath.Base(path)+".tmp-*")
+// atomicWriteFile writes via a temp file in the target directory and installs
+// it atomically, so a crash mid-write can never leave a truncated key or torn
+// JSON behind. When overwrite is false, installation fails if path exists.
+func atomicWriteFile(path string, data []byte, perm os.FileMode, overwrite bool) error {
+	dirPath := filepath.Dir(path)
+	tmp, err := os.CreateTemp(dirPath, filepath.Base(path)+".tmp-*")
 	if err != nil {
 		return err
 	}
 	tmpName := tmp.Name()
-
-	writeErr := func() error {
-		if _, err := tmp.Write(data); err != nil {
-			return err
+	cleanup := true
+	defer func() {
+		if cleanup {
+			_ = os.Remove(tmpName)
 		}
-		if err := tmp.Chmod(perm); err != nil {
-			return err
-		}
-		if err := tmp.Sync(); err != nil {
-			return err
-		}
-		return tmp.Close()
 	}()
-	if writeErr != nil {
-		_ = tmp.Close()
-		_ = os.Remove(tmpName)
-		return writeErr
-	}
 
-	if err := os.Rename(tmpName, path); err != nil {
-		_ = os.Remove(tmpName)
+	if _, err := tmp.Write(data); err != nil {
+		_ = tmp.Close()
 		return err
 	}
-	return nil
+	if err := tmp.Chmod(perm); err != nil {
+		_ = tmp.Close()
+		return err
+	}
+	if err := tmp.Sync(); err != nil {
+		_ = tmp.Close()
+		return err
+	}
+	if err := tmp.Close(); err != nil {
+		return err
+	}
+
+	if overwrite {
+		if err := os.Rename(tmpName, path); err != nil {
+			return err
+		}
+		cleanup = false
+	} else {
+		if err := os.Link(tmpName, path); err != nil {
+			return err
+		}
+		if err := os.Remove(tmpName); err != nil {
+			return err
+		}
+		cleanup = false
+	}
+	return syncDirectoryFn(dirPath)
 }
+
+func syncDirectory(path string) error {
+	dir, err := os.Open(path)
+	if err != nil {
+		return err
+	}
+	defer dir.Close()
+	return dir.Sync()
+}
+
+var syncDirectoryFn = syncDirectory
 
 func readJSON(path string, value any) error {
 	contents, err := os.ReadFile(path)

@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"crypto/ecdsa"
 	"errors"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -15,11 +16,13 @@ import (
 )
 
 type fakeProvider struct {
-	hasKey   bool
-	savedKey *ecdsa.PrivateKey
-	quote    []byte
-	quoteErr error
-	calls    []string
+	hasKey    bool
+	savedKey  *ecdsa.PrivateKey
+	quote     []byte
+	quoteErr  error
+	saveErr   error
+	overwrite bool
+	calls     []string
 }
 
 func (f *fakeProvider) HasPrivateKey() (bool, error) {
@@ -43,8 +46,12 @@ func (f *fakeProvider) LoadPrivateKey() (*ecdsa.PrivateKey, error) {
 	return f.savedKey, nil
 }
 
-func (f *fakeProvider) SavePrivateKey(privKey *ecdsa.PrivateKey) error {
+func (f *fakeProvider) SavePrivateKey(privKey *ecdsa.PrivateKey, overwrite bool) error {
 	f.calls = append(f.calls, "save")
+	f.overwrite = overwrite
+	if f.saveErr != nil {
+		return f.saveErr
+	}
 	f.savedKey = privKey
 	return nil
 }
@@ -88,6 +95,18 @@ func TestBootstrapFetchesQuoteBeforeSavingKey(t *testing.T) {
 	}
 }
 
+func TestBootstrapReturnsFinalInstallCollision(t *testing.T) {
+	provider := &fakeProvider{
+		hasKey:  false,
+		quote:   []byte{0xca, 0xfe},
+		saveErr: ErrPrivateKeyExists,
+	}
+	_, err := Bootstrap(provider, false)
+	if !errors.Is(err, ErrPrivateKeyExists) {
+		t.Fatalf("expected final install collision, got %v", err)
+	}
+}
+
 func TestBootstrapReturnsIdentityConsistentWithSavedKey(t *testing.T) {
 	provider := &fakeProvider{quote: []byte{0xca, 0xfe, 0xba, 0xbe}}
 
@@ -113,7 +132,7 @@ func TestAtomicWriteFileWritesContentWithPerm(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "out.json")
 
-	if err := atomicWriteFile(path, []byte("hello"), 0o644); err != nil {
+	if err := atomicWriteFile(path, []byte("hello"), 0o644, true); err != nil {
 		t.Fatalf("atomic write: %v", err)
 	}
 
@@ -147,7 +166,7 @@ func TestAtomicWriteFileReplacesExistingFile(t *testing.T) {
 		t.Fatalf("seed old file: %v", err)
 	}
 
-	if err := atomicWriteFile(path, []byte("new"), 0o600); err != nil {
+	if err := atomicWriteFile(path, []byte("new"), 0o600, true); err != nil {
 		t.Fatalf("atomic write: %v", err)
 	}
 
@@ -171,6 +190,74 @@ func TestAtomicWriteFileReplacesExistingFile(t *testing.T) {
 	}
 	if len(entries) != 1 {
 		t.Fatalf("expected only the target file, found %d entries", len(entries))
+	}
+}
+
+func TestAtomicWriteFileNoReplacePreservesExistingFile(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "priv.key")
+	if err := os.WriteFile(path, []byte("old"), 0o600); err != nil {
+		t.Fatalf("seed old file: %v", err)
+	}
+
+	err := atomicWriteFile(path, []byte("new"), 0o600, false)
+	if !errors.Is(err, fs.ErrExist) {
+		t.Fatalf("expected existing-file error, got %v", err)
+	}
+	got, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("read existing file: %v", err)
+	}
+	if string(got) != "old" {
+		t.Fatalf("existing file changed: %q", got)
+	}
+}
+
+func TestAtomicWriteFileConcurrentNoReplaceHasOneWinner(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "priv.key")
+	results := make(chan error, 2)
+	start := make(chan struct{})
+	for _, value := range []string{"first", "second"} {
+		value := value
+		go func() {
+			<-start
+			results <- atomicWriteFile(path, []byte(value), 0o600, false)
+		}()
+	}
+	close(start)
+
+	var successes, collisions int
+	for range 2 {
+		err := <-results
+		switch {
+		case err == nil:
+			successes++
+		case errors.Is(err, fs.ErrExist):
+			collisions++
+		default:
+			t.Fatalf("unexpected write error: %v", err)
+		}
+	}
+	if successes != 1 || collisions != 1 {
+		t.Fatalf("successes=%d collisions=%d", successes, collisions)
+	}
+}
+
+func TestAtomicWriteFileReportsDirectorySyncFailure(t *testing.T) {
+	previous := syncDirectoryFn
+	t.Cleanup(func() { syncDirectoryFn = previous })
+	sentinel := errors.New("directory sync failed")
+	syncDirectoryFn = func(string) error { return sentinel }
+
+	err := atomicWriteFile(
+		filepath.Join(t.TempDir(), "bootstrap.json"),
+		[]byte("{}"),
+		0o644,
+		true,
+	)
+	if !errors.Is(err, sentinel) {
+		t.Fatalf("expected directory sync failure, got %v", err)
 	}
 }
 

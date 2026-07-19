@@ -58,7 +58,7 @@ func (p *EGoProvider) LoadPrivateKey() (*ecdsa.PrivateKey, error) {
 	return crypto.ToECDSA(plainText)
 }
 
-func (p *EGoProvider) SavePrivateKey(privKey *ecdsa.PrivateKey) error {
+func (p *EGoProvider) SavePrivateKey(privKey *ecdsa.PrivateKey, overwrite bool) error {
 	plainText := crypto.FromECDSA(privKey)
 	sealedText, err := ecrypto.SealWithUniqueKey(plainText, nil)
 	if err != nil {
@@ -67,5 +67,14 @@ func (p *EGoProvider) SavePrivateKey(privKey *ecdsa.PrivateKey) error {
 	if err := os.MkdirAll(p.secretDir, 0o700); err != nil {
 		return err
 	}
-	return atomicWriteFile(filepath.Join(p.secretDir, privateKeyFilename), sealedText, 0o600)
+	err = atomicWriteFile(
+		filepath.Join(p.secretDir, privateKeyFilename),
+		sealedText,
+		0o600,
+		overwrite,
+	)
+	if !overwrite && errors.Is(err, fs.ErrExist) {
+		return ErrPrivateKeyExists
+	}
+	return err
 }
