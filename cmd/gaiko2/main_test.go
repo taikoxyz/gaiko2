@@ -13,6 +13,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/ethereum/go-ethereum/common"
 	"github.com/taikoxyz/gaiko2/internal/prover"
 	"github.com/taikoxyz/gaiko2/internal/tee"
 )
@@ -268,13 +269,18 @@ func TestRunBootstrapDispatchesLifecycleCommand(t *testing.T) {
 }
 
 func TestRunBootstrapCommandExplainsForceOnExistingKey(t *testing.T) {
-	prev := teeBootstrapFn
+	prevBootstrap := teeBootstrapFn
+	prevExisting := teeBootstrapDataForExistingKeyFn
 	t.Cleanup(func() {
-		teeBootstrapFn = prev
+		teeBootstrapFn = prevBootstrap
+		teeBootstrapDataForExistingKeyFn = prevExisting
 	})
 
 	teeBootstrapFn = func(tee.Provider, bool) (tee.BootstrapData, error) {
 		return tee.BootstrapData{}, tee.ErrPrivateKeyExists
+	}
+	teeBootstrapDataForExistingKeyFn = func(tee.Provider, string) (tee.BootstrapData, bool, error) {
+		return tee.BootstrapData{}, true, nil
 	}
 
 	var stdout bytes.Buffer
@@ -286,6 +292,57 @@ func TestRunBootstrapCommandExplainsForceOnExistingKey(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "--force") {
 		t.Fatalf("expected guidance mentioning --force, got %q", err.Error())
+	}
+}
+
+func TestRunBootstrapCommandRecoversMetadataWithoutRotatingKey(t *testing.T) {
+	prevBootstrap := teeBootstrapFn
+	prevExisting := teeBootstrapDataForExistingKeyFn
+	t.Cleanup(func() {
+		teeBootstrapFn = prevBootstrap
+		teeBootstrapDataForExistingKeyFn = prevExisting
+	})
+	teeBootstrapFn = func(tee.Provider, bool) (tee.BootstrapData, error) {
+		return tee.BootstrapData{}, tee.ErrPrivateKeyExists
+	}
+	want := tee.BootstrapData{InstanceAddress: common.HexToAddress("0x1234")}
+	teeBootstrapDataForExistingKeyFn = func(tee.Provider, string) (tee.BootstrapData, bool, error) {
+		return want, false, nil
+	}
+
+	var stdout bytes.Buffer
+	err := run(context.Background(), []string{
+		"bootstrap", "--secret-dir", t.TempDir(), "--config-dir", t.TempDir(),
+	}, &stdout)
+	if err != nil {
+		t.Fatalf("recover bootstrap: %v", err)
+	}
+	if !strings.Contains(stdout.String(), want.InstanceAddress.Hex()) {
+		t.Fatalf("missing recovered identity: %q", stdout.String())
+	}
+}
+
+func TestRunBootstrapCommandWarnsBeforeForce(t *testing.T) {
+	prevBootstrap := teeBootstrapFn
+	prevStderr := bootstrapStderr
+	t.Cleanup(func() {
+		teeBootstrapFn = prevBootstrap
+		bootstrapStderr = prevStderr
+	})
+	teeBootstrapFn = func(tee.Provider, bool) (tee.BootstrapData, error) {
+		return tee.BootstrapData{}, nil
+	}
+	var stderr bytes.Buffer
+	bootstrapStderr = &stderr
+
+	err := run(context.Background(), []string{
+		"bootstrap", "--force", "--secret-dir", t.TempDir(), "--config-dir", t.TempDir(),
+	}, io.Discard)
+	if err != nil {
+		t.Fatalf("bootstrap --force: %v", err)
+	}
+	if !strings.Contains(stderr.String(), "on-chain registration") {
+		t.Fatalf("missing destructive warning: %q", stderr.String())
 	}
 }
 

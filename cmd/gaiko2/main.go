@@ -27,10 +27,12 @@ var (
 	newReplayServiceFn = func(cfg prover.ServiceConfig, runner prover.Runner) (prover.Service, error) {
 		return prover.NewConfiguredReplayService(cfg, runner)
 	}
-	bootstrapCommandFn = runBootstrapCommand
-	checkCommandFn     = runCheckCommand
-	metadataCommandFn  = runMetadataCommand
-	teeBootstrapFn     = tee.Bootstrap
+	bootstrapCommandFn               = runBootstrapCommand
+	checkCommandFn                   = runCheckCommand
+	metadataCommandFn                = runMetadataCommand
+	teeBootstrapFn                   = tee.Bootstrap
+	teeBootstrapDataForExistingKeyFn = tee.BootstrapDataForExistingKey
+	bootstrapStderr                  = io.Writer(os.Stderr)
 )
 
 const (
@@ -203,11 +205,26 @@ func runBootstrapCommand(args []string, stdout io.Writer) error {
 		return err
 	}
 
+	if *force {
+		if _, err := fmt.Fprintln(
+			bootstrapStderr,
+			"WARNING: --force replaces any existing tee key; the old key and any on-chain registration bound to it become unusable",
+		); err != nil {
+			return fmt.Errorf("write bootstrap force warning: %w", err)
+		}
+	}
+
 	data, err := teeBootstrapFn(provider, *force)
-	if err != nil {
-		if errors.Is(err, tee.ErrPrivateKeyExists) {
+	if errors.Is(err, tee.ErrPrivateKeyExists) {
+		recovered, matches, recoverErr := teeBootstrapDataForExistingKeyFn(provider, *configDir)
+		if recoverErr != nil {
+			return fmt.Errorf("recover bootstrap data: %w", recoverErr)
+		}
+		if matches {
 			return fmt.Errorf("%w; re-run with --force to replace it (the old key and any on-chain registration bound to it become unusable)", err)
 		}
+		data = recovered
+	} else if err != nil {
 		return err
 	}
 	if err := tee.SaveBootstrapData(*configDir, data); err != nil {

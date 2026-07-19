@@ -1,9 +1,12 @@
 package tee
 
 import (
+	"bytes"
+	"crypto/ecdsa"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io/fs"
 	"os"
 	"path/filepath"
 
@@ -47,21 +50,55 @@ func Bootstrap(provider Provider, force bool) (BootstrapData, error) {
 
 	// Fetch the quote before persisting anything so a quote failure cannot
 	// leave a fresh key on disk that no saved bootstrap data describes.
-	instanceAddress := crypto.PubkeyToAddress(privateKey.PublicKey)
-	quote, err := provider.LoadQuote(instanceAddress)
+	data, err := bootstrapData(provider, privateKey)
 	if err != nil {
-		return BootstrapData{}, fmt.Errorf("load tee quote: %w", err)
+		return BootstrapData{}, err
 	}
 
 	if err := provider.SavePrivateKey(privateKey, force); err != nil {
 		return BootstrapData{}, fmt.Errorf("save tee private key: %w", err)
 	}
 
+	return data, nil
+}
+
+func bootstrapData(provider Provider, privateKey *ecdsa.PrivateKey) (BootstrapData, error) {
+	instanceAddress := crypto.PubkeyToAddress(privateKey.PublicKey)
+	quote, err := provider.LoadQuote(instanceAddress)
+	if err != nil {
+		return BootstrapData{}, fmt.Errorf("load tee quote: %w", err)
+	}
 	return BootstrapData{
 		PublicKey:       hexutil.Bytes(crypto.FromECDSAPub(&privateKey.PublicKey)),
 		InstanceAddress: instanceAddress,
 		Quote:           hexutil.Bytes(quote.Bytes()),
 	}, nil
+}
+
+func BootstrapDataForExistingKey(provider Provider, configDir string) (BootstrapData, bool, error) {
+	privateKey, err := provider.LoadPrivateKey()
+	if err != nil {
+		return BootstrapData{}, false, fmt.Errorf("load existing tee private key: %w", err)
+	}
+	publicKey := crypto.FromECDSAPub(&privateKey.PublicKey)
+	address := crypto.PubkeyToAddress(privateKey.PublicKey)
+
+	existing, loadErr := LoadBootstrapData(configDir)
+	if loadErr == nil && existing.InstanceAddress == address && bytes.Equal(existing.PublicKey, publicKey) {
+		return existing, true, nil
+	}
+	if loadErr != nil {
+		var pathErr *os.PathError
+		if errors.As(loadErr, &pathErr) && !errors.Is(loadErr, fs.ErrNotExist) {
+			return BootstrapData{}, false, fmt.Errorf("load existing bootstrap data: %w", loadErr)
+		}
+	}
+
+	data, err := bootstrapData(provider, privateKey)
+	if err != nil {
+		return BootstrapData{}, false, fmt.Errorf("rebuild bootstrap data: %w", err)
+	}
+	return data, false, nil
 }
 
 func Check(provider Provider) error {

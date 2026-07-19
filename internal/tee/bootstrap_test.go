@@ -128,6 +128,56 @@ func TestBootstrapReturnsIdentityConsistentWithSavedKey(t *testing.T) {
 	}
 }
 
+func TestBootstrapDataForExistingKeyRebuildsMissingMetadata(t *testing.T) {
+	key, err := crypto.GenerateKey()
+	if err != nil {
+		t.Fatalf("generate key: %v", err)
+	}
+	provider := &fakeProvider{savedKey: key, quote: []byte{0xca, 0xfe}}
+
+	data, matches, err := BootstrapDataForExistingKey(provider, t.TempDir())
+	if err != nil {
+		t.Fatalf("recover bootstrap data: %v", err)
+	}
+	if matches {
+		t.Fatal("missing metadata must require recovery")
+	}
+	if data.InstanceAddress != crypto.PubkeyToAddress(key.PublicKey) {
+		t.Fatalf("recovered identity mismatch: %s", data.InstanceAddress)
+	}
+	if slices.Contains(provider.calls, "save") {
+		t.Fatalf("recovery rotated key, calls: %v", provider.calls)
+	}
+}
+
+func TestBootstrapDataForExistingKeyKeepsMatchingMetadata(t *testing.T) {
+	key, err := crypto.GenerateKey()
+	if err != nil {
+		t.Fatalf("generate key: %v", err)
+	}
+	dir := t.TempDir()
+	want := BootstrapData{
+		PublicKey:       crypto.FromECDSAPub(&key.PublicKey),
+		InstanceAddress: crypto.PubkeyToAddress(key.PublicKey),
+		Quote:           []byte{0xca, 0xfe},
+	}
+	if err := SaveBootstrapData(dir, want); err != nil {
+		t.Fatalf("save bootstrap data: %v", err)
+	}
+	provider := &fakeProvider{savedKey: key}
+
+	got, matches, err := BootstrapDataForExistingKey(provider, dir)
+	if err != nil {
+		t.Fatalf("check bootstrap data: %v", err)
+	}
+	if !matches || !reflect.DeepEqual(got, want) {
+		t.Fatalf("got (%+v, %v), want (%+v, true)", got, matches, want)
+	}
+	if slices.Contains(provider.calls, "quote") {
+		t.Fatalf("matching metadata should not fetch a quote: %v", provider.calls)
+	}
+}
+
 func TestAtomicWriteFileWritesContentWithPerm(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "out.json")
