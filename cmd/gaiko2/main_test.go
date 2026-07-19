@@ -177,6 +177,16 @@ func TestNewHTTPServerSetsConnectionTimeouts(t *testing.T) {
 	}
 }
 
+func TestNormalizeServeError(t *testing.T) {
+	sentinel := errors.New("listener failed")
+	if err := normalizeServeError(http.ErrServerClosed); err != nil {
+		t.Fatalf("ErrServerClosed must be clean: %v", err)
+	}
+	if err := normalizeServeError(sentinel); !errors.Is(err, sentinel) {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
 func TestRunServerShutsDownGracefullyOnContextCancel(t *testing.T) {
 	prevListen := listenFn
 	t.Cleanup(func() {

@@ -52,6 +52,13 @@ func newHTTPServer(handler http.Handler) *http.Server {
 	}
 }
 
+func normalizeServeError(err error) error {
+	if errors.Is(err, http.ErrServerClosed) {
+		return nil
+	}
+	return err
+}
+
 func serveHTTP(ctx context.Context, listener net.Listener, handler http.Handler) error {
 	server := newHTTPServer(handler)
 
@@ -62,17 +69,14 @@ func serveHTTP(ctx context.Context, listener net.Listener, handler http.Handler)
 
 	select {
 	case err := <-serveErr:
-		if errors.Is(err, http.ErrServerClosed) {
-			return nil
-		}
-		return err
+		return normalizeServeError(err)
 	case <-ctx.Done():
 		shutdownCtx, cancel := context.WithTimeout(context.Background(), serverShutdownGrace)
 		defer cancel()
 		if err := server.Shutdown(shutdownCtx); err != nil {
 			return fmt.Errorf("shutdown http server: %w", err)
 		}
-		return nil
+		return normalizeServeError(<-serveErr)
 	}
 }
 
