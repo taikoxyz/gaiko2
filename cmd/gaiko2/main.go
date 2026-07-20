@@ -1,15 +1,20 @@
 package main
 
 import (
+	"context"
 	"encoding/json"
+	"errors"
 	"flag"
 	"fmt"
 	"io"
 	"net"
 	"net/http"
 	"os"
+	"os/signal"
 	"strconv"
 	"strings"
+	"syscall"
+	"time"
 
 	"github.com/taikoxyz/gaiko2/internal/api"
 	"github.com/taikoxyz/gaiko2/internal/prover"
@@ -18,14 +23,62 @@ import (
 
 var (
 	listenFn           = net.Listen
-	serveFn            = http.Serve
+	serveFn            = serveHTTP
 	newReplayServiceFn = func(cfg prover.ServiceConfig, runner prover.Runner) (prover.Service, error) {
 		return prover.NewConfiguredReplayService(cfg, runner)
 	}
-	bootstrapCommandFn = runBootstrapCommand
-	checkCommandFn     = runCheckCommand
-	metadataCommandFn  = runMetadataCommand
+	bootstrapCommandFn               = runBootstrapCommand
+	checkCommandFn                   = runCheckCommand
+	metadataCommandFn                = runMetadataCommand
+	teeBootstrapFn                   = tee.Bootstrap
+	teeBootstrapDataForExistingKeyFn = tee.BootstrapDataForExistingKey
+	bootstrapStderr                  = io.Writer(os.Stderr)
 )
+
+const (
+	serverReadHeaderTimeout = 10 * time.Second
+	serverIdleTimeout       = 2 * time.Minute
+	serverShutdownGrace     = 30 * time.Second
+)
+
+func newHTTPServer(handler http.Handler) *http.Server {
+	// ReadTimeout/WriteTimeout stay unset: request bodies reach ~92MB and
+	// proving runs for minutes, so only header reads and idle keep-alives
+	// are bounded here.
+	return &http.Server{
+		Handler:           handler,
+		ReadHeaderTimeout: serverReadHeaderTimeout,
+		IdleTimeout:       serverIdleTimeout,
+	}
+}
+
+func normalizeServeError(err error) error {
+	if errors.Is(err, http.ErrServerClosed) {
+		return nil
+	}
+	return err
+}
+
+func serveHTTP(ctx context.Context, listener net.Listener, handler http.Handler) error {
+	server := newHTTPServer(handler)
+
+	serveErr := make(chan error, 1)
+	go func() {
+		serveErr <- server.Serve(listener)
+	}()
+
+	select {
+	case err := <-serveErr:
+		return normalizeServeError(err)
+	case <-ctx.Done():
+		shutdownCtx, cancel := context.WithTimeout(context.Background(), serverShutdownGrace)
+		defer cancel()
+		if err := server.Shutdown(shutdownCtx); err != nil {
+			return fmt.Errorf("shutdown http server: %w", err)
+		}
+		return normalizeServeError(<-serveErr)
+	}
+}
 
 const (
 	envPort            = "GAIKO2_PORT"
@@ -33,13 +86,16 @@ const (
 )
 
 func main() {
-	if err := run(os.Args[1:], os.Stdout); err != nil {
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
+
+	if err := run(ctx, os.Args[1:], os.Stdout); err != nil {
 		fmt.Fprintln(os.Stderr, err)
 		os.Exit(1)
 	}
 }
 
-func run(args []string, stdout io.Writer) error {
+func run(ctx context.Context, args []string, stdout io.Writer) error {
 	if len(args) == 0 || args[0] == "help" || args[0] == "-h" || args[0] == "--help" {
 		printUsage(stdout)
 		return nil
@@ -84,7 +140,7 @@ func run(args []string, stdout io.Writer) error {
 			return err
 		}
 		_, _ = fmt.Fprintf(stdout, "listening on %s\n", formatListeningAddr(listener.Addr()))
-		return serveFn(listener, api.NewServer(service))
+		return serveFn(ctx, listener, api.NewServer(service))
 	default:
 		return fmt.Errorf("unknown command %q", args[0])
 	}
@@ -140,6 +196,7 @@ func runBootstrapCommand(args []string, stdout io.Writer) error {
 	teeType := flags.String("tee-type", strings.TrimSpace(os.Getenv("GAIKO2_TEE_TYPE")), "tee provider type")
 	secretDir := flags.String("secret-dir", envOrDefault("GAIKO2_SECRET_DIR", tee.DefaultSecretDir()), "directory for sealed keys")
 	configDir := flags.String("config-dir", envOrDefault("GAIKO2_CONFIG_DIR", tee.DefaultConfigDir()), "directory for bootstrap metadata")
+	force := flags.Bool("force", false, "regenerate the tee key even if a sealed key already exists")
 	if err := flags.Parse(args); err != nil {
 		return err
 	}
@@ -152,22 +209,58 @@ func runBootstrapCommand(args []string, stdout io.Writer) error {
 		return err
 	}
 
-	data, err := tee.Bootstrap(provider)
-	if err != nil {
+	if *force {
+		if _, err := fmt.Fprintln(
+			bootstrapStderr,
+			"WARNING: --force replaces any existing tee key; the old key and any on-chain registration bound to it become unusable",
+		); err != nil {
+			return fmt.Errorf("write bootstrap force warning: %w", err)
+		}
+	}
+
+	data, err := teeBootstrapFn(provider, *force)
+	saveBootstrapData := true
+	var existingKeyErr error
+	if errors.Is(err, tee.ErrPrivateKeyExists) {
+		recovered, matches, recoverErr := teeBootstrapDataForExistingKeyFn(provider, *configDir)
+		if recoverErr != nil {
+			if errors.Is(recoverErr, tee.ErrPrivateKeyUnavailable) {
+				return fmt.Errorf(
+					"%w; recover bootstrap data: %w; re-run with --force to replace it (the old key and any on-chain registration bound to it become unusable)",
+					err,
+					recoverErr,
+				)
+			}
+			return fmt.Errorf("recover bootstrap data: %w", recoverErr)
+		}
+		data = recovered
+		if matches {
+			saveBootstrapData = false
+			existingKeyErr = fmt.Errorf(
+				"%w; re-run with --force to replace it (the old key and any on-chain registration bound to it become unusable)",
+				err,
+			)
+		}
+	} else if err != nil {
 		return err
 	}
-	if err := tee.SaveBootstrapData(*configDir, data); err != nil {
-		return err
+	if saveBootstrapData {
+		if err := tee.SaveBootstrapData(*configDir, data); err != nil {
+			return err
+		}
 	}
 	attestationPath := strings.TrimSpace(os.Getenv(envAttestationPath))
 	if attestationPath != "" {
 		metadata, err := tee.ReadAttestationMetadataFile(attestationPath)
 		if err != nil {
-			return err
+			return errors.Join(existingKeyErr, fmt.Errorf("read attestation metadata: %w", err))
 		}
 		if err := tee.SaveAttestationMetadata(*configDir, metadata); err != nil {
-			return err
+			return errors.Join(existingKeyErr, fmt.Errorf("save attestation metadata: %w", err))
 		}
+	}
+	if existingKeyErr != nil {
+		return existingKeyErr
 	}
 	return json.NewEncoder(stdout).Encode(data)
 }

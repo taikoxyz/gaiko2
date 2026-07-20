@@ -18,7 +18,8 @@ const (
 type Provider interface {
 	LoadQuote(instance common.Address) (Quote, error)
 	LoadPrivateKey() (*ecdsa.PrivateKey, error)
-	SavePrivateKey(*ecdsa.PrivateKey) error
+	SavePrivateKey(*ecdsa.PrivateKey, bool) error
+	HasPrivateKey() (bool, error)
 }
 
 type Config struct {

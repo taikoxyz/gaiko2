@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"fmt"
 	"log"
 	"net/http"
 	"net/http/httptest"
@@ -94,6 +95,105 @@ func TestNewServerRejectsV1WithoutGuestInput(t *testing.T) {
 	}
 	if resp.Error == nil || !strings.Contains(resp.Error.Message, "guest_input") {
 		t.Fatalf("expected guest_input validation message, got %+v", resp.Error)
+	}
+}
+
+func TestNewServerRejectsOversizedProveBody(t *testing.T) {
+	server := newServer(fakeService{}, 64)
+	body := append([]byte(`{"schema":"`), bytes.Repeat([]byte("a"), 128)...)
+	req := httptest.NewRequest(http.MethodPost, "/prove/shasta", bytes.NewReader(body))
+	recorder := httptest.NewRecorder()
+
+	server.ServeHTTP(recorder, req)
+
+	if recorder.Code != http.StatusRequestEntityTooLarge {
+		t.Fatalf("unexpected status: %d", recorder.Code)
+	}
+	var resp protocol.ProofResponse
+	if err := json.Unmarshal(recorder.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+	if resp.Error == nil || resp.Error.Code != "REQUEST_TOO_LARGE" {
+		t.Fatalf("unexpected error payload: %+v", resp.Error)
+	}
+}
+
+func TestNewServerRejectsOversizedAggregateBody(t *testing.T) {
+	server := newServer(fakeService{}, 64)
+	body := append([]byte(`{"schema":"`), bytes.Repeat([]byte("a"), 128)...)
+	req := httptest.NewRequest(http.MethodPost, "/prove/shasta-aggregate", bytes.NewReader(body))
+	recorder := httptest.NewRecorder()
+
+	server.ServeHTTP(recorder, req)
+
+	if recorder.Code != http.StatusRequestEntityTooLarge {
+		t.Fatalf("unexpected status: %d", recorder.Code)
+	}
+	var resp protocol.ProofResponse
+	if err := json.Unmarshal(recorder.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+	if resp.Error == nil || resp.Error.Code != "REQUEST_TOO_LARGE" {
+		t.Fatalf("unexpected error payload: %+v", resp.Error)
+	}
+}
+
+func TestNewServerRejectsOversizedValidJSONPrefix(t *testing.T) {
+	tests := []struct {
+		name string
+		path string
+	}{
+		{name: "prove", path: proveShastaPath},
+		{name: "aggregate", path: proveShastaAggregatePath},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			for _, chunked := range []bool{false, true} {
+				t.Run(fmt.Sprintf("chunked=%v", chunked), func(t *testing.T) {
+					body := []byte("{}" + strings.Repeat(" ", 64))
+					req := httptest.NewRequest(http.MethodPost, tt.path, bytes.NewReader(body))
+					if chunked {
+						req.ContentLength = -1
+					}
+					recorder := httptest.NewRecorder()
+					newServer(fakeService{}, 8).ServeHTTP(recorder, req)
+					if recorder.Code != http.StatusRequestEntityTooLarge {
+						t.Fatalf("status=%d body=%s", recorder.Code, recorder.Body.String())
+					}
+					assertProofErrorCode(t, recorder.Body.Bytes(), "REQUEST_TOO_LARGE")
+				})
+			}
+		})
+	}
+}
+
+func assertProofErrorCode(t *testing.T, body []byte, want string) {
+	t.Helper()
+	var resp protocol.ProofResponse
+	if err := json.Unmarshal(body, &resp); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+	if resp.Error == nil || resp.Error.Code != want {
+		t.Fatalf("error=%+v want code %s", resp.Error, want)
+	}
+}
+
+func TestNewServerRejectsSecondJSONValue(t *testing.T) {
+	req := httptest.NewRequest(http.MethodPost, proveShastaPath, strings.NewReader("{} {}"))
+	recorder := httptest.NewRecorder()
+	newServer(fakeService{}, 64).ServeHTTP(recorder, req)
+	if recorder.Code != http.StatusBadRequest {
+		t.Fatalf("status=%d", recorder.Code)
+	}
+	assertProofErrorCode(t, recorder.Body.Bytes(), "INVALID_JSON")
+}
+
+func TestDecodeRequestAcceptsTrailingWhitespaceWithinLimit(t *testing.T) {
+	req := httptest.NewRequest(http.MethodPost, proveShastaPath, strings.NewReader("{}   \n"))
+	recorder := httptest.NewRecorder()
+	var dst map[string]any
+	if err := decodeRequest(recorder, req, 64, &dst); err != nil {
+		t.Fatalf("decode bounded request: %v", err)
 	}
 }
 

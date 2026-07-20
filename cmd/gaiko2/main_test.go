@@ -2,16 +2,23 @@ package main
 
 import (
 	"bytes"
+	"context"
 	"errors"
 	"io"
+	"io/fs"
 	"net"
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"path/filepath"
 	"strings"
+	"syscall"
 	"testing"
+	"time"
 
+	"github.com/ethereum/go-ethereum/common"
 	"github.com/taikoxyz/gaiko2/internal/prover"
+	"github.com/taikoxyz/gaiko2/internal/tee"
 )
 
 func TestRunServerPrintsStartupSummary(t *testing.T) {
@@ -31,12 +38,12 @@ func TestRunServerPrintsStartupSummary(t *testing.T) {
 	listenFn = func(network, addr string) (net.Listener, error) {
 		return fakeListener{addr: fakeAddr("127.0.0.1:18080")}, nil
 	}
-	serveFn = func(net.Listener, http.Handler) error {
+	serveFn = func(context.Context, net.Listener, http.Handler) error {
 		return errors.New("stop server")
 	}
 
 	var stdout bytes.Buffer
-	err := run([]string{"server", ":18080"}, &stdout)
+	err := run(context.Background(), []string{"server", ":18080"}, &stdout)
 	if err == nil || err.Error() != "stop server" {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -63,12 +70,12 @@ func TestRunServerPrintsListeningAddress(t *testing.T) {
 	listenFn = func(network, addr string) (net.Listener, error) {
 		return fakeListener{addr: fakeAddr("127.0.0.1:18080")}, nil
 	}
-	serveFn = func(net.Listener, http.Handler) error {
+	serveFn = func(context.Context, net.Listener, http.Handler) error {
 		return errors.New("stop server")
 	}
 
 	var stdout bytes.Buffer
-	err := run([]string{"server", ":18080"}, &stdout)
+	err := run(context.Background(), []string{"server", ":18080"}, &stdout)
 	if err == nil || err.Error() != "stop server" {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -105,12 +112,12 @@ func TestRunServerUsesPortFromEnv(t *testing.T) {
 		}
 		return fakeListener{addr: fakeAddr("127.0.0.1:19090")}, nil
 	}
-	serveFn = func(net.Listener, http.Handler) error {
+	serveFn = func(context.Context, net.Listener, http.Handler) error {
 		return errors.New("stop server")
 	}
 
 	var stdout bytes.Buffer
-	err := run([]string{"server"}, &stdout)
+	err := run(context.Background(), []string{"server"}, &stdout)
 	if err == nil || err.Error() != "stop server" {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -137,7 +144,7 @@ func TestRunServerRejectsV1WithoutGuestInput(t *testing.T) {
 	newReplayServiceFn = func(cfg prover.ServiceConfig, runner prover.Runner) (prover.Service, error) {
 		return prover.StubService{}, nil
 	}
-	serveFn = func(_ net.Listener, handler http.Handler) error {
+	serveFn = func(_ context.Context, _ net.Listener, handler http.Handler) error {
 		req := httptest.NewRequest(http.MethodPost, "/prove/shasta", bytes.NewBufferString(`{
 			"schema":"raiko2-shasta-request-v1",
 			"payload":{}
@@ -157,10 +164,93 @@ func TestRunServerRejectsV1WithoutGuestInput(t *testing.T) {
 	}
 
 	var stdout bytes.Buffer
-	err := run([]string{"server", ":18080"}, &stdout)
+	err := run(context.Background(), []string{"server", ":18080"}, &stdout)
 	if err == nil || err.Error() != "stop server" {
 		t.Fatalf("unexpected error: %v", err)
 	}
+}
+
+func TestNewHTTPServerSetsConnectionTimeouts(t *testing.T) {
+	server := newHTTPServer(http.NewServeMux())
+	if server.ReadHeaderTimeout <= 0 {
+		t.Fatalf("expected positive ReadHeaderTimeout, got %v", server.ReadHeaderTimeout)
+	}
+	if server.IdleTimeout <= 0 {
+		t.Fatalf("expected positive IdleTimeout, got %v", server.IdleTimeout)
+	}
+}
+
+func TestNormalizeServeError(t *testing.T) {
+	sentinel := errors.New("listener failed")
+	if err := normalizeServeError(http.ErrServerClosed); err != nil {
+		t.Fatalf("ErrServerClosed must be clean: %v", err)
+	}
+	if err := normalizeServeError(sentinel); !errors.Is(err, sentinel) {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
+func TestRunServerShutsDownGracefullyOnContextCancel(t *testing.T) {
+	prevListen := listenFn
+	t.Cleanup(func() {
+		listenFn = prevListen
+	})
+
+	addrCh := make(chan net.Addr, 1)
+	listenFn = func(network, _ string) (net.Listener, error) {
+		listener, err := net.Listen(network, "127.0.0.1:0")
+		if err != nil {
+			return nil, err
+		}
+		addrCh <- listener.Addr()
+		return listener, nil
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	done := make(chan error, 1)
+	var stdout bytes.Buffer
+	go func() {
+		done <- run(ctx, []string{"server", ":0"}, &stdout)
+	}()
+
+	var addr net.Addr
+	select {
+	case addr = <-addrCh:
+	case err := <-done:
+		t.Fatalf("run exited before listening: %v", err)
+	case <-time.After(5 * time.Second):
+		t.Fatal("server never started listening")
+	}
+	waitForHealthz(t, addr)
+
+	cancel()
+
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatalf("expected clean shutdown, got %v", err)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("run did not return after context cancel")
+	}
+}
+
+func waitForHealthz(t *testing.T, addr net.Addr) {
+	t.Helper()
+	deadline := time.Now().Add(5 * time.Second)
+	for time.Now().Before(deadline) {
+		resp, err := http.Get("http://" + addr.String() + "/healthz")
+		if err == nil {
+			_ = resp.Body.Close()
+			if resp.StatusCode == http.StatusOK {
+				return
+			}
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	t.Fatal("server never became healthy")
 }
 
 func TestRunBootstrapDispatchesLifecycleCommand(t *testing.T) {
@@ -180,7 +270,7 @@ func TestRunBootstrapDispatchesLifecycleCommand(t *testing.T) {
 	}
 
 	var stdout bytes.Buffer
-	if err := run([]string{"bootstrap"}, &stdout); err != nil {
+	if err := run(context.Background(), []string{"bootstrap"}, &stdout); err != nil {
 		t.Fatalf("run bootstrap: %v", err)
 	}
 	if !called {
@@ -188,6 +278,245 @@ func TestRunBootstrapDispatchesLifecycleCommand(t *testing.T) {
 	}
 	if stdout.String() != "bootstrapped\n" {
 		t.Fatalf("unexpected bootstrap output: %q", stdout.String())
+	}
+}
+
+func TestRunBootstrapCommandExplainsForceOnExistingKey(t *testing.T) {
+	prevBootstrap := teeBootstrapFn
+	prevExisting := teeBootstrapDataForExistingKeyFn
+	t.Cleanup(func() {
+		teeBootstrapFn = prevBootstrap
+		teeBootstrapDataForExistingKeyFn = prevExisting
+	})
+
+	teeBootstrapFn = func(tee.Provider, bool) (tee.BootstrapData, error) {
+		return tee.BootstrapData{}, tee.ErrPrivateKeyExists
+	}
+	teeBootstrapDataForExistingKeyFn = func(tee.Provider, string) (tee.BootstrapData, bool, error) {
+		return tee.BootstrapData{}, true, nil
+	}
+
+	var stdout bytes.Buffer
+	err := run(context.Background(), []string{
+		"bootstrap", "--secret-dir", t.TempDir(), "--config-dir", t.TempDir(),
+	}, &stdout)
+	if !errors.Is(err, tee.ErrPrivateKeyExists) {
+		t.Fatalf("expected ErrPrivateKeyExists, got %v", err)
+	}
+	if !strings.Contains(err.Error(), "--force") {
+		t.Fatalf("expected guidance mentioning --force, got %q", err.Error())
+	}
+}
+
+func TestRunBootstrapCommandRetriesAttestationForMatchingKey(t *testing.T) {
+	prevBootstrap := teeBootstrapFn
+	prevExisting := teeBootstrapDataForExistingKeyFn
+	t.Cleanup(func() {
+		teeBootstrapFn = prevBootstrap
+		teeBootstrapDataForExistingKeyFn = prevExisting
+	})
+
+	teeBootstrapFn = func(tee.Provider, bool) (tee.BootstrapData, error) {
+		return tee.BootstrapData{}, tee.ErrPrivateKeyExists
+	}
+	teeBootstrapDataForExistingKeyFn = func(tee.Provider, string) (tee.BootstrapData, bool, error) {
+		return tee.BootstrapData{Quote: []byte{0xca, 0xfe}}, true, nil
+	}
+
+	want := tee.AttestationMetadata{
+		UniqueID:        "abc",
+		SignerID:        "def",
+		ProductID:       1,
+		SecurityVersion: 2,
+	}
+	attestationPath := filepath.Join(t.TempDir(), "attestation.json")
+	attestationJSON := `{"unique_id":"abc","signer_id":"def","product_id":1,"security_version":2}`
+	if err := os.WriteFile(attestationPath, []byte(attestationJSON), 0o600); err != nil {
+		t.Fatalf("write attestation source: %v", err)
+	}
+	setEnv(t, envAttestationPath, attestationPath)
+	configDir := t.TempDir()
+
+	err := run(context.Background(), []string{
+		"bootstrap", "--secret-dir", t.TempDir(), "--config-dir", configDir,
+	}, io.Discard)
+	if !errors.Is(err, tee.ErrPrivateKeyExists) {
+		t.Fatalf("expected ErrPrivateKeyExists, got %v", err)
+	}
+	got, loadErr := tee.LoadAttestationMetadata(configDir)
+	if loadErr != nil {
+		t.Fatalf("load retried attestation metadata: %v", loadErr)
+	}
+	if got != want {
+		t.Fatalf("attestation metadata=%+v want=%+v", got, want)
+	}
+}
+
+func TestRunBootstrapCommandPreservesExistingKeyContextOnAttestationErrors(t *testing.T) {
+	prevBootstrap := teeBootstrapFn
+	prevExisting := teeBootstrapDataForExistingKeyFn
+	t.Cleanup(func() {
+		teeBootstrapFn = prevBootstrap
+		teeBootstrapDataForExistingKeyFn = prevExisting
+	})
+
+	teeBootstrapFn = func(tee.Provider, bool) (tee.BootstrapData, error) {
+		return tee.BootstrapData{}, tee.ErrPrivateKeyExists
+	}
+	teeBootstrapDataForExistingKeyFn = func(tee.Provider, string) (tee.BootstrapData, bool, error) {
+		return tee.BootstrapData{Quote: []byte{0xca, 0xfe}}, true, nil
+	}
+
+	validAttestationPath := filepath.Join(t.TempDir(), "attestation.json")
+	attestationJSON := `{"unique_id":"abc","signer_id":"def","product_id":1,"security_version":2}`
+	if err := os.WriteFile(validAttestationPath, []byte(attestationJSON), 0o600); err != nil {
+		t.Fatalf("write attestation source: %v", err)
+	}
+	configFile := filepath.Join(t.TempDir(), "config-is-a-file")
+	if err := os.WriteFile(configFile, []byte("not a directory"), 0o600); err != nil {
+		t.Fatalf("write config blocker: %v", err)
+	}
+
+	tests := []struct {
+		name            string
+		attestationPath string
+		configDir       string
+		wantCause       error
+	}{
+		{
+			name:            "read failure",
+			attestationPath: filepath.Join(t.TempDir(), "missing.json"),
+			configDir:       t.TempDir(),
+			wantCause:       fs.ErrNotExist,
+		},
+		{
+			name:            "save failure",
+			attestationPath: validAttestationPath,
+			configDir:       configFile,
+			wantCause:       syscall.ENOTDIR,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			setEnv(t, envAttestationPath, tt.attestationPath)
+			err := run(context.Background(), []string{
+				"bootstrap", "--secret-dir", t.TempDir(), "--config-dir", tt.configDir,
+			}, io.Discard)
+			if !errors.Is(err, tee.ErrPrivateKeyExists) {
+				t.Fatalf("expected ErrPrivateKeyExists, got %v", err)
+			}
+			if !errors.Is(err, tt.wantCause) {
+				t.Fatalf("expected underlying cause %v, got %v", tt.wantCause, err)
+			}
+			if !strings.Contains(err.Error(), "--force") {
+				t.Fatalf("expected --force guidance, got %q", err.Error())
+			}
+		})
+	}
+}
+
+func TestRunBootstrapCommandExplainsForceWhenExistingKeyIsUnavailable(t *testing.T) {
+	prevBootstrap := teeBootstrapFn
+	prevExisting := teeBootstrapDataForExistingKeyFn
+	t.Cleanup(func() {
+		teeBootstrapFn = prevBootstrap
+		teeBootstrapDataForExistingKeyFn = prevExisting
+	})
+
+	teeBootstrapFn = func(tee.Provider, bool) (tee.BootstrapData, error) {
+		return tee.BootstrapData{}, tee.ErrPrivateKeyExists
+	}
+	unsealErr := errors.New("sealed key belongs to another enclave")
+	teeBootstrapDataForExistingKeyFn = func(tee.Provider, string) (tee.BootstrapData, bool, error) {
+		return tee.BootstrapData{}, false, errors.Join(tee.ErrPrivateKeyUnavailable, unsealErr)
+	}
+
+	err := run(context.Background(), []string{
+		"bootstrap", "--secret-dir", t.TempDir(), "--config-dir", t.TempDir(),
+	}, io.Discard)
+	if !errors.Is(err, tee.ErrPrivateKeyExists) {
+		t.Fatalf("expected ErrPrivateKeyExists, got %v", err)
+	}
+	if !errors.Is(err, unsealErr) {
+		t.Fatalf("expected unseal cause, got %v", err)
+	}
+	if !strings.Contains(err.Error(), "--force") {
+		t.Fatalf("expected guidance mentioning --force, got %q", err.Error())
+	}
+}
+
+func TestRunBootstrapCommandRecoversMetadataWithoutRotatingKey(t *testing.T) {
+	prevBootstrap := teeBootstrapFn
+	prevExisting := teeBootstrapDataForExistingKeyFn
+	t.Cleanup(func() {
+		teeBootstrapFn = prevBootstrap
+		teeBootstrapDataForExistingKeyFn = prevExisting
+	})
+	teeBootstrapFn = func(tee.Provider, bool) (tee.BootstrapData, error) {
+		return tee.BootstrapData{}, tee.ErrPrivateKeyExists
+	}
+	want := tee.BootstrapData{InstanceAddress: common.HexToAddress("0x1234")}
+	teeBootstrapDataForExistingKeyFn = func(tee.Provider, string) (tee.BootstrapData, bool, error) {
+		return want, false, nil
+	}
+
+	var stdout bytes.Buffer
+	err := run(context.Background(), []string{
+		"bootstrap", "--secret-dir", t.TempDir(), "--config-dir", t.TempDir(),
+	}, &stdout)
+	if err != nil {
+		t.Fatalf("recover bootstrap: %v", err)
+	}
+	if !strings.Contains(stdout.String(), want.InstanceAddress.Hex()) {
+		t.Fatalf("missing recovered identity: %q", stdout.String())
+	}
+}
+
+func TestRunBootstrapCommandWarnsBeforeForce(t *testing.T) {
+	prevBootstrap := teeBootstrapFn
+	prevStderr := bootstrapStderr
+	t.Cleanup(func() {
+		teeBootstrapFn = prevBootstrap
+		bootstrapStderr = prevStderr
+	})
+	teeBootstrapFn = func(tee.Provider, bool) (tee.BootstrapData, error) {
+		return tee.BootstrapData{}, nil
+	}
+	var stderr bytes.Buffer
+	bootstrapStderr = &stderr
+
+	err := run(context.Background(), []string{
+		"bootstrap", "--force", "--secret-dir", t.TempDir(), "--config-dir", t.TempDir(),
+	}, io.Discard)
+	if err != nil {
+		t.Fatalf("bootstrap --force: %v", err)
+	}
+	if !strings.Contains(stderr.String(), "on-chain registration") {
+		t.Fatalf("missing destructive warning: %q", stderr.String())
+	}
+}
+
+func TestRunBootstrapCommandForwardsForceFlag(t *testing.T) {
+	prev := teeBootstrapFn
+	t.Cleanup(func() {
+		teeBootstrapFn = prev
+	})
+
+	var gotForce bool
+	teeBootstrapFn = func(_ tee.Provider, force bool) (tee.BootstrapData, error) {
+		gotForce = force
+		return tee.BootstrapData{}, nil
+	}
+
+	var stdout bytes.Buffer
+	err := run(context.Background(), []string{
+		"bootstrap", "--force", "--secret-dir", t.TempDir(), "--config-dir", t.TempDir(),
+	}, &stdout)
+	if err != nil {
+		t.Fatalf("run bootstrap --force: %v", err)
+	}
+	if !gotForce {
+		t.Fatalf("expected --force to be forwarded to tee.Bootstrap")
 	}
 }
 
@@ -208,7 +537,7 @@ func TestRunCheckDispatchesLifecycleCommand(t *testing.T) {
 	}
 
 	var stdout bytes.Buffer
-	if err := run([]string{"check"}, &stdout); err != nil {
+	if err := run(context.Background(), []string{"check"}, &stdout); err != nil {
 		t.Fatalf("run check: %v", err)
 	}
 	if !called {
@@ -236,7 +565,7 @@ func TestRunMetadataDispatchesLifecycleCommand(t *testing.T) {
 	}
 
 	var stdout bytes.Buffer
-	if err := run([]string{"metadata"}, &stdout); err != nil {
+	if err := run(context.Background(), []string{"metadata"}, &stdout); err != nil {
 		t.Fatalf("run metadata: %v", err)
 	}
 	if !called {

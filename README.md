@@ -59,6 +59,10 @@ Probe liveness with:
 curl http://127.0.0.1:8080/healthz
 ```
 
+Both `/prove/shasta` and `/prove/shasta-aggregate` accept exactly one JSON
+request value with a maximum body size of 512 MiB. Larger bodies return HTTP
+`413` with the standard `REQUEST_TOO_LARGE` error envelope.
+
 Optional proving configuration:
 
 - `GAIKO2_PROVING_MODE=native|tee`
@@ -71,9 +75,15 @@ Optional proving configuration:
 
 If unset, `gaiko2` defaults to `native` mode.
 
-TEE mode expects the enclave key to be bootstrapped ahead of proving. `gaiko2 server`
-checks that the sealed key is readable at startup and caches the loaded key for
-later signing.
+TEE mode expects the enclave key to be bootstrapped ahead of proving and also
+requires either `GAIKO2_INSTANCE_ID` or a `GAIKO2_FORK` entry in
+`registered.gaiko2.json`. `gaiko2 server` validates both requirements at
+startup and caches the loaded key for later signing.
+
+On `SIGINT` or `SIGTERM`, the server stops accepting new connections and gives
+in-flight requests up to 30 seconds to finish. The checked-in Compose services
+allow 35 seconds before forced termination so the application grace period can
+complete.
 
 Bootstrap the local tee state with:
 
@@ -91,6 +101,25 @@ The bootstrap command writes:
 - `attestation.gaiko2.json` under `GAIKO2_CONFIG_DIR` when
   `GAIKO2_ATTESTATION_PATH` is available in the image
 - `priv.gaiko2.key` under `GAIKO2_SECRET_DIR`
+
+Re-running bootstrap without `--force` never rotates an existing tee key. If
+the bootstrap JSON is missing, malformed, or identifies a different key, the
+command rebuilds it from the existing sealed key and a fresh quote. Matching
+metadata is left unchanged. If the sealed key cannot be loaded, for example
+because it belongs to a different enclave identity, the error retains the
+underlying cause and explains that `--force` can replace it.
+
+To intentionally generate and install a replacement key, run:
+
+```bash
+GAIKO2_PROVING_MODE=tee GAIKO2_TEE_TYPE=ego \
+  GAIKO2_CONFIG_DIR=/tmp/gaiko2-config \
+  GAIKO2_SECRET_DIR=/tmp/gaiko2-secrets \
+  go run ./cmd/gaiko2 bootstrap --force
+```
+
+Before replacement starts, the command writes a warning to stderr. Replacing
+the key makes the old key and any on-chain registration bound to it unusable.
 
 For tee Docker deployments, the container entrypoint copies the embedded
 `attestation.json` into `GAIKO2_CONFIG_DIR/attestation.gaiko2.json` before the
