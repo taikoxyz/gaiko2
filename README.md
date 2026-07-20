@@ -59,6 +59,10 @@ Probe liveness with:
 curl http://127.0.0.1:8080/healthz
 ```
 
+Both `/prove/shasta` and `/prove/shasta-aggregate` accept exactly one JSON
+request value with a maximum body size of 512 MiB. Larger bodies return HTTP
+`413` with the standard `REQUEST_TOO_LARGE` error envelope.
+
 Optional proving configuration:
 
 - `GAIKO2_PROVING_MODE=native|tee`
@@ -71,9 +75,15 @@ Optional proving configuration:
 
 If unset, `gaiko2` defaults to `native` mode.
 
-TEE mode expects the enclave key to be bootstrapped ahead of proving. `gaiko2 server`
-checks that the sealed key is readable at startup and caches the loaded key for
-later signing.
+TEE mode expects the enclave key to be bootstrapped ahead of proving and also
+requires either `GAIKO2_INSTANCE_ID` or a `GAIKO2_FORK` entry in
+`registered.gaiko2.json`. `gaiko2 server` validates both requirements at
+startup and caches the loaded key for later signing.
+
+On `SIGINT` or `SIGTERM`, the server stops accepting new connections and gives
+in-flight requests up to 30 seconds to finish. The checked-in Compose services
+allow 35 seconds before forced termination so the application grace period can
+complete.
 
 Bootstrap the local tee state with:
 

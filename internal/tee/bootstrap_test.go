@@ -195,6 +195,124 @@ func TestBootstrapDataForExistingKeyKeepsMatchingMetadata(t *testing.T) {
 	}
 }
 
+func TestBootstrapDataForExistingKeyRebuildsMetadataWithoutQuote(t *testing.T) {
+	key, err := crypto.GenerateKey()
+	if err != nil {
+		t.Fatalf("generate key: %v", err)
+	}
+	dir := t.TempDir()
+	incomplete := BootstrapData{
+		PublicKey:       crypto.FromECDSAPub(&key.PublicKey),
+		InstanceAddress: crypto.PubkeyToAddress(key.PublicKey),
+	}
+	if err := SaveBootstrapData(dir, incomplete); err != nil {
+		t.Fatalf("save incomplete bootstrap data: %v", err)
+	}
+	provider := &fakeProvider{
+		savedKey: key,
+		quote:    []byte{0xca, 0xfe},
+	}
+
+	got, matches, err := BootstrapDataForExistingKey(provider, dir)
+	if err != nil {
+		t.Fatalf("rebuild bootstrap data: %v", err)
+	}
+	if matches {
+		t.Fatal("metadata without a quote must require recovery")
+	}
+	if !bytes.Equal(got.Quote, provider.quote) {
+		t.Fatalf("recovered quote=%x want=%x", got.Quote, provider.quote)
+	}
+}
+
+func TestSaveBootstrapDataSyncsParentsOfNewDirectories(t *testing.T) {
+	previous := syncDirectoryFn
+	t.Cleanup(func() { syncDirectoryFn = previous })
+
+	root := t.TempDir()
+	configDir := filepath.Join(root, "new", "nested")
+	var synced []string
+	syncDirectoryFn = func(path string) error {
+		synced = append(synced, filepath.Clean(path))
+		return nil
+	}
+
+	if err := SaveBootstrapData(configDir, BootstrapData{}); err != nil {
+		t.Fatalf("save bootstrap data: %v", err)
+	}
+	for _, want := range []string{root, filepath.Join(root, "new")} {
+		if !slices.Contains(synced, filepath.Clean(want)) {
+			t.Fatalf("directory %s was not synced; synced=%v", want, synced)
+		}
+	}
+}
+
+func TestEnsureDirectorySyncsExistingDirectoryAncestors(t *testing.T) {
+	previous := syncDirectoryFn
+	t.Cleanup(func() { syncDirectoryFn = previous })
+
+	root := t.TempDir()
+	dirPath := filepath.Join(root, "existing", "nested")
+	if err := os.MkdirAll(dirPath, 0o755); err != nil {
+		t.Fatalf("create directory tree: %v", err)
+	}
+	if err := os.Chmod(dirPath, 0o755); err != nil {
+		t.Fatalf("set existing directory mode: %v", err)
+	}
+	var synced []string
+	syncDirectoryFn = func(path string) error {
+		synced = append(synced, filepath.Clean(path))
+		return nil
+	}
+
+	if err := ensureDirectory(dirPath, 0o700); err != nil {
+		t.Fatalf("ensure existing directory: %v", err)
+	}
+	for _, want := range []string{dirPath, filepath.Dir(dirPath), root} {
+		if !slices.Contains(synced, filepath.Clean(want)) {
+			t.Fatalf("directory %s was not synced; synced=%v", want, synced)
+		}
+	}
+	info, err := os.Stat(dirPath)
+	if err != nil {
+		t.Fatalf("stat existing directory: %v", err)
+	}
+	if got, want := info.Mode().Perm(), os.FileMode(0o755); got != want {
+		t.Fatalf("existing directory mode changed: got %#o want %#o", got, want)
+	}
+}
+
+func TestEnsureDirectoryRetriesSyncAfterCreationFailure(t *testing.T) {
+	previous := syncDirectoryFn
+	t.Cleanup(func() { syncDirectoryFn = previous })
+
+	root := t.TempDir()
+	dirPath := filepath.Join(root, "new", "nested")
+	syncErr := errors.New("sync failed")
+	syncDirectoryFn = func(string) error { return syncErr }
+
+	if err := ensureDirectory(dirPath, 0o700); !errors.Is(err, syncErr) {
+		t.Fatalf("first ensure error = %v, want %v", err, syncErr)
+	}
+	if info, err := os.Stat(dirPath); err != nil || !info.IsDir() {
+		t.Fatalf("directory was not created before sync failure: info=%v err=%v", info, err)
+	}
+
+	var synced []string
+	syncDirectoryFn = func(path string) error {
+		synced = append(synced, filepath.Clean(path))
+		return nil
+	}
+	if err := ensureDirectory(dirPath, 0o700); err != nil {
+		t.Fatalf("retry ensure directory: %v", err)
+	}
+	for _, want := range []string{dirPath, filepath.Dir(dirPath), root} {
+		if !slices.Contains(synced, filepath.Clean(want)) {
+			t.Fatalf("directory %s was not re-synced; synced=%v", want, synced)
+		}
+	}
+}
+
 func TestAtomicWriteFileWritesContentWithPerm(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "out.json")

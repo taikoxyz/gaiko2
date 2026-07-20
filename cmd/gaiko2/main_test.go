@@ -5,11 +5,14 @@ import (
 	"context"
 	"errors"
 	"io"
+	"io/fs"
 	"net"
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"path/filepath"
 	"strings"
+	"syscall"
 	"testing"
 	"time"
 
@@ -302,6 +305,113 @@ func TestRunBootstrapCommandExplainsForceOnExistingKey(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "--force") {
 		t.Fatalf("expected guidance mentioning --force, got %q", err.Error())
+	}
+}
+
+func TestRunBootstrapCommandRetriesAttestationForMatchingKey(t *testing.T) {
+	prevBootstrap := teeBootstrapFn
+	prevExisting := teeBootstrapDataForExistingKeyFn
+	t.Cleanup(func() {
+		teeBootstrapFn = prevBootstrap
+		teeBootstrapDataForExistingKeyFn = prevExisting
+	})
+
+	teeBootstrapFn = func(tee.Provider, bool) (tee.BootstrapData, error) {
+		return tee.BootstrapData{}, tee.ErrPrivateKeyExists
+	}
+	teeBootstrapDataForExistingKeyFn = func(tee.Provider, string) (tee.BootstrapData, bool, error) {
+		return tee.BootstrapData{Quote: []byte{0xca, 0xfe}}, true, nil
+	}
+
+	want := tee.AttestationMetadata{
+		UniqueID:        "abc",
+		SignerID:        "def",
+		ProductID:       1,
+		SecurityVersion: 2,
+	}
+	attestationPath := filepath.Join(t.TempDir(), "attestation.json")
+	attestationJSON := `{"unique_id":"abc","signer_id":"def","product_id":1,"security_version":2}`
+	if err := os.WriteFile(attestationPath, []byte(attestationJSON), 0o600); err != nil {
+		t.Fatalf("write attestation source: %v", err)
+	}
+	setEnv(t, envAttestationPath, attestationPath)
+	configDir := t.TempDir()
+
+	err := run(context.Background(), []string{
+		"bootstrap", "--secret-dir", t.TempDir(), "--config-dir", configDir,
+	}, io.Discard)
+	if !errors.Is(err, tee.ErrPrivateKeyExists) {
+		t.Fatalf("expected ErrPrivateKeyExists, got %v", err)
+	}
+	got, loadErr := tee.LoadAttestationMetadata(configDir)
+	if loadErr != nil {
+		t.Fatalf("load retried attestation metadata: %v", loadErr)
+	}
+	if got != want {
+		t.Fatalf("attestation metadata=%+v want=%+v", got, want)
+	}
+}
+
+func TestRunBootstrapCommandPreservesExistingKeyContextOnAttestationErrors(t *testing.T) {
+	prevBootstrap := teeBootstrapFn
+	prevExisting := teeBootstrapDataForExistingKeyFn
+	t.Cleanup(func() {
+		teeBootstrapFn = prevBootstrap
+		teeBootstrapDataForExistingKeyFn = prevExisting
+	})
+
+	teeBootstrapFn = func(tee.Provider, bool) (tee.BootstrapData, error) {
+		return tee.BootstrapData{}, tee.ErrPrivateKeyExists
+	}
+	teeBootstrapDataForExistingKeyFn = func(tee.Provider, string) (tee.BootstrapData, bool, error) {
+		return tee.BootstrapData{Quote: []byte{0xca, 0xfe}}, true, nil
+	}
+
+	validAttestationPath := filepath.Join(t.TempDir(), "attestation.json")
+	attestationJSON := `{"unique_id":"abc","signer_id":"def","product_id":1,"security_version":2}`
+	if err := os.WriteFile(validAttestationPath, []byte(attestationJSON), 0o600); err != nil {
+		t.Fatalf("write attestation source: %v", err)
+	}
+	configFile := filepath.Join(t.TempDir(), "config-is-a-file")
+	if err := os.WriteFile(configFile, []byte("not a directory"), 0o600); err != nil {
+		t.Fatalf("write config blocker: %v", err)
+	}
+
+	tests := []struct {
+		name            string
+		attestationPath string
+		configDir       string
+		wantCause       error
+	}{
+		{
+			name:            "read failure",
+			attestationPath: filepath.Join(t.TempDir(), "missing.json"),
+			configDir:       t.TempDir(),
+			wantCause:       fs.ErrNotExist,
+		},
+		{
+			name:            "save failure",
+			attestationPath: validAttestationPath,
+			configDir:       configFile,
+			wantCause:       syscall.ENOTDIR,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			setEnv(t, envAttestationPath, tt.attestationPath)
+			err := run(context.Background(), []string{
+				"bootstrap", "--secret-dir", t.TempDir(), "--config-dir", tt.configDir,
+			}, io.Discard)
+			if !errors.Is(err, tee.ErrPrivateKeyExists) {
+				t.Fatalf("expected ErrPrivateKeyExists, got %v", err)
+			}
+			if !errors.Is(err, tt.wantCause) {
+				t.Fatalf("expected underlying cause %v, got %v", tt.wantCause, err)
+			}
+			if !strings.Contains(err.Error(), "--force") {
+				t.Fatalf("expected --force guidance, got %q", err.Error())
+			}
+		})
 	}
 }
 

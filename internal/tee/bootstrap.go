@@ -9,6 +9,7 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
+	"syscall"
 
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/common/hexutil"
@@ -92,7 +93,10 @@ func BootstrapDataForExistingKey(provider Provider, configDir string) (Bootstrap
 	address := crypto.PubkeyToAddress(privateKey.PublicKey)
 
 	existing, loadErr := LoadBootstrapData(configDir)
-	if loadErr == nil && existing.InstanceAddress == address && bytes.Equal(existing.PublicKey, publicKey) {
+	if loadErr == nil &&
+		existing.InstanceAddress == address &&
+		bytes.Equal(existing.PublicKey, publicKey) &&
+		len(existing.Quote) > 0 {
 		return existing, true, nil
 	}
 	if loadErr != nil {
@@ -161,7 +165,7 @@ func defaultDir(kind string) string {
 }
 
 func writeJSON(path string, value any) error {
-	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+	if err := ensureDirectory(filepath.Dir(path), 0o755); err != nil {
 		return err
 	}
 	encoded, err := json.MarshalIndent(value, "", "  ")
@@ -170,6 +174,77 @@ func writeJSON(path string, value any) error {
 	}
 	encoded = append(encoded, '\n')
 	return atomicWriteFile(path, encoded, 0o644, true)
+}
+
+// ensureDirectory creates missing path components and makes each new directory
+// entry durable before returning. os.MkdirAll alone does not fsync the parent
+// directories that name newly created children.
+func ensureDirectory(path string, perm os.FileMode) error {
+	path = filepath.Clean(path)
+	missing := make([]string, 0)
+	current := path
+	for {
+		info, err := os.Stat(current)
+		if err == nil {
+			if !info.IsDir() {
+				return &os.PathError{Op: "mkdir", Path: current, Err: syscall.ENOTDIR}
+			}
+			break
+		}
+		if !errors.Is(err, fs.ErrNotExist) {
+			return err
+		}
+		missing = append(missing, current)
+		parent := filepath.Dir(current)
+		if parent == current {
+			return err
+		}
+		current = parent
+	}
+
+	for i := len(missing) - 1; i >= 0; i-- {
+		dirPath := missing[i]
+		created := false
+		if err := os.Mkdir(dirPath, perm); err != nil {
+			if !errors.Is(err, fs.ErrExist) {
+				return err
+			}
+			info, statErr := os.Stat(dirPath)
+			if statErr != nil {
+				return statErr
+			}
+			if !info.IsDir() {
+				return &os.PathError{Op: "mkdir", Path: dirPath, Err: syscall.ENOTDIR}
+			}
+		} else {
+			created = true
+		}
+
+		if created {
+			if err := os.Chmod(dirPath, perm); err != nil {
+				return err
+			}
+		}
+	}
+
+	// Sync the full chain even when every component already existed when it
+	// was observed. Another process may have just created one of those entries
+	// without making its parent durable yet.
+	return syncDirectoryAncestors(path)
+}
+
+func syncDirectoryAncestors(path string) error {
+	current := filepath.Clean(path)
+	for {
+		if err := syncDirectoryFn(current); err != nil {
+			return err
+		}
+		parent := filepath.Dir(current)
+		if parent == current {
+			return nil
+		}
+		current = parent
+	}
 }
 
 // atomicWriteFile writes via a temp file in the target directory and installs

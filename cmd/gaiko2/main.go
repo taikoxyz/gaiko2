@@ -219,6 +219,8 @@ func runBootstrapCommand(args []string, stdout io.Writer) error {
 	}
 
 	data, err := teeBootstrapFn(provider, *force)
+	saveBootstrapData := true
+	var existingKeyErr error
 	if errors.Is(err, tee.ErrPrivateKeyExists) {
 		recovered, matches, recoverErr := teeBootstrapDataForExistingKeyFn(provider, *configDir)
 		if recoverErr != nil {
@@ -231,25 +233,34 @@ func runBootstrapCommand(args []string, stdout io.Writer) error {
 			}
 			return fmt.Errorf("recover bootstrap data: %w", recoverErr)
 		}
-		if matches {
-			return fmt.Errorf("%w; re-run with --force to replace it (the old key and any on-chain registration bound to it become unusable)", err)
-		}
 		data = recovered
+		if matches {
+			saveBootstrapData = false
+			existingKeyErr = fmt.Errorf(
+				"%w; re-run with --force to replace it (the old key and any on-chain registration bound to it become unusable)",
+				err,
+			)
+		}
 	} else if err != nil {
 		return err
 	}
-	if err := tee.SaveBootstrapData(*configDir, data); err != nil {
-		return err
+	if saveBootstrapData {
+		if err := tee.SaveBootstrapData(*configDir, data); err != nil {
+			return err
+		}
 	}
 	attestationPath := strings.TrimSpace(os.Getenv(envAttestationPath))
 	if attestationPath != "" {
 		metadata, err := tee.ReadAttestationMetadataFile(attestationPath)
 		if err != nil {
-			return err
+			return errors.Join(existingKeyErr, fmt.Errorf("read attestation metadata: %w", err))
 		}
 		if err := tee.SaveAttestationMetadata(*configDir, metadata); err != nil {
-			return err
+			return errors.Join(existingKeyErr, fmt.Errorf("save attestation metadata: %w", err))
 		}
+	}
+	if existingKeyErr != nil {
+		return existingKeyErr
 	}
 	return json.NewEncoder(stdout).Encode(data)
 }

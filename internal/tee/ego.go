@@ -64,7 +64,7 @@ func (p *EGoProvider) SavePrivateKey(privKey *ecdsa.PrivateKey, overwrite bool) 
 	if err != nil {
 		return err
 	}
-	if err := os.MkdirAll(p.secretDir, 0o700); err != nil {
+	if err := ensureDirectory(p.secretDir, 0o700); err != nil {
 		return err
 	}
 	err = atomicWriteFile(
