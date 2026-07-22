@@ -133,13 +133,6 @@ func TestGuestInputCarryRejectsMismatches(t *testing.T) {
 			},
 			wantErr: "checkpoint.stateRoot mismatch",
 		},
-		{
-			name: "verifier",
-			mutate: func(f *guestInputCarryFixture) {
-				f.verifier = testAddress("92")
-			},
-			wantErr: "verifier mismatch",
-		},
 	}
 
 	for _, tc := range cases {
@@ -185,6 +178,17 @@ func TestGuestInputCarryRejectsMissingGuestInputChainID(t *testing.T) {
 	}
 }
 
+func TestGuestInputCarryRejectsMissingWitnesses(t *testing.T) {
+	fixture := newGuestInputCarryFixture(t)
+	view := decodeGuestInputCarryView(t, fixture)
+	view.Witnesses = nil
+
+	err := ValidateGuestInputCarry(view)
+	if err == nil || !strings.Contains(err.Error(), "at least one witness") {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
 func TestGuestInputCarryRejectsProposalIDParserSplit(t *testing.T) {
 	fixture := newGuestInputCarryFixture(t)
 	const claimedProposalID = uint64(54321)
@@ -204,182 +208,31 @@ func TestGuestInputCarryRejectsProposalIDParserSplit(t *testing.T) {
 	}
 }
 
-func TestGuestInputCarryRejectsMissingVerifier(t *testing.T) {
+func TestGuestInputCarryAcceptsVerifierMetadataDrift(t *testing.T) {
+	fixture := newGuestInputCarryFixture(t)
+	fixture.verifier = testAddress("92")
+	fixture.witnessChainSpec = guestInputChainSpec(t,
+		`{"SHASTA": {"Block": 0}}`,
+		fmt.Sprintf(`{"SHASTA": {"SgxGeth": %q}}`, testAddress("a1")),
+	)
+	view := decodeGuestInputCarryView(t, fixture)
+
+	if err := ValidateGuestInputCarry(view); err != nil {
+		t.Fatalf("verifier metadata must not override proof carry data: %v", err)
+	}
+}
+
+func TestGuestInputCarryIgnoresMalformedVerifierMetadata(t *testing.T) {
 	fixture := newGuestInputCarryFixture(t)
 	fixture.witnessChainSpec = mustRawMessage(t, `{
 		"chain_id": 167013,
-		"hard_forks": {
-			"SHASTA": {"Block": 0}
-		},
-		"verifier_address_forks": {
-			"SHASTA": {
-				"SP1": "0x1111111111111111111111111111111111111111"
-			}
-		}
+		"hard_forks": {"SHASTA": "later"},
+		"verifier_address_forks": {"SHASTA": {"SgxGeth": "0x1234"}}
 	}`)
 	view := decodeGuestInputCarryView(t, fixture)
 
-	err := ValidateGuestInputCarry(view)
-	if err == nil || !strings.Contains(err.Error(), "missing verifier") {
-		t.Fatalf("unexpected error: %v", err)
-	}
-}
-
-func TestGuestInputCarryAcceptsSgxGethVerifierSpellings(t *testing.T) {
-	cases := []string{"SgxGeth", "SGXGETH", "sgxgeth", "sgx_geth"}
-
-	for _, verifierKey := range cases {
-		t.Run(verifierKey, func(t *testing.T) {
-			fixture := newGuestInputCarryFixture(t)
-			fixture.witnessChainSpec = guestInputChainSpec(t,
-				`{"SHASTA": {"Block": 0}}`,
-				fmt.Sprintf(`{"SHASTA": {%q: %q}}`, verifierKey, fixture.verifier),
-			)
-			view := decodeGuestInputCarryView(t, fixture)
-
-			if err := ValidateGuestInputCarry(view); err != nil {
-				t.Fatalf("validate guest input carry: %v", err)
-			}
-		})
-	}
-}
-
-func TestGuestInputCarryRejectsPlainSgxVerifierLane(t *testing.T) {
-	fixture := newGuestInputCarryFixture(t)
-	fixture.witnessChainSpec = guestInputChainSpec(t,
-		`{"SHASTA": {"Block": 0}}`,
-		fmt.Sprintf(`{"SHASTA": {"Sgx": %q}}`, fixture.verifier),
-	)
-	view := decodeGuestInputCarryView(t, fixture)
-
-	err := ValidateGuestInputCarry(view)
-	if err == nil || !strings.Contains(err.Error(), "missing verifier") {
-		t.Fatalf("unexpected error: %v", err)
-	}
-}
-
-func TestGuestInputCarrySelectsActiveVerifierFork(t *testing.T) {
-	shastaVerifier := testAddress("a1")
-	unzenVerifier := testAddress("b2")
-
-	cases := []struct {
-		name          string
-		blockNumber   uint64
-		blockTime     uint64
-		verifierForks string
-		wantVerifier  string
-	}{
-		{
-			name:        "shasta active",
-			blockNumber: 150,
-			blockTime:   250,
-			verifierForks: fmt.Sprintf(`{
-				"PACAYA": {"SgxGeth": %q},
-				"SHASTA": {"SgxGeth": %q},
-				"UNZEN": {"SgxGeth": %q}
-			}`, testAddress("c3"), shastaVerifier, unzenVerifier),
-			wantVerifier: shastaVerifier,
-		},
-		{
-			name:        "unzen active with unzen verifier",
-			blockNumber: 150,
-			blockTime:   600,
-			verifierForks: fmt.Sprintf(`{
-				"SHASTA": {"SgxGeth": %q},
-				"UNZEN": {"SgxGeth": %q}
-			}`, shastaVerifier, unzenVerifier),
-			wantVerifier: unzenVerifier,
-		},
-		{
-			name:        "unzen active falls back to shasta verifier",
-			blockNumber: 150,
-			blockTime:   600,
-			verifierForks: fmt.Sprintf(`{
-				"SHASTA": {"SgxGeth": %q}
-			}`, shastaVerifier),
-			wantVerifier: shastaVerifier,
-		},
-		{
-			name:        "unzen active skips unzen without sgxgeth verifier",
-			blockNumber: 150,
-			blockTime:   600,
-			verifierForks: fmt.Sprintf(`{
-				"SHASTA": {"SgxGeth": %q},
-				"UNZEN": {"SP1": %q}
-			}`, shastaVerifier, unzenVerifier),
-			wantVerifier: shastaVerifier,
-		},
-	}
-
-	for _, tc := range cases {
-		t.Run(tc.name, func(t *testing.T) {
-			fixture := newGuestInputCarryFixture(t)
-			fixture.verifier = tc.wantVerifier
-			setGuestInputCarryFixtureBlock(t, fixture, tc.blockNumber, tc.blockTime)
-			fixture.witnessChainSpec = guestInputChainSpec(t,
-				`{
-					"CANCUN": "Tbd",
-					"PACAYA": {"Block": 100},
-					"SHASTA": {"Timestamp": 200},
-					"UNZEN": {"Timestamp": 500}
-				}`,
-				tc.verifierForks,
-			)
-			view := decodeGuestInputCarryView(t, fixture)
-
-			if err := ValidateGuestInputCarry(view); err != nil {
-				t.Fatalf("validate guest input carry: %v", err)
-			}
-		})
-	}
-}
-
-func TestGuestInputCarryRejectsMalformedActiveVerifierInsteadOfFallback(t *testing.T) {
-	shastaVerifier := testAddress("a1")
-	cases := []struct {
-		name         string
-		unzenSgxGeth string
-	}{
-		{name: "null", unzenSgxGeth: "null"},
-		{name: "malformed", unzenSgxGeth: `"0x1234"`},
-	}
-
-	for _, tc := range cases {
-		t.Run(tc.name, func(t *testing.T) {
-			fixture := newGuestInputCarryFixture(t)
-			fixture.verifier = shastaVerifier
-			setGuestInputCarryFixtureBlock(t, fixture, 150, 600)
-			fixture.witnessChainSpec = guestInputChainSpec(t,
-				`{
-					"SHASTA": {"Timestamp": 200},
-					"UNZEN": {"Timestamp": 500}
-				}`,
-				fmt.Sprintf(`{
-					"SHASTA": {"SgxGeth": %q},
-					"UNZEN": {"SgxGeth": %s}
-				}`, shastaVerifier, tc.unzenSgxGeth),
-			)
-			view := decodeGuestInputCarryView(t, fixture)
-
-			err := ValidateGuestInputCarry(view)
-			if err == nil || !strings.Contains(err.Error(), "parse witness.chain_spec.verifier_address_forks.UNZEN.SgxGeth") {
-				t.Fatalf("unexpected error: %v", err)
-			}
-		})
-	}
-}
-
-func TestGuestInputCarryRejectsUnknownHardForkString(t *testing.T) {
-	fixture := newGuestInputCarryFixture(t)
-	fixture.witnessChainSpec = guestInputChainSpec(t,
-		`{"SHASTA": "later"}`,
-		fmt.Sprintf(`{"SHASTA": {"SgxGeth": %q}}`, fixture.verifier),
-	)
-	view := decodeGuestInputCarryView(t, fixture)
-
-	err := ValidateGuestInputCarry(view)
-	if err == nil || !strings.Contains(err.Error(), `unknown hard fork string "later"`) {
-		t.Fatalf("unexpected error: %v", err)
+	if err := ValidateGuestInputCarry(view); err != nil {
+		t.Fatalf("verifier metadata must be opaque to carry validation: %v", err)
 	}
 }
 
@@ -673,55 +526,6 @@ func guestInputChainSpec(t *testing.T, hardForks string, verifierForks string) j
 		"hard_forks": %s,
 		"verifier_address_forks": %s
 	}`, hardForks, verifierForks))
-}
-
-func setGuestInputCarryFixtureBlock(
-	t *testing.T,
-	fixture *guestInputCarryFixture,
-	number uint64,
-	timestamp uint64,
-) {
-	t.Helper()
-	fixture.block = sampleReplayBlockWithTimestamp(
-		t,
-		number,
-		timestamp,
-		fixture.parentBlockHash,
-		fixture.checkpointStateRoot,
-		testHash("33"),
-	)
-	fixture.checkpointNumber = fmt.Sprintf("0x%x", number)
-	fixture.checkpointBlockHash = replayBlockHash(t, fixture.block)
-}
-
-func sampleReplayBlockWithTimestamp(
-	t *testing.T,
-	number uint64,
-	timestamp uint64,
-	parentHash string,
-	stateRoot string,
-	receiptsRoot string,
-) []byte {
-	t.Helper()
-	blockRaw := sampleReplayBlock(t, fmt.Sprintf("0x%x", number), parentHash, stateRoot, receiptsRoot)
-	decoded, err := decodeBlockEnvelope(blockRaw)
-	if err != nil {
-		t.Fatalf("decode block envelope: %v", err)
-	}
-	header, err := decodeJSONObject(decoded.Header)
-	if err != nil {
-		t.Fatalf("decode header object: %v", err)
-	}
-	header["timestamp"] = mustRawMessage(t, fmt.Sprintf("%d", timestamp))
-	decoded.Header, err = json.Marshal(header)
-	if err != nil {
-		t.Fatalf("marshal header: %v", err)
-	}
-	encoded, err := json.Marshal(decoded)
-	if err != nil {
-		t.Fatalf("marshal block: %v", err)
-	}
-	return encoded
 }
 
 func strictCarryData(t *testing.T, transitionInputFormat string) json.RawMessage {

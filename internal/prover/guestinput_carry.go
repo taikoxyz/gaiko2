@@ -4,7 +4,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"math/big"
-	"strings"
 
 	"github.com/ethereum/go-ethereum/accounts/abi"
 	"github.com/ethereum/go-ethereum/common"
@@ -15,8 +14,6 @@ const (
 	maxUint24 = uint64(1<<24 - 1)
 	maxUint48 = uint64(1<<48 - 1)
 )
-
-var taikoVerifierForks = []string{"PACAYA", "SHASTA", "UNZEN"}
 
 type shastaProposalView struct {
 	ID                             uint64
@@ -67,6 +64,9 @@ type abiBlobSlice struct {
 func ValidateGuestInputCarry(view *GuestInputView) error {
 	if view == nil {
 		return fmt.Errorf("guest input view is nil")
+	}
+	if len(view.Witnesses) == 0 {
+		return fmt.Errorf("guest input must include at least one witness")
 	}
 	if view.GuestInputChainID == 0 {
 		return fmt.Errorf("guest input chain id is missing")
@@ -190,17 +190,9 @@ func ValidateGuestInputCarry(view *GuestInputView) error {
 		)
 	}
 
-	verifier, err := resolveGuestInputVerifier(view)
-	if err != nil {
-		return err
-	}
-	if view.Carry.Verifier != verifier {
-		return fmt.Errorf(
-			"verifier mismatch: chain_spec=%s proof_carry_data=%s",
-			verifier.Hex(),
-			view.Carry.Verifier.Hex(),
-		)
-	}
+	// Do not resolve a verifier from witness.chain_spec. That field is
+	// host-provided metadata, while Carry.Verifier is bound into the signed
+	// public input and authenticated by the destination verifier contract.
 
 	return nil
 }
@@ -346,156 +338,6 @@ func decodeGuestInputActualProver(raw json.RawMessage) (common.Address, error) {
 		return common.Address{}, fmt.Errorf("parse taiko.prover_data.actual_prover: %w", err)
 	}
 	return actualProver, nil
-}
-
-func resolveGuestInputVerifier(view *GuestInputView) (common.Address, error) {
-	if len(view.Witnesses) == 0 {
-		return common.Address{}, fmt.Errorf("guest input must include at least one witness")
-	}
-	firstHeader, err := decodeFirstWitnessHeader(view)
-	if err != nil {
-		return common.Address{}, err
-	}
-	fields, err := decodeJSONObject(view.Witnesses[0].ChainSpecRaw)
-	if err != nil {
-		return common.Address{}, fmt.Errorf("unmarshal witness.chain_spec: %w", err)
-	}
-	activeForkIndex, forkActive, err := activeTaikoFork(fields, firstHeader.Number.Uint64(), firstHeader.Time)
-	if err != nil {
-		return common.Address{}, err
-	}
-	rawForks, ok := lookupField(fields, "verifier_address_forks", "verifierAddressForks")
-	if !ok {
-		return common.Address{}, fmt.Errorf("missing verifier_address_forks in witness.chain_spec")
-	}
-	forks, err := decodeJSONObject(rawForks)
-	if err != nil {
-		return common.Address{}, fmt.Errorf("unmarshal witness.chain_spec.verifier_address_forks: %w", err)
-	}
-
-	for index := activeForkIndex; index >= 0; index-- {
-		forkName := taikoVerifierForks[index]
-		if !forkActive[forkName] {
-			continue
-		}
-		rawFork, ok := lookupField(forks, forkName)
-		if !ok {
-			continue
-		}
-		fork, err := decodeJSONObject(rawFork)
-		if err != nil {
-			return common.Address{}, fmt.Errorf("unmarshal witness.chain_spec.verifier_address_forks.%s: %w", forkName, err)
-		}
-		rawVerifier, ok := lookupField(fork, "SgxGeth", "SGXGETH", "sgxgeth", "sgx_geth")
-		if !ok {
-			continue
-		}
-		verifier, err := parseAddressJSON(rawVerifier)
-		if err != nil {
-			return common.Address{}, fmt.Errorf("parse witness.chain_spec.verifier_address_forks.%s.SgxGeth: %w", forkName, err)
-		}
-		return verifier, nil
-	}
-
-	return common.Address{}, fmt.Errorf("missing verifier for active SgxGeth in witness.chain_spec.verifier_address_forks")
-}
-
-func decodeFirstWitnessHeader(view *GuestInputView) (*typesHeaderView, error) {
-	decoded, err := decodeBlockEnvelope(view.Witnesses[0].BlockRaw)
-	if err != nil {
-		return nil, fmt.Errorf("decode first witness block: %w", err)
-	}
-	header, err := decodeHeader(decoded.Header)
-	if err != nil {
-		return nil, fmt.Errorf("decode first witness header: %w", err)
-	}
-	return &typesHeaderView{
-		Number: header.Number,
-		Time:   header.Time,
-	}, nil
-}
-
-type typesHeaderView struct {
-	Number *big.Int
-	Time   uint64
-}
-
-func activeTaikoFork(
-	chainSpec map[string]json.RawMessage,
-	blockNumber uint64,
-	blockTimestamp uint64,
-) (int, map[string]bool, error) {
-	rawHardForks, ok := lookupField(chainSpec, "hard_forks", "hardForks")
-	if !ok {
-		return 0, nil, fmt.Errorf("missing hard_forks in witness.chain_spec")
-	}
-	hardForks, err := decodeJSONObject(rawHardForks)
-	if err != nil {
-		return 0, nil, fmt.Errorf("unmarshal witness.chain_spec.hard_forks: %w", err)
-	}
-
-	activeIndex := -1
-	active := make(map[string]bool, len(taikoVerifierForks))
-	for index, forkName := range taikoVerifierForks {
-		rawFork, ok := lookupForkCaseInsensitive(hardForks, forkName)
-		if !ok {
-			continue
-		}
-		isActive, err := hardForkActive(rawFork, blockNumber, blockTimestamp)
-		if err != nil {
-			return 0, nil, fmt.Errorf("parse witness.chain_spec.hard_forks.%s: %w", forkName, err)
-		}
-		active[forkName] = isActive
-		if isActive {
-			activeIndex = index
-		}
-	}
-	if activeIndex < 0 {
-		return 0, nil, fmt.Errorf("no active Taiko verifier fork for first witness block")
-	}
-	return activeIndex, active, nil
-}
-
-func hardForkActive(raw json.RawMessage, blockNumber uint64, blockTimestamp uint64) (bool, error) {
-	var text string
-	if err := json.Unmarshal(raw, &text); err == nil {
-		if strings.EqualFold(text, "Tbd") {
-			return false, nil
-		}
-		return false, fmt.Errorf("unknown hard fork string %q", text)
-	}
-
-	fields, err := decodeJSONObject(raw)
-	if err != nil {
-		return false, err
-	}
-	block, err := optionalUint64Ptr(fields, "Block", "block")
-	if err != nil {
-		return false, err
-	}
-	if block != nil {
-		return blockNumber >= *block, nil
-	}
-	timestamp, err := optionalUint64Ptr(fields, "Timestamp", "timestamp")
-	if err != nil {
-		return false, err
-	}
-	if timestamp != nil {
-		return blockTimestamp >= *timestamp, nil
-	}
-	return false, nil
-}
-
-func lookupForkCaseInsensitive(fields map[string]json.RawMessage, name string) (json.RawMessage, bool) {
-	if raw, ok := fields[name]; ok {
-		return raw, true
-	}
-	for key, raw := range fields {
-		if strings.EqualFold(key, name) {
-			return raw, true
-		}
-	}
-	return nil, false
 }
 
 func decodeShastaProposal(raw json.RawMessage) (shastaProposalView, error) {
