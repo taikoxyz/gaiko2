@@ -52,7 +52,7 @@ Start the service with:
 
 ```bash
 cd gaiko2
-go run ./cmd/gaiko2 server
+GAIKO2_PROVING_MODE=native go run ./cmd/gaiko2 server
 ```
 
 Probe liveness with:
@@ -65,9 +65,9 @@ Both `/prove/shasta` and `/prove/shasta-aggregate` accept exactly one JSON
 request value with a maximum body size of 512 MiB. Larger bodies return HTTP
 `413` with the standard `REQUEST_TOO_LARGE` error envelope.
 
-Optional proving configuration:
+Proving configuration:
 
-- `GAIKO2_PROVING_MODE=native|tee`
+- `GAIKO2_PROVING_MODE=native|tee` (required)
 - `GAIKO2_TEE_TYPE=ego`
 - `GAIKO2_CONFIG_DIR=/path/to/config`
 - `GAIKO2_SECRET_DIR=/path/to/secrets`
@@ -76,7 +76,10 @@ Optional proving configuration:
 - `GAIKO2_PORT=8080`
 - `GAIKO2_DEV_MODE=1` (native mode only; see below)
 
-If unset, `gaiko2` defaults to `native` mode.
+`GAIKO2_PROVING_MODE` must be set explicitly. `native` mode preserves the
+deterministic local-development proof flow, but its signing key is public. Never
+register the native signer in a verifier protecting real value. Production
+deployments must use `tee` mode with an enclave-managed key.
 
 Native mode signs with a published mock key, so it is intended for local
 development only. Because `/prove/shasta-aggregate` produces the final on-chain

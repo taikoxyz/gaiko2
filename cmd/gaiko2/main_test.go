@@ -22,6 +22,9 @@ import (
 )
 
 func TestRunServerPrintsStartupSummary(t *testing.T) {
+	var stderr bytes.Buffer
+	setWarningStderr(t, &stderr)
+
 	prevListen := listenFn
 	prevServe := serveFn
 	t.Cleanup(func() {
@@ -57,9 +60,104 @@ func TestRunServerPrintsStartupSummary(t *testing.T) {
 		!strings.Contains(output, "instance_id=11") {
 		t.Fatalf("expected startup fields, got %q", output)
 	}
+	if strings.Contains(output, "WARNING:") {
+		t.Fatalf("native safety warning leaked to stdout: %q", output)
+	}
+	if !strings.Contains(stderr.String(), "WARNING: native proving mode uses a public deterministic signing key") ||
+		!strings.Contains(stderr.String(), "/prove/shasta-aggregate is DISABLED") ||
+		!strings.Contains(stderr.String(), "GAIKO2_DEV_MODE=1") ||
+		!strings.Contains(stderr.String(), "never register") {
+		t.Fatalf("expected native safety warning on stderr, got %q", stderr.String())
+	}
+}
+
+func TestRunServerWarnsWhenNativeAggregateDevModeEnabled(t *testing.T) {
+	var stderr bytes.Buffer
+	setWarningStderr(t, &stderr)
+	setEnv(t, "GAIKO2_PROVING_MODE", "native")
+	setEnv(t, "GAIKO2_DEV_MODE", "1")
+
+	prevListen := listenFn
+	prevServe := serveFn
+	t.Cleanup(func() {
+		listenFn = prevListen
+		serveFn = prevServe
+	})
+
+	listenFn = func(network, addr string) (net.Listener, error) {
+		return fakeListener{addr: fakeAddr("127.0.0.1:18080")}, nil
+	}
+	serveFn = func(context.Context, net.Listener, http.Handler) error {
+		return errors.New("stop server")
+	}
+
+	var stdout bytes.Buffer
+	err := run(context.Background(), []string{"server", ":18080"}, &stdout)
+	if err == nil || err.Error() != "stop server" {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if strings.Contains(stdout.String(), "WARNING:") {
+		t.Fatalf("native safety warning leaked to stdout: %q", stdout.String())
+	}
+	if !strings.Contains(stderr.String(), "GAIKO2_DEV_MODE enabled") ||
+		!strings.Contains(stderr.String(), "/prove/shasta-aggregate is ENABLED") ||
+		!strings.Contains(stderr.String(), "never expose") ||
+		!strings.Contains(stderr.String(), "never register") {
+		t.Fatalf("expected native dev-mode warning on stderr, got %q", stderr.String())
+	}
+}
+
+func TestRunServerRejectsUnsetModeBeforeStartupOrListen(t *testing.T) {
+	whitespaceMode := " \t "
+	tests := []struct {
+		name string
+		mode *string
+	}{
+		{name: "unset"},
+		{name: "whitespace", mode: &whitespaceMode},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			prevListen := listenFn
+			t.Cleanup(func() {
+				listenFn = prevListen
+			})
+
+			if test.mode == nil {
+				unsetEnv(t, "GAIKO2_PROVING_MODE")
+			} else {
+				t.Setenv("GAIKO2_PROVING_MODE", *test.mode)
+			}
+			t.Setenv("GAIKO2_FORK", "shasta")
+			t.Setenv("GAIKO2_CONFIG_DIR", t.TempDir())
+			t.Setenv("GAIKO2_INSTANCE_ID", "")
+
+			listenCalled := false
+			listenFn = func(network, addr string) (net.Listener, error) {
+				listenCalled = true
+				return fakeListener{addr: fakeAddr("127.0.0.1:18080")}, nil
+			}
+
+			var stdout bytes.Buffer
+			err := run(context.Background(), []string{"server", ":18080"}, &stdout)
+			if !errors.Is(err, prover.ErrProvingModeRequired) {
+				t.Fatalf("unexpected error: %v", err)
+			}
+			if listenCalled {
+				t.Fatalf("server listened before validating proving mode")
+			}
+			if strings.Contains(stdout.String(), "starting gaiko2 provider") {
+				t.Fatalf("server printed a successful startup summary before validation: %q", stdout.String())
+			}
+		})
+	}
 }
 
 func TestRunServerPrintsListeningAddress(t *testing.T) {
+	setWarningStderr(t, io.Discard)
+	setEnv(t, "GAIKO2_PROVING_MODE", "native")
+
 	prevListen := listenFn
 	prevServe := serveFn
 	t.Cleanup(func() {
@@ -92,6 +190,9 @@ func TestFormatListeningAddrNormalizesWildcardTCP(t *testing.T) {
 }
 
 func TestRunServerUsesPortFromEnv(t *testing.T) {
+	setWarningStderr(t, io.Discard)
+	setEnv(t, "GAIKO2_PROVING_MODE", "native")
+
 	prevListen := listenFn
 	prevServe := serveFn
 	t.Cleanup(func() {
@@ -127,6 +228,9 @@ func TestRunServerUsesPortFromEnv(t *testing.T) {
 }
 
 func TestRunServerRejectsV1WithoutGuestInput(t *testing.T) {
+	setWarningStderr(t, io.Discard)
+	setEnv(t, "GAIKO2_PROVING_MODE", "native")
+
 	prevListen := listenFn
 	prevServe := serveFn
 	prevNewReplayService := newReplayServiceFn
@@ -191,6 +295,9 @@ func TestNormalizeServeError(t *testing.T) {
 }
 
 func TestRunServerShutsDownGracefullyOnContextCancel(t *testing.T) {
+	setWarningStderr(t, io.Discard)
+	setEnv(t, "GAIKO2_PROVING_MODE", "native")
+
 	prevListen := listenFn
 	t.Cleanup(func() {
 		listenFn = prevListen
@@ -474,16 +581,14 @@ func TestRunBootstrapCommandRecoversMetadataWithoutRotatingKey(t *testing.T) {
 
 func TestRunBootstrapCommandWarnsBeforeForce(t *testing.T) {
 	prevBootstrap := teeBootstrapFn
-	prevStderr := bootstrapStderr
 	t.Cleanup(func() {
 		teeBootstrapFn = prevBootstrap
-		bootstrapStderr = prevStderr
 	})
 	teeBootstrapFn = func(tee.Provider, bool) (tee.BootstrapData, error) {
 		return tee.BootstrapData{}, nil
 	}
 	var stderr bytes.Buffer
-	bootstrapStderr = &stderr
+	setWarningStderr(t, &stderr)
 
 	err := run(context.Background(), []string{
 		"bootstrap", "--force", "--secret-dir", t.TempDir(), "--config-dir", t.TempDir(),
@@ -595,6 +700,30 @@ func setEnv(t *testing.T, key, value string) {
 		t.Fatalf("set env %s: %v", key, err)
 	}
 	t.Cleanup(func() {
+		_ = os.Unsetenv(key)
+	})
+}
+
+func setWarningStderr(t *testing.T, writer io.Writer) {
+	t.Helper()
+	previous := warningStderr
+	warningStderr = writer
+	t.Cleanup(func() {
+		warningStderr = previous
+	})
+}
+
+func unsetEnv(t *testing.T, key string) {
+	t.Helper()
+	previous, wasSet := os.LookupEnv(key)
+	if err := os.Unsetenv(key); err != nil {
+		t.Fatalf("unset env %s: %v", key, err)
+	}
+	t.Cleanup(func() {
+		if wasSet {
+			_ = os.Setenv(key, previous)
+			return
+		}
 		_ = os.Unsetenv(key)
 	})
 }

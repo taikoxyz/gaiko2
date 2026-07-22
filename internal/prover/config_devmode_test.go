@@ -21,6 +21,7 @@ func TestEnvFlagEnabled(t *testing.T) {
 }
 
 func TestServiceConfigFromEnvParsesDevMode(t *testing.T) {
+	setenv(t, envProvingMode, ProvingModeNative)
 	_ = os.Unsetenv(envDevMode)
 	cfg, err := ServiceConfigFromEnv()
 	if err != nil {

@@ -1,6 +1,7 @@
 package prover
 
 import (
+	"errors"
 	"fmt"
 	"math"
 	"os"
@@ -20,6 +21,11 @@ const (
 	envDevMode     = "GAIKO2_DEV_MODE"
 )
 
+// ErrProvingModeRequired reports that the proving mode was not configured.
+var ErrProvingModeRequired = errors.New(
+	envProvingMode + ` must be set to "` + ProvingModeNative + `" or "` + ProvingModeTEE + `"`,
+)
+
 func ServiceConfigFromEnv() (ServiceConfig, error) {
 	cfg := ServiceConfig{
 		Mode:      strings.TrimSpace(os.Getenv(envProvingMode)),
@@ -29,6 +35,11 @@ func ServiceConfigFromEnv() (ServiceConfig, error) {
 		Fork:      strings.TrimSpace(os.Getenv(envFork)),
 		DevMode:   envFlagEnabled(envDevMode),
 	}
+	mode, err := normalizeProvingMode(cfg.Mode)
+	if err != nil {
+		return ServiceConfig{}, err
+	}
+	cfg.Mode = mode
 
 	instanceID := strings.TrimSpace(os.Getenv(envInstanceID))
 	if instanceID == "" && cfg.Fork != "" {
@@ -58,6 +69,14 @@ func ServiceConfigFromEnv() (ServiceConfig, error) {
 	cfg.InstanceID = uint32(parsed)
 	cfg.InstanceIDConfigured = true
 	return cfg, nil
+}
+
+func normalizeProvingMode(mode string) (string, error) {
+	mode = strings.ToLower(strings.TrimSpace(mode))
+	if mode == "" {
+		return "", ErrProvingModeRequired
+	}
+	return mode, nil
 }
 
 func envOrDefault(key, fallback string) string {

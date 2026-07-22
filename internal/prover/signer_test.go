@@ -82,6 +82,19 @@ func TestTEEProofSignerAcceptsConfiguredInstanceIDZero(t *testing.T) {
 	}
 }
 
+func TestNewConfiguredReplayServiceRejectsEmptyMode(t *testing.T) {
+	_, err := NewConfiguredReplayService(ServiceConfig{}, nil)
+	if !errors.Is(err, ErrProvingModeRequired) {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
+func TestNewConfiguredReplayServiceAcceptsExplicitNativeMode(t *testing.T) {
+	if _, err := NewConfiguredReplayService(ServiceConfig{Mode: ProvingModeNative}, nil); err != nil {
+		t.Fatalf("explicit native mode: %v", err)
+	}
+}
+
 func TestNewConfiguredReplayServiceRejectsUnknownMode(t *testing.T) {
 	_, err := NewConfiguredReplayService(ServiceConfig{
 		Mode: "wat",
