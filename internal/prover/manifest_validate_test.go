@@ -2291,6 +2291,8 @@ func witnessStateNodesWithMissingStorageAndCode(
 		t.Fatalf("iterate test state trie: %v", err)
 	}
 
+	// NodeIterator walks the account trie only. Deliberately do not add the
+	// account's storage-trie nodes: SLOAD must surface the omitted node.
 	nodes := make([]string, 0, 8)
 	for it.Next(true) {
 		if it.Hash() == (common.Hash{}) {
@@ -2325,7 +2327,7 @@ func runtimeOutOfGasLoopCode() []byte {
 }
 
 func runtimeZkGasAfterMissingStorageCode() []byte {
-	return []byte{0x60, 0x00, 0x54, 0x50, 0x60, 0x00, 0x60, 0x00, 0x60, 0x00, 0x09, 0x50, 0x5b, 0x60, 0x0c, 0x56}
+	return []byte{0x60, 0x00, 0x54, 0x15, 0x60, 0x08, 0x57, 0x00, 0x5b, 0x60, 0x00, 0x60, 0x00, 0x60, 0x00, 0x09, 0x50, 0x60, 0x08, 0x56}
 }
 
 func loadRealFixtureView(t *testing.T) *GuestInputView {
