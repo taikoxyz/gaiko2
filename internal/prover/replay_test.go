@@ -3,6 +3,7 @@ package prover
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"math/big"
 	"strings"
@@ -22,6 +23,31 @@ type fakeRunner struct {
 	receiptRoot common.Hash
 	logs        []*types.Log
 	err         error
+}
+
+type replayStateErrorStub struct {
+	err error
+}
+
+func (s replayStateErrorStub) Error() error {
+	return s.err
+}
+
+func TestReplayStateErrorWrapsDeferredError(t *testing.T) {
+	sentinel := errors.New("missing trie node")
+	err := replayStateError(replayStateErrorStub{err: sentinel}, "after block processing")
+	if !errors.Is(err, sentinel) {
+		t.Fatalf("expected wrapped state error, got %v", err)
+	}
+	if !strings.Contains(err.Error(), "after block processing") {
+		t.Fatalf("expected replay phase in error, got %v", err)
+	}
+}
+
+func TestReplayStateErrorAllowsCleanState(t *testing.T) {
+	if err := replayStateError(replayStateErrorStub{}, "after intermediate root"); err != nil {
+		t.Fatalf("unexpected clean state error: %v", err)
+	}
 }
 
 func (f fakeRunner) Execute(

@@ -42,6 +42,10 @@ type Runner interface {
 
 type GethRunner struct{}
 
+type replayStateErrorSource interface {
+	Error() error
+}
+
 type ReplayResult struct {
 	StateRoot   common.Hash
 	ReceiptRoot common.Hash
@@ -71,6 +75,9 @@ func (GethRunner) Execute(
 	if err != nil {
 		return ReplayResult{}, err
 	}
+	if err := replayStateError(db, "after block processing"); err != nil {
+		return ReplayResult{}, err
+	}
 	if err := validator.ValidateState(executionBlock, db, res, true); err != nil {
 		return ReplayResult{}, err
 	}
@@ -80,11 +87,21 @@ func (GethRunner) Execute(
 
 	receiptRoot := types.DeriveSha(res.Receipts, trie.NewStackTrie(nil))
 	stateRoot := db.IntermediateRoot(config.IsEIP158(executionBlock.Number()))
+	if err := replayStateError(db, "after intermediate root"); err != nil {
+		return ReplayResult{}, err
+	}
 	return ReplayResult{
 		StateRoot:   stateRoot,
 		ReceiptRoot: receiptRoot,
 		Receipts:    res.Receipts,
 	}, nil
+}
+
+func replayStateError(source replayStateErrorSource, phase string) error {
+	if err := source.Error(); err != nil {
+		return fmt.Errorf("witness state error %s: %w", phase, err)
+	}
+	return nil
 }
 
 func processReplayBlock(
