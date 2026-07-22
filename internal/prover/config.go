@@ -1,6 +1,7 @@
 package prover
 
 import (
+	"errors"
 	"fmt"
 	"math"
 	"os"
@@ -17,6 +18,11 @@ const (
 	envConfigDir   = "GAIKO2_CONFIG_DIR"
 	envFork        = "GAIKO2_FORK"
 	envInstanceID  = "GAIKO2_INSTANCE_ID"
+)
+
+// ErrProvingModeRequired reports that the proving mode was not configured.
+var ErrProvingModeRequired = errors.New(
+	envProvingMode + ` must be set to "` + ProvingModeNative + `" or "` + ProvingModeTEE + `"`,
 )
 
 func ServiceConfigFromEnv() (ServiceConfig, error) {
@@ -66,12 +72,7 @@ func ServiceConfigFromEnv() (ServiceConfig, error) {
 func normalizeProvingMode(mode string) (string, error) {
 	mode = strings.ToLower(strings.TrimSpace(mode))
 	if mode == "" {
-		return "", fmt.Errorf(
-			"%s must be set to %q or %q",
-			envProvingMode,
-			ProvingModeNative,
-			ProvingModeTEE,
-		)
+		return "", ErrProvingModeRequired
 	}
 	return mode, nil
 }

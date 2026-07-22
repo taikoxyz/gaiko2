@@ -1,6 +1,7 @@
 package prover
 
 import (
+	"errors"
 	"os"
 	"testing"
 
@@ -70,7 +71,7 @@ func TestServiceConfigFromEnvRejectsUnsetModeBeforeForkLookup(t *testing.T) {
 	setenv(t, envInstanceID, "")
 
 	_, err := ServiceConfigFromEnv()
-	if err == nil || err.Error() != `GAIKO2_PROVING_MODE must be set to "native" or "tee"` {
+	if !errors.Is(err, ErrProvingModeRequired) {
 		t.Fatalf("unexpected error: %v", err)
 	}
 }
@@ -82,8 +83,15 @@ func TestServiceConfigFromEnvRejectsWhitespaceModeBeforeForkLookup(t *testing.T)
 	setenv(t, envInstanceID, "")
 
 	_, err := ServiceConfigFromEnv()
-	if err == nil || err.Error() != `GAIKO2_PROVING_MODE must be set to "native" or "tee"` {
+	if !errors.Is(err, ErrProvingModeRequired) {
 		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
+func TestErrProvingModeRequiredMessage(t *testing.T) {
+	const want = `GAIKO2_PROVING_MODE must be set to "native" or "tee"`
+	if got := ErrProvingModeRequired.Error(); got != want {
+		t.Fatalf("unexpected operator-facing message: got %q want %q", got, want)
 	}
 }
 

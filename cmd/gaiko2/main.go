@@ -32,7 +32,7 @@ var (
 	metadataCommandFn                = runMetadataCommand
 	teeBootstrapFn                   = tee.Bootstrap
 	teeBootstrapDataForExistingKeyFn = tee.BootstrapDataForExistingKey
-	bootstrapStderr                  = io.Writer(os.Stderr)
+	warningStderr                    = io.Writer(os.Stderr)
 )
 
 const (
@@ -120,7 +120,7 @@ func run(ctx context.Context, args []string, stdout io.Writer) error {
 		if err != nil {
 			return err
 		}
-		mode := normalizedProvingMode(cfg.Mode)
+		mode := cfg.Mode
 		service, err := newReplayServiceFn(cfg, nil)
 		if err != nil {
 			return err
@@ -137,10 +137,12 @@ func run(ctx context.Context, args []string, stdout io.Writer) error {
 			addr,
 		)
 		if mode == prover.ProvingModeNative {
-			_, _ = fmt.Fprintln(
-				stdout,
+			if _, err := fmt.Fprintln(
+				warningStderr,
 				"WARNING: native proving mode uses a public deterministic signing key; use it only for local/development testing and never register its signer in a verifier protecting real value",
-			)
+			); err != nil {
+				return fmt.Errorf("write native mode warning: %w", err)
+			}
 		}
 		listener, err := listenFn("tcp", addr)
 		if err != nil {
@@ -151,10 +153,6 @@ func run(ctx context.Context, args []string, stdout io.Writer) error {
 	default:
 		return fmt.Errorf("unknown command %q", args[0])
 	}
-}
-
-func normalizedProvingMode(mode string) string {
-	return strings.ToLower(strings.TrimSpace(mode))
 }
 
 func formatListeningAddr(addr net.Addr) string {
@@ -214,7 +212,7 @@ func runBootstrapCommand(args []string, stdout io.Writer) error {
 
 	if *force {
 		if _, err := fmt.Fprintln(
-			bootstrapStderr,
+			warningStderr,
 			"WARNING: --force replaces any existing tee key; the old key and any on-chain registration bound to it become unusable",
 		); err != nil {
 			return fmt.Errorf("write bootstrap force warning: %w", err)
