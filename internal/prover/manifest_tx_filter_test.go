@@ -12,6 +12,7 @@ import (
 	"github.com/ethereum/go-ethereum/core"
 	"github.com/ethereum/go-ethereum/core/types"
 	"github.com/ethereum/go-ethereum/core/vm"
+	"github.com/ethereum/go-ethereum/trie"
 )
 
 func TestFilterManifestTransactionsMatchesCanonicalBlock(t *testing.T) {
@@ -142,7 +143,7 @@ func TestFilterManifestTransactionsTruncatesZkGasBeforeWitnessError(t *testing.T
 		manifestUserTxJSONWithGas(t, fixture.chainID, fillerCount, loopContract.Hex(), 5_000_000),
 	)
 	fixture.manifestUserTxJSONs = manifestTxJSONs
-	fixture.blockUserTxJSONs = []json.RawMessage{}
+	fixture.blockUserTxJSONs = append([]json.RawMessage(nil), manifestTxJSONs[:fillerCount]...)
 	view := fixture.view(t)
 
 	block, witness, err := decodeReplayBlock(view.Witnesses[0].ReplayBlock)
@@ -164,6 +165,54 @@ func TestFilterManifestTransactionsTruncatesZkGasBeforeWitnessError(t *testing.T
 	}
 	if len(filtered) >= len(manifestTxJSONs)+1 {
 		t.Fatalf("expected zk-gas truncation, committed %d of %d candidates", len(filtered), len(manifestTxJSONs)+1)
+	}
+	if got, want := types.DeriveSha(filtered, trie.NewStackTrie(nil)), block.TxHash(); got != want {
+		t.Fatalf("filtered transactions do not match canonical block root: got %s want %s", got, want)
+	}
+}
+
+func TestManifestCandidateStateErrorOnlyDefersNonAnchorUnzenZkGas(t *testing.T) {
+	stateErr := errors.New("missing trie node")
+	tests := []struct {
+		name     string
+		isUnzen  bool
+		index    int
+		applyErr error
+		wantErr  error
+	}{
+		{
+			name:     "non-anchor Unzen zk-gas truncation",
+			isUnzen:  true,
+			index:    1,
+			applyErr: vm.ErrZkGasLimitExceeded,
+		},
+		{
+			name:     "anchor Unzen zk-gas failure",
+			isUnzen:  true,
+			index:    0,
+			applyErr: vm.ErrZkGasLimitExceeded,
+			wantErr:  stateErr,
+		},
+		{
+			name:     "non-Unzen witness failure",
+			index:    1,
+			applyErr: vm.ErrZkGasLimitExceeded,
+			wantErr:  stateErr,
+		},
+		{
+			name:    "non-zk-gas execution failure",
+			isUnzen: true,
+			index:   1,
+			wantErr: stateErr,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := manifestCandidateStateError(stateErr, tt.applyErr, tt.isUnzen, tt.index); got != tt.wantErr {
+				t.Fatalf("manifestCandidateStateError() = %v, want %v", got, tt.wantErr)
+			}
+		})
 	}
 }
 
