@@ -23,9 +23,14 @@ import (
 )
 
 const (
-	// nativeProofPrivateKey is the fixed GoldenTouch mock key used only by
-	// native-mode signing for deterministic local/dev regression output.
-	nativeProofPrivateKey    = "92954368afd3caa1f3ce3ead0069c1af414054aefe1ef9aeacc1bf426222ce38"
+	// nativeProofPrivateKey is a throwaway, public mock key used only by
+	// native-mode proof signing for deterministic local/dev regression output.
+	// It is deliberately distinct from the canonical GoldenTouch anchor key so
+	// native proof fixtures and anchor validation remain separate roles.
+	// Production proof signing uses a TEE-managed key, and this native identity
+	// must not be registered on a production verifier. Its address is
+	// 0x5850CF166aAd4bB9122e599BCb4182c136B9D26d.
+	nativeProofPrivateKey    = "22d82c2b37ec42ade37eaec2f4b6fda7e2e1cdca5f483ab179ed1420c201872f"
 	shastaNativeMockInstance = 0xDEADC0DE
 )
 

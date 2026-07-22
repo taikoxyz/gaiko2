@@ -11,7 +11,7 @@ import (
 	"github.com/taikoxyz/gaiko2/internal/tee"
 )
 
-func TestNativeProofSignerMatchesGoldenTouchAccount(t *testing.T) {
+func TestNativeProofSignerIsSelfConsistentAndDistinctFromGoldenTouch(t *testing.T) {
 	signer := NewNativeProofSigner(shastaNativeMockInstance)
 	hash := crypto.Keccak256Hash([]byte("gaiko2-native"))
 
@@ -39,6 +39,13 @@ func TestNativeProofSignerMatchesGoldenTouchAccount(t *testing.T) {
 	}
 	if crypto.PubkeyToAddress(*recovered) != output.InstanceAddress {
 		t.Fatalf("signature recovered wrong signer")
+	}
+	// Keep native proof fixtures independent of the GoldenTouch anchor identity.
+	if output.InstanceAddress == shastaGoldenTouchAccount {
+		t.Fatal("native proof signer must not reuse the GoldenTouch anchor account")
+	}
+	if nativeProofPrivateKey == shastaGoldenTouchPrivateKey {
+		t.Fatal("native proof key must be distinct from the GoldenTouch anchor key")
 	}
 }
 

@@ -17,8 +17,8 @@ with `taiko-geth` and producing a TEE proof envelope.
   replaying the witness blocks.
 - `gaiko2` validates replay continuity against `proof_carry_data`.
 - proof output now supports two signer modes behind one envelope:
-  - `native`: sign the final input hash with the fixed, published GoldenTouch
-    mock key. Intended for local/dev only; the `/prove/shasta-aggregate`
+  - `native`: sign the final input hash with a fixed, published native mock
+    key. Intended for local/dev only; the `/prove/shasta-aggregate`
     endpoint is disabled in native mode unless `GAIKO2_DEV_MODE=1` is set.
   - `tee`: sign with an enclave-managed key; the bootstrap step emits the `ego`
     quote used by external registration flows.
