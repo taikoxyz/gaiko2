@@ -64,28 +64,49 @@ func TestRunServerPrintsStartupSummary(t *testing.T) {
 }
 
 func TestRunServerRejectsUnsetModeBeforeStartupOrListen(t *testing.T) {
-	prevListen := listenFn
-	t.Cleanup(func() {
-		listenFn = prevListen
-	})
-
-	setEnv(t, "GAIKO2_PROVING_MODE", "")
-	listenCalled := false
-	listenFn = func(network, addr string) (net.Listener, error) {
-		listenCalled = true
-		return fakeListener{addr: fakeAddr("127.0.0.1:18080")}, nil
+	whitespaceMode := " \t "
+	tests := []struct {
+		name string
+		mode *string
+	}{
+		{name: "unset"},
+		{name: "whitespace", mode: &whitespaceMode},
 	}
 
-	var stdout bytes.Buffer
-	err := run(context.Background(), []string{"server", ":18080"}, &stdout)
-	if err == nil || err.Error() != `GAIKO2_PROVING_MODE must be set to "native" or "tee"` {
-		t.Fatalf("unexpected error: %v", err)
-	}
-	if listenCalled {
-		t.Fatalf("server listened before validating proving mode")
-	}
-	if strings.Contains(stdout.String(), "starting gaiko2 provider") {
-		t.Fatalf("server printed a successful startup summary before validation: %q", stdout.String())
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			prevListen := listenFn
+			t.Cleanup(func() {
+				listenFn = prevListen
+			})
+
+			if test.mode == nil {
+				unsetEnv(t, "GAIKO2_PROVING_MODE")
+			} else {
+				t.Setenv("GAIKO2_PROVING_MODE", *test.mode)
+			}
+			t.Setenv("GAIKO2_FORK", "shasta")
+			t.Setenv("GAIKO2_CONFIG_DIR", t.TempDir())
+			t.Setenv("GAIKO2_INSTANCE_ID", "")
+
+			listenCalled := false
+			listenFn = func(network, addr string) (net.Listener, error) {
+				listenCalled = true
+				return fakeListener{addr: fakeAddr("127.0.0.1:18080")}, nil
+			}
+
+			var stdout bytes.Buffer
+			err := run(context.Background(), []string{"server", ":18080"}, &stdout)
+			if err == nil || err.Error() != `GAIKO2_PROVING_MODE must be set to "native" or "tee"` {
+				t.Fatalf("unexpected error: %v", err)
+			}
+			if listenCalled {
+				t.Fatalf("server listened before validating proving mode")
+			}
+			if strings.Contains(stdout.String(), "starting gaiko2 provider") {
+				t.Fatalf("server printed a successful startup summary before validation: %q", stdout.String())
+			}
+		})
 	}
 }
 
@@ -633,6 +654,21 @@ func setEnv(t *testing.T, key, value string) {
 		t.Fatalf("set env %s: %v", key, err)
 	}
 	t.Cleanup(func() {
+		_ = os.Unsetenv(key)
+	})
+}
+
+func unsetEnv(t *testing.T, key string) {
+	t.Helper()
+	previous, wasSet := os.LookupEnv(key)
+	if err := os.Unsetenv(key); err != nil {
+		t.Fatalf("unset env %s: %v", key, err)
+	}
+	t.Cleanup(func() {
+		if wasSet {
+			_ = os.Setenv(key, previous)
+			return
+		}
 		_ = os.Unsetenv(key)
 	})
 }
