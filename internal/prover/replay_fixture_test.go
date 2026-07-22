@@ -4,7 +4,6 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
-	"fmt"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -13,7 +12,6 @@ import (
 	"time"
 
 	"github.com/ethereum/go-ethereum/common"
-	"github.com/ethereum/go-ethereum/core/state"
 	gethtypes "github.com/ethereum/go-ethereum/core/types"
 	"github.com/ethereum/go-ethereum/crypto"
 	"github.com/ethereum/go-ethereum/trie"
@@ -71,39 +69,8 @@ func TestGethRunnerRejectsDeferredStateErrors(t *testing.T) {
 		if missingNode.NodeHash != missingNodeHash {
 			t.Fatalf("unexpected missing trie node: got %s want %s", missingNode.NodeHash, missingNodeHash)
 		}
-		if !strings.Contains(err.Error(), "witness state error after block processing") {
+		if !strings.Contains(err.Error(), "witness state error during block replay") {
 			t.Fatalf("expected block-processing phase context, got %v", err)
-		}
-	})
-
-	t.Run("after intermediate root", func(t *testing.T) {
-		block, witness := decodeFirstReplay(t)
-		sentinel := errors.New("deferred state error after intermediate root")
-		runner := GethRunner{stateErrorCheck: func(source replayStateErrorSource, phase string) error {
-			if phase != "after intermediate root" {
-				return replayStateError(source, phase)
-			}
-			db, ok := source.(*state.StateDB)
-			if !ok {
-				return fmt.Errorf("unexpected replay state source %T", source)
-			}
-			if db.GetTrie() == nil || db.GetTrie().Hash() != block.Root() {
-				return fmt.Errorf("post-root state check ran before IntermediateRoot")
-			}
-			return replayStateError(replayStateErrorStub{err: sentinel}, phase)
-		}}
-
-		_, err := runner.Execute(
-			context.Background(),
-			config,
-			blockForStatelessExecution(block),
-			witness,
-		)
-		if !errors.Is(err, sentinel) {
-			t.Fatalf("expected wrapped post-root state error, got %v", err)
-		}
-		if !strings.Contains(err.Error(), "witness state error after intermediate root") {
-			t.Fatalf("expected intermediate-root phase context, got %v", err)
 		}
 	})
 }

@@ -40,15 +40,7 @@ type Runner interface {
 	) (ReplayResult, error)
 }
 
-type replayStateErrorSource interface {
-	Error() error
-}
-
-type replayStateErrorCheck func(replayStateErrorSource, string) error
-
-type GethRunner struct {
-	stateErrorCheck replayStateErrorCheck
-}
+type GethRunner struct{}
 
 type ReplayResult struct {
 	StateRoot   common.Hash
@@ -56,7 +48,7 @@ type ReplayResult struct {
 	Receipts    types.Receipts
 }
 
-func (r GethRunner) Execute(
+func (GethRunner) Execute(
 	ctx context.Context,
 	config *params.ChainConfig,
 	block *types.Block,
@@ -79,8 +71,14 @@ func (r GethRunner) Execute(
 	if err != nil {
 		return ReplayResult{}, err
 	}
-	if err := r.checkStateError(db, "after block processing"); err != nil {
-		return ReplayResult{}, err
+	// A witness trie node missing on a read path is swallowed into the StateDB's
+	// deferred error and returns a zero value; go-ethereum's stateless
+	// ValidateState returns early before it would surface, and IntermediateRoot
+	// only hashes written state. Check db.Error() explicitly so an incomplete
+	// witness cannot masquerade as legitimately empty state, mirroring the guards
+	// in l2_state.go and manifest_tx_filter.go.
+	if err := db.Error(); err != nil {
+		return ReplayResult{}, fmt.Errorf("witness state error during block replay: %w", err)
 	}
 	if err := validator.ValidateState(executionBlock, db, res, true); err != nil {
 		return ReplayResult{}, err
@@ -91,28 +89,14 @@ func (r GethRunner) Execute(
 
 	receiptRoot := types.DeriveSha(res.Receipts, trie.NewStackTrie(nil))
 	stateRoot := db.IntermediateRoot(config.IsEIP158(executionBlock.Number()))
-	if err := r.checkStateError(db, "after intermediate root"); err != nil {
-		return ReplayResult{}, err
+	if err := db.Error(); err != nil {
+		return ReplayResult{}, fmt.Errorf("witness state error after computing state root: %w", err)
 	}
 	return ReplayResult{
 		StateRoot:   stateRoot,
 		ReceiptRoot: receiptRoot,
 		Receipts:    res.Receipts,
 	}, nil
-}
-
-func (r GethRunner) checkStateError(source replayStateErrorSource, phase string) error {
-	if r.stateErrorCheck != nil {
-		return r.stateErrorCheck(source, phase)
-	}
-	return replayStateError(source, phase)
-}
-
-func replayStateError(source replayStateErrorSource, phase string) error {
-	if err := source.Error(); err != nil {
-		return fmt.Errorf("witness state error %s: %w", phase, err)
-	}
-	return nil
 }
 
 func processReplayBlock(

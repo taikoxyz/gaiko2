@@ -25,10 +25,6 @@ type fakeRunner struct {
 	err         error
 }
 
-type replayStateErrorStub struct {
-	err error
-}
-
 type proofSignerSpy struct {
 	signHashCalls int
 }
@@ -40,27 +36,6 @@ func (s *proofSignerSpy) SignHash(common.Hash) (SignerOutput, error) {
 
 func (*proofSignerSpy) Identity() (SignerIdentity, error) {
 	return SignerIdentity{}, nil
-}
-
-func (s replayStateErrorStub) Error() error {
-	return s.err
-}
-
-func TestReplayStateErrorWrapsDeferredError(t *testing.T) {
-	sentinel := errors.New("missing trie node")
-	err := replayStateError(replayStateErrorStub{err: sentinel}, "after block processing")
-	if !errors.Is(err, sentinel) {
-		t.Fatalf("expected wrapped state error, got %v", err)
-	}
-	if !strings.Contains(err.Error(), "after block processing") {
-		t.Fatalf("expected replay phase in error, got %v", err)
-	}
-}
-
-func TestReplayStateErrorAllowsCleanState(t *testing.T) {
-	if err := replayStateError(replayStateErrorStub{}, "after intermediate root"); err != nil {
-		t.Fatalf("unexpected clean state error: %v", err)
-	}
 }
 
 func TestReplayServiceDoesNotSignAfterRunnerFailure(t *testing.T) {
