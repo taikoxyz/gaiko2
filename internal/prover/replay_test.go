@@ -3,6 +3,7 @@ package prover
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"math/big"
 	"strings"
@@ -22,6 +23,36 @@ type fakeRunner struct {
 	receiptRoot common.Hash
 	logs        []*types.Log
 	err         error
+}
+
+type proofSignerSpy struct {
+	signHashCalls int
+}
+
+func (s *proofSignerSpy) SignHash(common.Hash) (SignerOutput, error) {
+	s.signHashCalls++
+	return SignerOutput{}, nil
+}
+
+func (*proofSignerSpy) Identity() (SignerIdentity, error) {
+	return SignerIdentity{}, nil
+}
+
+func TestReplayServiceDoesNotSignAfterRunnerFailure(t *testing.T) {
+	sentinel := errors.New("deferred replay state error")
+	signer := new(proofSignerSpy)
+	service := newReplayService(fakeRunner{err: sentinel}, signer)
+
+	_, err := service.Prove(
+		context.Background(),
+		sampleValidatedReplayRequestWithGuestLastAnchor(t, 167013, 900),
+	)
+	if !errors.Is(err, sentinel) {
+		t.Fatalf("expected wrapped runner error, got %v", err)
+	}
+	if signer.signHashCalls != 0 {
+		t.Fatalf("expected runner failure before signing, got %d SignHash calls", signer.signHashCalls)
+	}
 }
 
 func (f fakeRunner) Execute(

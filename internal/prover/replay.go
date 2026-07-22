@@ -71,6 +71,15 @@ func (GethRunner) Execute(
 	if err != nil {
 		return ReplayResult{}, err
 	}
+	// A witness trie node missing on a read path is swallowed into the StateDB's
+	// deferred error and returns a zero value; go-ethereum's stateless
+	// ValidateState returns early before it would surface, and IntermediateRoot
+	// only hashes written state. Check db.Error() explicitly so an incomplete
+	// witness cannot masquerade as legitimately empty state, mirroring the guards
+	// in l2_state.go and manifest_tx_filter.go.
+	if err := db.Error(); err != nil {
+		return ReplayResult{}, fmt.Errorf("witness state error during block replay: %w", err)
+	}
 	if err := validator.ValidateState(executionBlock, db, res, true); err != nil {
 		return ReplayResult{}, err
 	}
@@ -80,6 +89,9 @@ func (GethRunner) Execute(
 
 	receiptRoot := types.DeriveSha(res.Receipts, trie.NewStackTrie(nil))
 	stateRoot := db.IntermediateRoot(config.IsEIP158(executionBlock.Number()))
+	if err := db.Error(); err != nil {
+		return ReplayResult{}, fmt.Errorf("witness state error after computing state root: %w", err)
+	}
 	return ReplayResult{
 		StateRoot:   stateRoot,
 		ReceiptRoot: receiptRoot,
