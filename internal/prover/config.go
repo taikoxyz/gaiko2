@@ -17,6 +17,7 @@ const (
 	envConfigDir   = "GAIKO2_CONFIG_DIR"
 	envFork        = "GAIKO2_FORK"
 	envInstanceID  = "GAIKO2_INSTANCE_ID"
+	envDevMode     = "GAIKO2_DEV_MODE"
 )
 
 func ServiceConfigFromEnv() (ServiceConfig, error) {
@@ -26,6 +27,7 @@ func ServiceConfigFromEnv() (ServiceConfig, error) {
 		SecretDir: envOrDefault(envSecretDir, tee.DefaultSecretDir()),
 		ConfigDir: envOrDefault(envConfigDir, tee.DefaultConfigDir()),
 		Fork:      strings.TrimSpace(os.Getenv(envFork)),
+		DevMode:   envFlagEnabled(envDevMode),
 	}
 
 	instanceID := strings.TrimSpace(os.Getenv(envInstanceID))
@@ -64,4 +66,13 @@ func envOrDefault(key, fallback string) string {
 		return fallback
 	}
 	return value
+}
+
+func envFlagEnabled(key string) bool {
+	switch strings.ToLower(strings.TrimSpace(os.Getenv(key))) {
+	case "1", "true", "yes", "on":
+		return true
+	default:
+		return false
+	}
 }

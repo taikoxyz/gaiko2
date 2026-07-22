@@ -131,6 +131,7 @@ func run(ctx context.Context, args []string, stdout io.Writer) error {
 			cfg.SecretDir,
 			addr,
 		)
+		warnIfNativeProvingMode(stdout, cfg)
 		service, err := newReplayServiceFn(cfg, nil)
 		if err != nil {
 			return err
@@ -152,6 +153,26 @@ func normalizedProvingMode(mode string) string {
 		return prover.ProvingModeNative
 	}
 	return mode
+}
+
+// warnIfNativeProvingMode emits a loud startup warning whenever the provider is
+// running in native mode, which signs with the published mock key. Native mode
+// is for local/dev only and must never front a verifier guarding real value.
+func warnIfNativeProvingMode(w io.Writer, cfg prover.ServiceConfig) {
+	if normalizedProvingMode(cfg.Mode) != prover.ProvingModeNative {
+		return
+	}
+	if cfg.DevMode {
+		_, _ = fmt.Fprintln(
+			w,
+			"WARNING: native proving mode with GAIKO2_DEV_MODE enabled: /prove/shasta-aggregate is ENABLED and signs on-chain digests with the PUBLISHED mock key (GoldenTouch). Use only for local/dev; never expose to untrusted clients or register this instance in a verifier guarding real value.",
+		)
+		return
+	}
+	_, _ = fmt.Fprintln(
+		w,
+		"WARNING: native proving mode uses the PUBLISHED mock key (GoldenTouch) and is for local/dev only; /prove/shasta-aggregate is DISABLED (set GAIKO2_DEV_MODE=1 to enable for local testing). Never use native mode with a verifier guarding real value.",
+	)
 }
 
 func formatListeningAddr(addr net.Addr) string {

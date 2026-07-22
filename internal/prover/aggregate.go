@@ -13,6 +13,9 @@ func (s ReplayService) Aggregate(
 	_ context.Context,
 	req *ValidatedAggregateRequest,
 ) (protocol.ProofResult, error) {
+	if !s.aggregateEnabled {
+		return protocol.ProofResult{}, ErrAggregateDisabled
+	}
 	if req == nil || !req.validated {
 		return protocol.ProofResult{}, fmt.Errorf("aggregate request validation binding is missing")
 	}

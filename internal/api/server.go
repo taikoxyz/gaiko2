@@ -128,9 +128,13 @@ func newServer(service prover.Service, bodyLimit int64) http.Handler {
 		if err != nil {
 			statusCode := http.StatusInternalServerError
 			code := "PROVER_ERROR"
-			if errors.Is(err, prover.ErrNotImplemented) {
+			switch {
+			case errors.Is(err, prover.ErrNotImplemented):
 				statusCode = http.StatusNotImplemented
 				code = "NOT_IMPLEMENTED"
+			case errors.Is(err, prover.ErrAggregateDisabled):
+				statusCode = http.StatusForbidden
+				code = "AGGREGATE_DISABLED"
 			}
 			log.Printf(
 				"failed prove/shasta-aggregate request schema=%s proof_count=%d code=%s message=%q",

@@ -25,6 +25,10 @@ type ServiceConfig struct {
 	Fork                 string
 	InstanceID           uint32
 	InstanceIDConfigured bool
+	// DevMode opts a native-mode deployment into serving the aggregate endpoint,
+	// which is otherwise disabled because native mode signs with the published
+	// mock key. It has no effect in TEE mode.
+	DevMode bool
 }
 
 type ProofSigner interface {
@@ -84,10 +88,18 @@ func NewConfiguredReplayService(cfg ServiceConfig, runner Runner) (ReplayService
 		mode = ProvingModeNative
 	}
 
-	var signer ProofSigner
+	var (
+		signer           ProofSigner
+		aggregateEnabled bool
+	)
 	switch mode {
 	case ProvingModeNative:
 		signer = NewNativeProofSigner(cfg.InstanceID)
+		// Native mode signs with the published mock key, so the aggregate
+		// endpoint (which signs the on-chain digest without executing any
+		// blocks) is a proof-forgery oracle. Keep it disabled unless an operator
+		// explicitly opts into dev mode.
+		aggregateEnabled = cfg.DevMode
 	case ProvingModeTEE:
 		provider, err := newTEEProviderFn(tee.Config{
 			Type:      cfg.TeeType,
@@ -104,11 +116,12 @@ func NewConfiguredReplayService(cfg ServiceConfig, runner Runner) (ReplayService
 			return ReplayService{}, fmt.Errorf("tee proving requires %s or a registered %s mapping", envInstanceID, envFork)
 		}
 		signer = newTEEProofSignerFromConfig(privateKey, cfg)
+		aggregateEnabled = true
 	default:
 		return ReplayService{}, fmt.Errorf("unsupported proving mode %q", cfg.Mode)
 	}
 
-	return newReplayService(runner, signer), nil
+	return newReplayService(runner, signer, aggregateEnabled), nil
 }
 
 func (s *NativeProofSigner) SignHash(hash common.Hash) (SignerOutput, error) {

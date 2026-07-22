@@ -17,7 +17,9 @@ with `taiko-geth` and producing a TEE proof envelope.
   replaying the witness blocks.
 - `gaiko2` validates replay continuity against `proof_carry_data`.
 - proof output now supports two signer modes behind one envelope:
-  - `native`: sign the final input hash with the fixed GoldenTouch key.
+  - `native`: sign the final input hash with the fixed, published GoldenTouch
+    mock key. Intended for local/dev only; the `/prove/shasta-aggregate`
+    endpoint is disabled in native mode unless `GAIKO2_DEV_MODE=1` is set.
   - `tee`: sign with an enclave-managed key; the bootstrap step emits the `ego`
     quote used by external registration flows.
 - the checked-in shared fixture under `testdata/` is derived from a real
@@ -72,8 +74,16 @@ Optional proving configuration:
 - `GAIKO2_INSTANCE_ID=0xDEADC0DE`
 - `GAIKO2_FORK=shasta`
 - `GAIKO2_PORT=8080`
+- `GAIKO2_DEV_MODE=1` (native mode only; see below)
 
 If unset, `gaiko2` defaults to `native` mode.
+
+Native mode signs with a published mock key, so it is intended for local
+development only. Because `/prove/shasta-aggregate` produces the final on-chain
+signature without executing any blocks, it is **disabled in native mode** and
+returns HTTP `403` with an `AGGREGATE_DISABLED` error envelope; set
+`GAIKO2_DEV_MODE=1` to re-enable it for local testing. The mock instance must
+never be registered in a verifier guarding real value.
 
 TEE mode expects the enclave key to be bootstrapped ahead of proving and also
 requires either `GAIKO2_INSTANCE_ID` or a `GAIKO2_FORK` entry in
