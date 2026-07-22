@@ -2258,6 +2258,53 @@ func witnessStateNodesWithBalanceAndCode(
 	return nodes, []string{"0x" + hex.EncodeToString(code)}, root
 }
 
+func witnessStateNodesWithMissingStorageAndCode(
+	t *testing.T,
+	balanceAddress common.Address,
+	balance *big.Int,
+	codeAddress common.Address,
+	code []byte,
+) ([]string, []string, common.Hash) {
+	t.Helper()
+
+	memdb := rawdb.NewMemoryDatabase()
+	tdb := triedb.NewDatabase(memdb, triedb.HashDefaults)
+	statedb, err := state.New(types.EmptyRootHash, state.NewDatabase(tdb, state.NewCodeDB(memdb)))
+	if err != nil {
+		t.Fatalf("open test state: %v", err)
+	}
+	statedb.AddBalance(balanceAddress, uint256.MustFromBig(balance), 0)
+	statedb.SetCode(codeAddress, code, tracing.CodeChangeUnspecified)
+	statedb.SetState(codeAddress, common.Hash{}, common.HexToHash(testHash("47")))
+
+	root, err := statedb.Commit(0, false, false)
+	if err != nil {
+		t.Fatalf("commit test state: %v", err)
+	}
+
+	stateTrie, err := trie.NewStateTrie(trie.StateTrieID(root), tdb)
+	if err != nil {
+		t.Fatalf("open test state trie: %v", err)
+	}
+	it, err := stateTrie.NodeIterator(nil)
+	if err != nil {
+		t.Fatalf("iterate test state trie: %v", err)
+	}
+
+	nodes := make([]string, 0, 8)
+	for it.Next(true) {
+		if it.Hash() == (common.Hash{}) {
+			continue
+		}
+		blob := it.NodeBlob()
+		if len(blob) == 0 {
+			continue
+		}
+		nodes = append(nodes, "0x"+hex.EncodeToString(blob))
+	}
+	return nodes, []string{"0x" + hex.EncodeToString(code)}, root
+}
+
 func rootWitnessNode(t *testing.T, nodes []string, root common.Hash) string {
 	t.Helper()
 	for _, node := range nodes {
@@ -2275,6 +2322,10 @@ func rootWitnessNode(t *testing.T, nodes []string, root common.Hash) string {
 
 func runtimeOutOfGasLoopCode() []byte {
 	return []byte{0x5b, 0x60, 0x00, 0x56}
+}
+
+func runtimeZkGasAfterMissingStorageCode() []byte {
+	return []byte{0x60, 0x00, 0x54, 0x50, 0x60, 0x00, 0x60, 0x00, 0x60, 0x00, 0x09, 0x50, 0x5b, 0x60, 0x0c, 0x56}
 }
 
 func loadRealFixtureView(t *testing.T) *GuestInputView {

@@ -247,7 +247,12 @@ func commitFilteredManifestTransactions(
 		stateSnapshot := statedb.Snapshot()
 		gasSnapshot := *gp
 		receipt, err := core.ApplyTransactionWithEVM(msg, gp, statedb, blockNumber, blockHash, blockContext.Time, txCopy, evm)
-		if stateErr := manifestWitnessStateError(statedb, manifestTxLabel(index, txCopy)); stateErr != nil {
+		if stateErr := manifestCandidateStateError(
+			manifestWitnessStateError(statedb, manifestTxLabel(index, txCopy)),
+			err,
+			isUnzen,
+			index,
+		); stateErr != nil {
 			return nil, stateErr
 		}
 		if err != nil {
@@ -298,6 +303,19 @@ func manifestWitnessStateError(statedb *state.StateDB, phase string) error {
 		return fmt.Errorf("witness state error during manifest transaction filtering (%s): %w", phase, err)
 	}
 	return nil
+}
+
+// manifestCandidateStateError defers a witness error only when the same
+// non-anchor transaction has reached the protocol's zk-gas truncation point.
+// The EVM may set StateDB.Error before zk-gas exhaustion is surfaced; that
+// deferred witness error belongs to the transaction that is discarded by the
+// canonical Unzen tx-list filtering rule. Anchor and all other errors remain
+// fatal.
+func manifestCandidateStateError(stateErr, applyErr error, isUnzen bool, index int) error {
+	if isUnzen && index > 0 && errors.Is(applyErr, vm.ErrZkGasLimitExceeded) {
+		return nil
+	}
+	return stateErr
 }
 
 func manifestTxLabel(index int, tx *types.Transaction) string {
