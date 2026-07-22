@@ -59,6 +59,40 @@ func TestRunServerPrintsStartupSummary(t *testing.T) {
 	}
 }
 
+func TestRunServerRequiresExplicitProvingMode(t *testing.T) {
+	prevListen := listenFn
+	prevServe := serveFn
+	t.Cleanup(func() {
+		listenFn = prevListen
+		serveFn = prevServe
+	})
+
+	prev, had := os.LookupEnv("GAIKO2_PROVING_MODE")
+	if err := os.Unsetenv("GAIKO2_PROVING_MODE"); err != nil {
+		t.Fatalf("unset proving mode: %v", err)
+	}
+	t.Cleanup(func() {
+		if had {
+			_ = os.Setenv("GAIKO2_PROVING_MODE", prev)
+		}
+	})
+
+	listenFn = func(string, string) (net.Listener, error) {
+		t.Fatal("server must not bind a listener when the proving mode is unset")
+		return nil, nil
+	}
+	serveFn = func(context.Context, net.Listener, http.Handler) error {
+		t.Fatal("server must not serve when the proving mode is unset")
+		return nil
+	}
+
+	var stdout bytes.Buffer
+	err := run(context.Background(), []string{"server", ":18080"}, &stdout)
+	if err == nil || !strings.Contains(err.Error(), "GAIKO2_PROVING_MODE must be set explicitly") {
+		t.Fatalf("expected explicit proving-mode requirement error, got %v", err)
+	}
+}
+
 func TestRunServerPrintsListeningAddress(t *testing.T) {
 	prevListen := listenFn
 	prevServe := serveFn
@@ -66,6 +100,8 @@ func TestRunServerPrintsListeningAddress(t *testing.T) {
 		listenFn = prevListen
 		serveFn = prevServe
 	})
+
+	setEnv(t, "GAIKO2_PROVING_MODE", "native")
 
 	listenFn = func(network, addr string) (net.Listener, error) {
 		return fakeListener{addr: fakeAddr("127.0.0.1:18080")}, nil
@@ -98,6 +134,8 @@ func TestRunServerUsesPortFromEnv(t *testing.T) {
 		listenFn = prevListen
 		serveFn = prevServe
 	})
+
+	setEnv(t, "GAIKO2_PROVING_MODE", "native")
 
 	if err := os.Setenv("GAIKO2_PORT", "19090"); err != nil {
 		t.Fatalf("set env: %v", err)
@@ -136,6 +174,7 @@ func TestRunServerRejectsV1WithoutGuestInput(t *testing.T) {
 		newReplayServiceFn = prevNewReplayService
 	})
 
+	setEnv(t, "GAIKO2_PROVING_MODE", "native")
 	setEnv(t, "GAIKO2_INSTANCE_ID", "11")
 
 	listenFn = func(network, addr string) (net.Listener, error) {
@@ -195,6 +234,8 @@ func TestRunServerShutsDownGracefullyOnContextCancel(t *testing.T) {
 	t.Cleanup(func() {
 		listenFn = prevListen
 	})
+
+	setEnv(t, "GAIKO2_PROVING_MODE", "native")
 
 	addrCh := make(chan net.Addr, 1)
 	listenFn = func(network, _ string) (net.Listener, error) {

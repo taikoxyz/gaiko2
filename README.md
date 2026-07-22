@@ -65,7 +65,7 @@ request value with a maximum body size of 512 MiB. Larger bodies return HTTP
 
 Optional proving configuration:
 
-- `GAIKO2_PROVING_MODE=native|tee`
+- `GAIKO2_PROVING_MODE=native|tee` (required; `gaiko2 server` refuses to start if unset)
 - `GAIKO2_TEE_TYPE=ego`
 - `GAIKO2_CONFIG_DIR=/path/to/config`
 - `GAIKO2_SECRET_DIR=/path/to/secrets`
@@ -73,7 +73,10 @@ Optional proving configuration:
 - `GAIKO2_FORK=shasta`
 - `GAIKO2_PORT=8080`
 
-If unset, `gaiko2` defaults to `native` mode.
+`GAIKO2_PROVING_MODE` must be set explicitly to `native` or `tee`; `gaiko2
+server` refuses to start when it is unset rather than silently defaulting to
+native mode (which signs with the published mock key). The checked-in Docker
+images and Compose profiles already set it explicitly.
 
 TEE mode expects the enclave key to be bootstrapped ahead of proving and also
 requires either `GAIKO2_INSTANCE_ID` or a `GAIKO2_FORK` entry in

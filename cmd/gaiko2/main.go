@@ -120,6 +120,13 @@ func run(ctx context.Context, args []string, stdout io.Writer) error {
 		if err != nil {
 			return err
 		}
+		if strings.TrimSpace(cfg.Mode) == "" {
+			return fmt.Errorf(
+				"GAIKO2_PROVING_MODE must be set explicitly to %q or %q; refusing to silently default to native mode",
+				prover.ProvingModeNative,
+				prover.ProvingModeTEE,
+			)
+		}
 		_, _ = fmt.Fprintf(
 			stdout,
 			"starting gaiko2 provider mode=%s tee_type=%s fork=%s instance_id=%d config_dir=%s secret_dir=%s listen=%s\n",
