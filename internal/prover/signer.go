@@ -81,7 +81,12 @@ func newTEEProofSignerFromConfig(privateKey *ecdsa.PrivateKey, cfg ServiceConfig
 func NewConfiguredReplayService(cfg ServiceConfig, runner Runner) (ReplayService, error) {
 	mode := strings.ToLower(strings.TrimSpace(cfg.Mode))
 	if mode == "" {
-		mode = ProvingModeNative
+		return ReplayService{}, fmt.Errorf(
+			"%s must be set to %q or %q",
+			envProvingMode,
+			ProvingModeNative,
+			ProvingModeTEE,
+		)
 	}
 
 	var signer ProofSigner
