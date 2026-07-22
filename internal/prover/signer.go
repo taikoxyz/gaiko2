@@ -4,7 +4,6 @@ import (
 	"crypto/ecdsa"
 	"encoding/binary"
 	"fmt"
-	"strings"
 
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/crypto"
@@ -79,14 +78,9 @@ func newTEEProofSignerFromConfig(privateKey *ecdsa.PrivateKey, cfg ServiceConfig
 }
 
 func NewConfiguredReplayService(cfg ServiceConfig, runner Runner) (ReplayService, error) {
-	mode := strings.ToLower(strings.TrimSpace(cfg.Mode))
-	if mode == "" {
-		return ReplayService{}, fmt.Errorf(
-			"%s must be set to %q or %q",
-			envProvingMode,
-			ProvingModeNative,
-			ProvingModeTEE,
-		)
+	mode, err := normalizeProvingMode(cfg.Mode)
+	if err != nil {
+		return ReplayService{}, err
 	}
 
 	var signer ProofSigner

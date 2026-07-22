@@ -27,6 +27,11 @@ func ServiceConfigFromEnv() (ServiceConfig, error) {
 		ConfigDir: envOrDefault(envConfigDir, tee.DefaultConfigDir()),
 		Fork:      strings.TrimSpace(os.Getenv(envFork)),
 	}
+	mode, err := normalizeProvingMode(cfg.Mode)
+	if err != nil {
+		return ServiceConfig{}, err
+	}
+	cfg.Mode = mode
 
 	instanceID := strings.TrimSpace(os.Getenv(envInstanceID))
 	if instanceID == "" && cfg.Fork != "" {
@@ -56,6 +61,19 @@ func ServiceConfigFromEnv() (ServiceConfig, error) {
 	cfg.InstanceID = uint32(parsed)
 	cfg.InstanceIDConfigured = true
 	return cfg, nil
+}
+
+func normalizeProvingMode(mode string) (string, error) {
+	mode = strings.ToLower(strings.TrimSpace(mode))
+	if mode == "" {
+		return "", fmt.Errorf(
+			"%s must be set to %q or %q",
+			envProvingMode,
+			ProvingModeNative,
+			ProvingModeTEE,
+		)
+	}
+	return mode, nil
 }
 
 func envOrDefault(key, fallback string) string {

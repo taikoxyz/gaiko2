@@ -63,12 +63,37 @@ func TestServiceConfigFromEnvAcceptsRegisteredInstanceIDZero(t *testing.T) {
 	}
 }
 
+func TestServiceConfigFromEnvRejectsUnsetModeBeforeForkLookup(t *testing.T) {
+	unsetenv(t, envProvingMode)
+	setenv(t, envConfigDir, t.TempDir())
+	setenv(t, envFork, "shasta")
+	setenv(t, envInstanceID, "")
+
+	_, err := ServiceConfigFromEnv()
+	if err == nil || err.Error() != `GAIKO2_PROVING_MODE must be set to "native" or "tee"` {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
+func TestServiceConfigFromEnvRejectsWhitespaceModeBeforeForkLookup(t *testing.T) {
+	setenv(t, envProvingMode, " \t ")
+	setenv(t, envConfigDir, t.TempDir())
+	setenv(t, envFork, "shasta")
+	setenv(t, envInstanceID, "")
+
+	_, err := ServiceConfigFromEnv()
+	if err == nil || err.Error() != `GAIKO2_PROVING_MODE must be set to "native" or "tee"` {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
 func TestServiceConfigFromEnvRejectsUnknownRegisteredFork(t *testing.T) {
 	configDir := t.TempDir()
 	if err := tee.SaveRegisteredForks(configDir, tee.RegisteredForks{"shasta": 3131899904}); err != nil {
 		t.Fatalf("save registered forks: %v", err)
 	}
 
+	setenv(t, envProvingMode, ProvingModeTEE)
 	setenv(t, envConfigDir, configDir)
 	setenv(t, envFork, "uzen")
 	t.Cleanup(func() {
@@ -94,5 +119,18 @@ func setenv(t *testing.T, key, value string) {
 			return
 		}
 		_ = os.Unsetenv(key)
+	})
+}
+
+func unsetenv(t *testing.T, key string) {
+	t.Helper()
+	prev, ok := os.LookupEnv(key)
+	if err := os.Unsetenv(key); err != nil {
+		t.Fatalf("unset env %s: %v", key, err)
+	}
+	t.Cleanup(func() {
+		if ok {
+			_ = os.Setenv(key, prev)
+		}
 	})
 }
