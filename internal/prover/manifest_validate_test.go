@@ -728,6 +728,42 @@ func TestDecodeManifestPayloadAcceptsLargeDecodedManifest(t *testing.T) {
 	}
 }
 
+func TestDecodeManifestPayloadRejectsDecompressionBomb(t *testing.T) {
+	// Audit D6: a tiny high-ratio DEFLATE zero-run that inflates past the decompression cap must be
+	// rejected before it materializes in memory. Stream the zeros into the compressor so building the
+	// payload itself never holds the whole decompressed size at once (the compressed stream is small
+	// enough to fit in a single blob).
+	var compressed bytes.Buffer
+	zw := zlib.NewWriter(&compressed)
+	zeros := make([]byte, 1<<20) // 1 MiB, reused
+	for remaining := shastaMaxManifestDecompressedBytes + 1; remaining > 0; {
+		chunk := len(zeros)
+		if chunk > remaining {
+			chunk = remaining
+		}
+		if _, err := zw.Write(zeros[:chunk]); err != nil {
+			t.Fatalf("zlib write bomb: %v", err)
+		}
+		remaining -= chunk
+	}
+	if err := zw.Close(); err != nil {
+		t.Fatalf("zlib close bomb: %v", err)
+	}
+	if compressed.Len() >= shastaMaxManifestDecompressedBytes {
+		t.Fatalf("bomb payload did not compress: %d bytes", compressed.Len())
+	}
+
+	payload := make([]byte, 64, 64+compressed.Len())
+	payload[31] = shastaPayloadVersion
+	binary.BigEndian.PutUint64(payload[56:64], uint64(compressed.Len()))
+	payload = append(payload, compressed.Bytes()...)
+
+	_, err := decodeManifestPayload(payload, 0, shastaUnzenDerivationSourceLimit)
+	if err == nil || !strings.Contains(err.Error(), "exceeds cap") {
+		t.Fatalf("expected decompression-bomb rejection, got %v", err)
+	}
+}
+
 func TestDecodeManifestPayloadAcceptsMoreTransactionsThanBlockGasCanFit(t *testing.T) {
 	tx := decodeTestTransaction(t, manifestUserTxJSON(t, 167001, 0, testAddress("31")))
 	txs := make(types.Transactions, int(shastaMaxBlockGasLimit/params.TxGas)+1)

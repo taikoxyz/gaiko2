@@ -33,9 +33,21 @@ const (
 	shastaDerivationSourceMaxBlocks  = 192
 	shastaUnzenDerivationSourceLimit = 768
 	shastaMaxManifestOffset          = shastaBytesPerBlob - 64
-	shastaTaikoL2AddressSuffix       = "10001"
-	shastaCheckpointStoreSuffix      = "5"
-	shastaGoldenTouchPrivateKey      = nativeProofPrivateKey
+	// shastaMaxBlockRLPBytes is a generous upper bound on a single L2 block's RLP encoding inside a
+	// manifest. The protocol bounds a block's compressed tx-list to one blob (~128 KiB); 256 KiB
+	// doubles that to stay safely above any real block. It only derives the decompression cap below
+	// and is never enforced per block.
+	shastaMaxBlockRLPBytes = 256 * 1024
+	// shastaMaxManifestDecompressedBytes caps the decompressed size of a manifest payload to defuse a
+	// zlib decompression bomb (audit D6). A legitimate source manifest holds at most
+	// shastaUnzenDerivationSourceLimit (768) blocks, so its decompressed RLP cannot exceed
+	// 768 * shastaMaxBlockRLPBytes = 192 MiB; anything larger is only reachable via a crafted
+	// high-ratio DEFLATE payload. This value MUST match raiko2's MAX_MANIFEST_DECOMPRESSED_BYTES and
+	// should be mirrored by the taiko-client driver.
+	shastaMaxManifestDecompressedBytes = shastaUnzenDerivationSourceLimit * shastaMaxBlockRLPBytes
+	shastaTaikoL2AddressSuffix         = "10001"
+	shastaCheckpointStoreSuffix        = "5"
+	shastaGoldenTouchPrivateKey        = nativeProofPrivateKey
 )
 
 const shastaSignalServiceCheckpointsSlot uint64 = 254
@@ -389,9 +401,19 @@ func decodeManifestPayload(payload []byte, offset uint64, maxBlocks int) (shasta
 		return shastaSourceManifest{}, fmt.Errorf("open manifest zlib stream: %w", err)
 	}
 	defer zr.Close()
-	decoded, err := io.ReadAll(zr)
+	// Bound the decompressed output so a high-ratio DEFLATE payload cannot exhaust prover memory
+	// (audit D6): the compressed input is <= blob bytes, but zlib can expand it ~1032x. Read at most
+	// one byte past the cap so an over-cap payload is detected without materializing the whole bomb.
+	decoded, err := io.ReadAll(io.LimitReader(zr, int64(shastaMaxManifestDecompressedBytes)+1))
 	if err != nil {
 		return shastaSourceManifest{}, fmt.Errorf("decompress manifest payload: %w", err)
+	}
+	if len(decoded) > shastaMaxManifestDecompressedBytes {
+		// Over the cap can only happen for a crafted manifest, never a blob-deliverable one, so this
+		// degrades to the default manifest via decodeBlobBackedSourceManifest exactly like every other
+		// decode failure instead of hard-failing derivation.
+		return shastaSourceManifest{}, fmt.Errorf(
+			"manifest decompressed payload exceeds cap %d", shastaMaxManifestDecompressedBytes)
 	}
 
 	var manifest shastaSourceManifest
