@@ -40,10 +40,14 @@ type Runner interface {
 	) (ReplayResult, error)
 }
 
-type GethRunner struct{}
-
 type replayStateErrorSource interface {
 	Error() error
+}
+
+type replayStateErrorCheck func(replayStateErrorSource, string) error
+
+type GethRunner struct {
+	stateErrorCheck replayStateErrorCheck
 }
 
 type ReplayResult struct {
@@ -52,7 +56,7 @@ type ReplayResult struct {
 	Receipts    types.Receipts
 }
 
-func (GethRunner) Execute(
+func (r GethRunner) Execute(
 	ctx context.Context,
 	config *params.ChainConfig,
 	block *types.Block,
@@ -75,7 +79,7 @@ func (GethRunner) Execute(
 	if err != nil {
 		return ReplayResult{}, err
 	}
-	if err := replayStateError(db, "after block processing"); err != nil {
+	if err := r.checkStateError(db, "after block processing"); err != nil {
 		return ReplayResult{}, err
 	}
 	if err := validator.ValidateState(executionBlock, db, res, true); err != nil {
@@ -87,7 +91,7 @@ func (GethRunner) Execute(
 
 	receiptRoot := types.DeriveSha(res.Receipts, trie.NewStackTrie(nil))
 	stateRoot := db.IntermediateRoot(config.IsEIP158(executionBlock.Number()))
-	if err := replayStateError(db, "after intermediate root"); err != nil {
+	if err := r.checkStateError(db, "after intermediate root"); err != nil {
 		return ReplayResult{}, err
 	}
 	return ReplayResult{
@@ -95,6 +99,13 @@ func (GethRunner) Execute(
 		ReceiptRoot: receiptRoot,
 		Receipts:    res.Receipts,
 	}, nil
+}
+
+func (r GethRunner) checkStateError(source replayStateErrorSource, phase string) error {
+	if r.stateErrorCheck != nil {
+		return r.stateErrorCheck(source, phase)
+	}
+	return replayStateError(source, phase)
 }
 
 func replayStateError(source replayStateErrorSource, phase string) error {

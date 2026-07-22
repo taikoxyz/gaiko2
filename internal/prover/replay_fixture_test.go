@@ -3,18 +3,110 @@ package prover
 import (
 	"context"
 	"encoding/json"
+	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"runtime"
+	"strings"
 	"testing"
 	"time"
 
 	"github.com/ethereum/go-ethereum/common"
+	"github.com/ethereum/go-ethereum/core/state"
 	gethtypes "github.com/ethereum/go-ethereum/core/types"
+	"github.com/ethereum/go-ethereum/crypto"
+	"github.com/ethereum/go-ethereum/trie"
 	"github.com/taikoxyz/gaiko2/internal/protocol"
 )
 
 const sharedFixtureName = "shasta_request_taiko_mainnet_proposal_2222_l2_5412225_5412416.json"
+
+func TestGethRunnerRejectsDeferredStateErrors(t *testing.T) {
+	req := loadSharedShastaFixture(t)
+	validated, err := ValidateRequest(req)
+	if err != nil {
+		t.Fatalf("validate request: %v", err)
+	}
+	config, err := chainConfigFor(validated.Carry.ChainID)
+	if err != nil {
+		t.Fatalf("chain config: %v", err)
+	}
+
+	decodeFirstReplay := func(t *testing.T) (*gethtypes.Block, *ReplayWitness) {
+		t.Helper()
+		block, witness, err := decodeReplayBlock(validated.Request.Payload.Blocks[0])
+		if err != nil {
+			t.Fatalf("decode first replay block: %v", err)
+		}
+		return block, witness
+	}
+
+	t.Run("after block processing", func(t *testing.T) {
+		block, witness := decodeFirstReplay(t)
+		witness.Witness = witness.Witness.Copy()
+		missingNodeHash := common.HexToHash("0xce7fe85bcf0a6f5b9b311309e0c4af9daea7879269315b0c49a1fffb6dab38ea")
+		removed := false
+		for node := range witness.Witness.State {
+			if crypto.Keccak256Hash([]byte(node)) == missingNodeHash {
+				delete(witness.Witness.State, node)
+				removed = true
+				break
+			}
+		}
+		if !removed {
+			t.Fatalf("fixture no longer contains state node %s", missingNodeHash)
+		}
+
+		_, err := (GethRunner{}).Execute(
+			context.Background(),
+			config,
+			blockForStatelessExecution(block),
+			witness,
+		)
+		var missingNode *trie.MissingNodeError
+		if !errors.As(err, &missingNode) {
+			t.Fatalf("expected wrapped missing trie node error, got %v", err)
+		}
+		if missingNode.NodeHash != missingNodeHash {
+			t.Fatalf("unexpected missing trie node: got %s want %s", missingNode.NodeHash, missingNodeHash)
+		}
+		if !strings.Contains(err.Error(), "witness state error after block processing") {
+			t.Fatalf("expected block-processing phase context, got %v", err)
+		}
+	})
+
+	t.Run("after intermediate root", func(t *testing.T) {
+		block, witness := decodeFirstReplay(t)
+		sentinel := errors.New("deferred state error after intermediate root")
+		runner := GethRunner{stateErrorCheck: func(source replayStateErrorSource, phase string) error {
+			if phase != "after intermediate root" {
+				return replayStateError(source, phase)
+			}
+			db, ok := source.(*state.StateDB)
+			if !ok {
+				return fmt.Errorf("unexpected replay state source %T", source)
+			}
+			if db.GetTrie() == nil || db.GetTrie().Hash() != block.Root() {
+				return fmt.Errorf("post-root state check ran before IntermediateRoot")
+			}
+			return replayStateError(replayStateErrorStub{err: sentinel}, phase)
+		}}
+
+		_, err := runner.Execute(
+			context.Background(),
+			config,
+			blockForStatelessExecution(block),
+			witness,
+		)
+		if !errors.Is(err, sentinel) {
+			t.Fatalf("expected wrapped post-root state error, got %v", err)
+		}
+		if !strings.Contains(err.Error(), "witness state error after intermediate root") {
+			t.Fatalf("expected intermediate-root phase context, got %v", err)
+		}
+	})
+}
 
 func TestSharedShastaFixtureMetadata(t *testing.T) {
 	req := loadSharedShastaFixture(t)
