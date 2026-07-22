@@ -57,9 +57,41 @@ func TestRunServerPrintsStartupSummary(t *testing.T) {
 		!strings.Contains(output, "instance_id=11") {
 		t.Fatalf("expected startup fields, got %q", output)
 	}
+	if !strings.Contains(output, "WARNING: native proving mode uses a public deterministic signing key") ||
+		!strings.Contains(output, "never register") {
+		t.Fatalf("expected native safety warning, got %q", output)
+	}
+}
+
+func TestRunServerRejectsUnsetModeBeforeStartupOrListen(t *testing.T) {
+	prevListen := listenFn
+	t.Cleanup(func() {
+		listenFn = prevListen
+	})
+
+	setEnv(t, "GAIKO2_PROVING_MODE", "")
+	listenCalled := false
+	listenFn = func(network, addr string) (net.Listener, error) {
+		listenCalled = true
+		return fakeListener{addr: fakeAddr("127.0.0.1:18080")}, nil
+	}
+
+	var stdout bytes.Buffer
+	err := run(context.Background(), []string{"server", ":18080"}, &stdout)
+	if err == nil || err.Error() != `GAIKO2_PROVING_MODE must be set to "native" or "tee"` {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if listenCalled {
+		t.Fatalf("server listened before validating proving mode")
+	}
+	if strings.Contains(stdout.String(), "starting gaiko2 provider") {
+		t.Fatalf("server printed a successful startup summary before validation: %q", stdout.String())
+	}
 }
 
 func TestRunServerPrintsListeningAddress(t *testing.T) {
+	setEnv(t, "GAIKO2_PROVING_MODE", "native")
+
 	prevListen := listenFn
 	prevServe := serveFn
 	t.Cleanup(func() {
@@ -92,6 +124,8 @@ func TestFormatListeningAddrNormalizesWildcardTCP(t *testing.T) {
 }
 
 func TestRunServerUsesPortFromEnv(t *testing.T) {
+	setEnv(t, "GAIKO2_PROVING_MODE", "native")
+
 	prevListen := listenFn
 	prevServe := serveFn
 	t.Cleanup(func() {
@@ -127,6 +161,8 @@ func TestRunServerUsesPortFromEnv(t *testing.T) {
 }
 
 func TestRunServerRejectsV1WithoutGuestInput(t *testing.T) {
+	setEnv(t, "GAIKO2_PROVING_MODE", "native")
+
 	prevListen := listenFn
 	prevServe := serveFn
 	prevNewReplayService := newReplayServiceFn
@@ -191,6 +227,8 @@ func TestNormalizeServeError(t *testing.T) {
 }
 
 func TestRunServerShutsDownGracefullyOnContextCancel(t *testing.T) {
+	setEnv(t, "GAIKO2_PROVING_MODE", "native")
+
 	prevListen := listenFn
 	t.Cleanup(func() {
 		listenFn = prevListen

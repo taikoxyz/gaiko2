@@ -120,10 +120,15 @@ func run(ctx context.Context, args []string, stdout io.Writer) error {
 		if err != nil {
 			return err
 		}
+		mode := normalizedProvingMode(cfg.Mode)
+		service, err := newReplayServiceFn(cfg, nil)
+		if err != nil {
+			return err
+		}
 		_, _ = fmt.Fprintf(
 			stdout,
 			"starting gaiko2 provider mode=%s tee_type=%s fork=%s instance_id=%d config_dir=%s secret_dir=%s listen=%s\n",
-			normalizedProvingMode(cfg.Mode),
+			mode,
 			strings.TrimSpace(cfg.TeeType),
 			strings.TrimSpace(cfg.Fork),
 			cfg.InstanceID,
@@ -131,9 +136,11 @@ func run(ctx context.Context, args []string, stdout io.Writer) error {
 			cfg.SecretDir,
 			addr,
 		)
-		service, err := newReplayServiceFn(cfg, nil)
-		if err != nil {
-			return err
+		if mode == prover.ProvingModeNative {
+			_, _ = fmt.Fprintln(
+				stdout,
+				"WARNING: native proving mode uses a public deterministic signing key; use it only for local/development testing and never register its signer in a verifier protecting real value",
+			)
 		}
 		listener, err := listenFn("tcp", addr)
 		if err != nil {
@@ -147,11 +154,7 @@ func run(ctx context.Context, args []string, stdout io.Writer) error {
 }
 
 func normalizedProvingMode(mode string) string {
-	mode = strings.ToLower(strings.TrimSpace(mode))
-	if mode == "" {
-		return prover.ProvingModeNative
-	}
-	return mode
+	return strings.ToLower(strings.TrimSpace(mode))
 }
 
 func formatListeningAddr(addr net.Addr) string {
