@@ -760,7 +760,9 @@ func chainConfigFor(chainID uint64) (*params.ChainConfig, error) {
 		cfg.OntakeBlock = cloneBigInt(core.MainnetOntakeBlock)
 		cfg.PacayaBlock = cloneBigInt(core.MainnetPacayaBlock)
 		cfg.ShastaTime = cloneUint64(core.MainnetShastaTime)
-		enableUnzenForksFrom(cfg, core.MainnetUnzenTime)
+		if err := enableUnzenForksFrom(cfg, core.MainnetUnzenTime); err != nil {
+			return nil, err
+		}
 		return cfg, nil
 	case params.TaikoInternalNetworkID.Uint64():
 		cfg := cloneChainConfig(params.TaikoChainConfig)
@@ -768,7 +770,9 @@ func chainConfigFor(chainID uint64) (*params.ChainConfig, error) {
 		cfg.OntakeBlock = cloneBigInt(core.InternalDevnetOntakeBlock)
 		cfg.PacayaBlock = cloneBigInt(core.InternalDevnetPacayaBlock)
 		cfg.ShastaTime = cloneUint64(core.InternalShastaTime)
-		enableUnzenForksFrom(cfg, core.DevnetUnzenTime)
+		if err := enableUnzenForksFrom(cfg, core.DevnetUnzenTime); err != nil {
+			return nil, err
+		}
 		return cfg, nil
 	case params.MasayaDevnetNetworkID.Uint64():
 		cfg := cloneChainConfig(params.TaikoChainConfig)
@@ -776,7 +780,9 @@ func chainConfigFor(chainID uint64) (*params.ChainConfig, error) {
 		cfg.OntakeBlock = cloneBigInt(core.MasayaDevnetOntakeBlock)
 		cfg.PacayaBlock = cloneBigInt(core.MasayaDevnetPacayaBlock)
 		cfg.ShastaTime = cloneUint64(core.MasayaShastaTime)
-		enableUnzenForksFrom(cfg, core.MasayaUnzenTime)
+		if err := enableUnzenForksFrom(cfg, core.MasayaUnzenTime); err != nil {
+			return nil, err
+		}
 		return cfg, nil
 	case params.TaikoHoodiNetworkID.Uint64():
 		cfg := cloneChainConfig(params.TaikoChainConfig)
@@ -784,37 +790,83 @@ func chainConfigFor(chainID uint64) (*params.ChainConfig, error) {
 		cfg.OntakeBlock = cloneBigInt(core.TaikoHoodiOntakeBlock)
 		cfg.PacayaBlock = cloneBigInt(core.TaikoHoodiPacayaBlock)
 		cfg.ShastaTime = cloneUint64(core.HoodiShastaTime)
-		enableUnzenForksFrom(cfg, core.HoodiUnzenTime)
+		if err := enableUnzenForksFrom(cfg, core.HoodiUnzenTime); err != nil {
+			return nil, err
+		}
 		return cfg, nil
 	default:
 		return nil, fmt.Errorf("unsupported chain ID: %d", chainID)
 	}
 }
 
-func enableUnzenForksFrom(cfg *params.ChainConfig, timestamp uint64) {
+// enableUnzenForksFrom pins the Unzen activation time and the Cancun/Prague/Osaka
+// EVM fork times it bundles to the given timestamp.
+//
+// taiko-geth's TaikoChainConfig currently leaves these times nil and gaiko2
+// fills them here. If a future taiko-geth bump instead populated them with a
+// different value, silently inheriting it would change post-Unzen fork gating
+// (ProcessParentBlockHash, the deposit/withdrawal/consolidation request queues,
+// and the requests hash), producing blocks that diverge from the canonical
+// network. Assert the expected value rather than trusting the upstream default,
+// so any such drift fails closed instead of being proven as canonical.
+func enableUnzenForksFrom(cfg *params.ChainConfig, timestamp uint64) error {
 	if cfg == nil {
-		return
+		return nil
 	}
-	if cfg.UnzenTime == nil {
-		cfg.UnzenTime = cloneUint64(timestamp)
+	forks := []struct {
+		name  string
+		field **uint64
+	}{
+		{"Unzen", &cfg.UnzenTime},
+		{"Cancun", &cfg.CancunTime},
+		{"Prague", &cfg.PragueTime},
+		{"Osaka", &cfg.OsakaTime},
 	}
-	if cfg.CancunTime == nil {
-		cfg.CancunTime = cloneUint64(timestamp)
-	}
-	if cfg.PragueTime == nil {
-		cfg.PragueTime = cloneUint64(timestamp)
-	}
-	if cfg.OsakaTime == nil {
-		cfg.OsakaTime = cloneUint64(timestamp)
+	for _, fork := range forks {
+		if err := pinForkTime(fork.field, timestamp, fork.name); err != nil {
+			return err
+		}
 	}
 	if cfg.BlobScheduleConfig == nil {
 		cfg.BlobScheduleConfig = cloneBlobSchedule(params.DefaultBlobSchedule)
 	}
+	return nil
+}
+
+// pinForkTime sets *field to expected when it is unset, or rejects a preset value
+// that disagrees with expected.
+func pinForkTime(field **uint64, expected uint64, name string) error {
+	if *field == nil {
+		*field = cloneUint64(expected)
+		return nil
+	}
+	if **field != expected {
+		return fmt.Errorf(
+			"unexpected %s activation time: upstream config has %d, expected Unzen time %d",
+			name, **field, expected,
+		)
+	}
+	return nil
 }
 
 func unzenZkGasScheduleFor(config *params.ChainConfig) *vm.ZkGasSchedule {
-	// Current taiko-geth no longer selects Unzen zk-gas schedules by chain ID.
-	// In particular, taiko-geth #569 reset Masaya to the default Unzen schedule.
+	// DILIGENCE (audit finding 6): for Unzen blocks, processUnzenReplayBlock
+	// reconstructs the block it verifies by filtering the manifest tx list
+	// through isRecoverableNonAnchorTxError and applying this zk-gas schedule,
+	// then requires the resulting tx root / difficulty to match the header. So
+	// soundness depends on BOTH this schedule and the recoverable-error
+	// classifier exactly matching the canonical block producer (alethia-reth /
+	// taiko-client-rs) for the block's fork epoch. gaiko2 tracks taiko-geth
+	// directly (this returns &vm.UnzenZkGasSchedule, and the classifier mirrors
+	// taiko-geth's error set — see TestIsRecoverableNonAnchorTxError and
+	// TestUnzenZkGasScheduleForFollowsTaikoGethDefaultSchedule), so any
+	// taiko-geth/producer divergence must be caught by diffing per fork and by
+	// differential tests against canonical Unzen fixtures. NOTE: the checked-in
+	// mainnet fixture is pre-Unzen and does not exercise this path — add a
+	// canonical Unzen fixture when one becomes available.
+	//
+	// taiko-geth no longer selects Unzen zk-gas schedules by chain ID; taiko-geth
+	// #569 reset Masaya to the default Unzen schedule.
 	_ = config
 	return &vm.UnzenZkGasSchedule
 }
