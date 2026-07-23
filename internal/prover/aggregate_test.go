@@ -110,14 +110,16 @@ func TestReplayServiceReturnsSignedAggregationProofResult(t *testing.T) {
 	}
 
 	service := NewReplayService(nil)
+	identity, err := service.signer.Identity()
+	if err != nil {
+		t.Fatalf("signer identity: %v", err)
+	}
+	nativeAddr := identity.InstanceAddress
 	result, err := service.Aggregate(context.Background(), validated)
 	if err != nil {
 		t.Fatalf("aggregate: %v", err)
 	}
-	expectedInput, err := hashShastaAggregationInput(
-		[]json.RawMessage{carry},
-		common.HexToAddress("0x0000777735367b36bC9B61C50022d9D0700dB4Ec"),
-	)
+	expectedInput, err := hashShastaAggregationInput([]json.RawMessage{carry}, nativeAddr)
 	if err != nil {
 		t.Fatalf("hash aggregation input: %v", err)
 	}
@@ -127,7 +129,7 @@ func TestReplayServiceReturnsSignedAggregationProofResult(t *testing.T) {
 	if result.Proof == nil || *result.Proof == "" {
 		t.Fatalf("expected aggregation proof, got %+v", result)
 	}
-	if result.InstanceAddress == nil || *result.InstanceAddress != common.HexToAddress("0x0000777735367b36bC9B61C50022d9D0700dB4Ec").Hex() {
+	if result.InstanceAddress == nil || *result.InstanceAddress != nativeAddr.Hex() {
 		t.Fatalf("unexpected instance address: %+v", result.InstanceAddress)
 	}
 }

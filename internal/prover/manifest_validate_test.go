@@ -1290,7 +1290,7 @@ func newManifestBindingFixture(t *testing.T) *manifestBindingFixture {
 		l2Contract:            testTaikoL2Address(chainID),
 		anchorTo:              testTaikoL2Address(chainID),
 		anchorGas:             shastaAnchorGasLimit,
-		anchorPrivateKeyHex:   nativeProofPrivateKey,
+		anchorPrivateKeyHex:   shastaGoldenTouchPrivateKey,
 		anchorSignatureMode:   anchorSignatureFixedK,
 		anchorBlockNumber:     900,
 		lastAnchorBlockNumber: manifestUint64Ptr(899),

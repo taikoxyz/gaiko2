@@ -35,7 +35,12 @@ const (
 	shastaMaxManifestOffset          = shastaBytesPerBlob - 64
 	shastaTaikoL2AddressSuffix       = "10001"
 	shastaCheckpointStoreSuffix      = "5"
-	shastaGoldenTouchPrivateKey      = nativeProofPrivateKey
+	// shastaGoldenTouchPrivateKey is the canonical, publicly-known GoldenTouch
+	// key. It is used only to re-derive and verify L2 anchor transaction
+	// signatures, and is intentionally kept separate from the native
+	// proof-signing key (nativeProofPrivateKey) so the two roles do not share a
+	// key. Its address is shastaGoldenTouchAccount.
+	shastaGoldenTouchPrivateKey = "92954368afd3caa1f3ce3ead0069c1af414054aefe1ef9aeacc1bf426222ce38"
 )
 
 const shastaSignalServiceCheckpointsSlot uint64 = 254
