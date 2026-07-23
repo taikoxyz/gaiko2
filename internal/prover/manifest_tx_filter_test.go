@@ -6,8 +6,10 @@ import (
 	"errors"
 	"fmt"
 	"math/big"
+	"strings"
 	"testing"
 
+	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/core"
 	"github.com/ethereum/go-ethereum/core/types"
 	"github.com/ethereum/go-ethereum/core/vm"
@@ -116,6 +118,51 @@ func TestFilterManifestTransactionsStopsAtUnzenZkGasLimit(t *testing.T) {
 		if filtered[index].Hash() != manifestTxs[index-1].Hash() {
 			t.Fatalf("filtered tx %d hash mismatch: got %s want %s", index, filtered[index].Hash(), manifestTxs[index-1].Hash())
 		}
+	}
+}
+
+func TestFilterManifestTransactionsRejectsWitnessErrorDuringZkGasTruncation(t *testing.T) {
+	fixture := newManifestBindingFixture(t)
+	loopContract := common.HexToAddress(testAddress("46"))
+	loopCode := runtimeZkGasAfterMissingStorageCode()
+	witnessStateNodes, witnessCodes, witnessStateRoot := witnessStateNodesWithMissingStorageAndCode(
+		t,
+		manifestTestTxSigner(t),
+		new(big.Int).SetUint64(1_000_000_000_000_000_000),
+		loopContract,
+		loopCode,
+	)
+	fixture.parentHeader.Root = witnessStateRoot
+	fixture.witnessStateNodes = witnessStateNodes
+	fixture.witnessCodes = witnessCodes
+
+	const fillerCount = 400
+	manifestTxJSONs := manifestSequentialUserTxJSONs(t, fixture.chainID, fillerCount)
+	manifestTxJSONs = append(
+		manifestTxJSONs,
+		manifestUserTxJSONWithGas(t, fixture.chainID, fillerCount, loopContract.Hex(), 5_000_000),
+	)
+	fixture.manifestUserTxJSONs = manifestTxJSONs
+	fixture.blockUserTxJSONs = append([]json.RawMessage(nil), manifestTxJSONs[:fillerCount]...)
+	view := fixture.view(t)
+
+	block, witness, err := decodeReplayBlock(view.Witnesses[0].ReplayBlock)
+	if err != nil {
+		t.Fatalf("decode replay block: %v", err)
+	}
+	_, err = filterManifestTransactions(
+		context.Background(),
+		fixture.chainID,
+		block,
+		decodeTestTransactions(t, manifestTxJSONs),
+		witness,
+	)
+	if err == nil {
+		t.Fatal("expected missing trie node to reject the candidate, even when it reaches the zk-gas limit")
+	}
+	if !strings.Contains(err.Error(), "witness state error during manifest transaction filtering") ||
+		!strings.Contains(err.Error(), "missing trie node") {
+		t.Fatalf("expected witness error, got %v", err)
 	}
 }
 
