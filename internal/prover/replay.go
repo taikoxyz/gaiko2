@@ -262,13 +262,20 @@ func replayExecutionBlock(config *params.ChainConfig, block *types.Block) (*type
 type ReplayService struct {
 	runner Runner
 	signer ProofSigner
+	// aggregateEnabled gates the /prove/shasta-aggregate endpoint, which signs
+	// the final on-chain digest without executing any blocks. In native mode the
+	// signing key is the published mock key, so the endpoint is a proof-forgery
+	// oracle; NewConfiguredReplayService only enables it in TEE mode or when
+	// native mode is explicitly opted into dev mode. The test/default
+	// constructors leave it enabled.
+	aggregateEnabled bool
 }
 
 func NewReplayService(runner Runner) ReplayService {
-	return newReplayService(runner, NewNativeProofSigner(shastaNativeMockInstance))
+	return newReplayService(runner, NewNativeProofSigner(shastaNativeMockInstance), true)
 }
 
-func newReplayService(runner Runner, signer ProofSigner) ReplayService {
+func newReplayService(runner Runner, signer ProofSigner, aggregateEnabled bool) ReplayService {
 	if runner == nil {
 		runner = GethRunner{}
 	}
@@ -276,8 +283,9 @@ func newReplayService(runner Runner, signer ProofSigner) ReplayService {
 		signer = NewNativeProofSigner(shastaNativeMockInstance)
 	}
 	return ReplayService{
-		runner: runner,
-		signer: signer,
+		runner:           runner,
+		signer:           signer,
+		aggregateEnabled: aggregateEnabled,
 	}
 }
 

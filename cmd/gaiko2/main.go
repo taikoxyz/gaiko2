@@ -137,9 +137,13 @@ func run(ctx context.Context, args []string, stdout io.Writer) error {
 			addr,
 		)
 		if mode == prover.ProvingModeNative {
+			warning := "WARNING: native proving mode uses a public deterministic signing key; /prove/shasta-aggregate is DISABLED (set GAIKO2_DEV_MODE=1 to enable for local testing); use it only for local/development testing and never register its signer in a verifier protecting real value"
+			if cfg.DevMode {
+				warning = "WARNING: native proving mode uses a public deterministic signing key with GAIKO2_DEV_MODE enabled; /prove/shasta-aggregate is ENABLED; use it only for local/development testing, never expose it to untrusted clients, and never register its signer in a verifier protecting real value"
+			}
 			if _, err := fmt.Fprintln(
 				warningStderr,
-				"WARNING: native proving mode uses a public deterministic signing key; use it only for local/development testing and never register its signer in a verifier protecting real value",
+				warning,
 			); err != nil {
 				return fmt.Errorf("write native mode warning: %w", err)
 			}

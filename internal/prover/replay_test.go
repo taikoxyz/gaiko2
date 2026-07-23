@@ -41,7 +41,7 @@ func (*proofSignerSpy) Identity() (SignerIdentity, error) {
 func TestReplayServiceDoesNotSignAfterRunnerFailure(t *testing.T) {
 	sentinel := errors.New("deferred replay state error")
 	signer := new(proofSignerSpy)
-	service := newReplayService(fakeRunner{err: sentinel}, signer)
+	service := newReplayService(fakeRunner{err: sentinel}, signer, true)
 
 	_, err := service.Prove(
 		context.Background(),

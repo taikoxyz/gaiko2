@@ -64,8 +64,46 @@ func TestRunServerPrintsStartupSummary(t *testing.T) {
 		t.Fatalf("native safety warning leaked to stdout: %q", output)
 	}
 	if !strings.Contains(stderr.String(), "WARNING: native proving mode uses a public deterministic signing key") ||
+		!strings.Contains(stderr.String(), "/prove/shasta-aggregate is DISABLED") ||
+		!strings.Contains(stderr.String(), "GAIKO2_DEV_MODE=1") ||
 		!strings.Contains(stderr.String(), "never register") {
 		t.Fatalf("expected native safety warning on stderr, got %q", stderr.String())
+	}
+}
+
+func TestRunServerWarnsWhenNativeAggregateDevModeEnabled(t *testing.T) {
+	var stderr bytes.Buffer
+	setWarningStderr(t, &stderr)
+	setEnv(t, "GAIKO2_PROVING_MODE", "native")
+	setEnv(t, "GAIKO2_DEV_MODE", "1")
+
+	prevListen := listenFn
+	prevServe := serveFn
+	t.Cleanup(func() {
+		listenFn = prevListen
+		serveFn = prevServe
+	})
+
+	listenFn = func(network, addr string) (net.Listener, error) {
+		return fakeListener{addr: fakeAddr("127.0.0.1:18080")}, nil
+	}
+	serveFn = func(context.Context, net.Listener, http.Handler) error {
+		return errors.New("stop server")
+	}
+
+	var stdout bytes.Buffer
+	err := run(context.Background(), []string{"server", ":18080"}, &stdout)
+	if err == nil || err.Error() != "stop server" {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if strings.Contains(stdout.String(), "WARNING:") {
+		t.Fatalf("native safety warning leaked to stdout: %q", stdout.String())
+	}
+	if !strings.Contains(stderr.String(), "GAIKO2_DEV_MODE enabled") ||
+		!strings.Contains(stderr.String(), "/prove/shasta-aggregate is ENABLED") ||
+		!strings.Contains(stderr.String(), "never expose") ||
+		!strings.Contains(stderr.String(), "never register") {
+		t.Fatalf("expected native dev-mode warning on stderr, got %q", stderr.String())
 	}
 }
 
