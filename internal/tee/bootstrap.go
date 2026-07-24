@@ -237,6 +237,12 @@ func syncDirectoryAncestors(path string) error {
 	current := filepath.Clean(path)
 	for {
 		if err := syncDirectoryFn(current); err != nil {
+			// EGo hostfs mounts can expose the target directory without its
+			// virtual parent directories. Once the target was synced, ENOENT
+			// marks that mount boundary rather than a failed durable write.
+			if current != path && errors.Is(err, fs.ErrNotExist) {
+				return nil
+			}
 			return err
 		}
 		parent := filepath.Dir(current)

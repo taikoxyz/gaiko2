@@ -282,6 +282,30 @@ func TestEnsureDirectorySyncsExistingDirectoryAncestors(t *testing.T) {
 	}
 }
 
+func TestSyncDirectoryAncestorsStopsAtMissingMountParent(t *testing.T) {
+	previous := syncDirectoryFn
+	t.Cleanup(func() { syncDirectoryFn = previous })
+
+	mountDir := filepath.Join(t.TempDir(), "mounted")
+	mountParent := filepath.Dir(mountDir)
+	var synced []string
+	syncDirectoryFn = func(path string) error {
+		path = filepath.Clean(path)
+		synced = append(synced, path)
+		if path == mountParent {
+			return fs.ErrNotExist
+		}
+		return nil
+	}
+
+	if err := syncDirectoryAncestors(mountDir); err != nil {
+		t.Fatalf("sync mount directory ancestors: %v", err)
+	}
+	if want := []string{filepath.Clean(mountDir), filepath.Clean(mountParent)}; !slices.Equal(synced, want) {
+		t.Fatalf("synced=%v want=%v", synced, want)
+	}
+}
+
 func TestEnsureDirectoryRetriesSyncAfterCreationFailure(t *testing.T) {
 	previous := syncDirectoryFn
 	t.Cleanup(func() { syncDirectoryFn = previous })
