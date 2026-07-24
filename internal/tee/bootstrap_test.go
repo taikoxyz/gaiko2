@@ -368,6 +368,29 @@ func TestAtomicWriteFileWritesContentWithPerm(t *testing.T) {
 	}
 }
 
+func TestCreateTempFileUsesRequestedPermissions(t *testing.T) {
+	for _, wantPerm := range []os.FileMode{0o600, 0o644} {
+		t.Run(wantPerm.String(), func(t *testing.T) {
+			file, err := createTempFile(t.TempDir(), "bootstrap.tmp-", wantPerm)
+			if err != nil {
+				t.Fatalf("create temp file: %v", err)
+			}
+			path := file.Name()
+			if err := file.Close(); err != nil {
+				t.Fatalf("close temp file: %v", err)
+			}
+
+			info, err := os.Stat(path)
+			if err != nil {
+				t.Fatalf("stat temp file: %v", err)
+			}
+			if got := info.Mode().Perm(); got != wantPerm {
+				t.Fatalf("temp file permissions: got %#o want %#o", got, wantPerm)
+			}
+		})
+	}
+}
+
 func TestAtomicWriteFileReplacesExistingFile(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "priv.key")

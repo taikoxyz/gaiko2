@@ -3,6 +3,7 @@ package tee
 import (
 	"bytes"
 	"crypto/ecdsa"
+	cryptorand "crypto/rand"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -258,7 +259,7 @@ func syncDirectoryAncestors(path string) error {
 // JSON behind. When overwrite is false, installation fails if path exists.
 func atomicWriteFile(path string, data []byte, perm os.FileMode, overwrite bool) error {
 	dirPath := filepath.Dir(path)
-	tmp, err := os.CreateTemp(dirPath, filepath.Base(path)+".tmp-*")
+	tmp, err := createTempFile(dirPath, filepath.Base(path)+".tmp-", perm)
 	if err != nil {
 		return err
 	}
@@ -271,10 +272,6 @@ func atomicWriteFile(path string, data []byte, perm os.FileMode, overwrite bool)
 	}()
 
 	if _, err := tmp.Write(data); err != nil {
-		_ = tmp.Close()
-		return err
-	}
-	if err := tmp.Chmod(perm); err != nil {
 		_ = tmp.Close()
 		return err
 	}
@@ -301,6 +298,26 @@ func atomicWriteFile(path string, data []byte, perm os.FileMode, overwrite bool)
 		cleanup = false
 	}
 	return syncDirectoryFn(dirPath)
+}
+
+// createTempFile creates a collision-resistant temporary file with its final
+// permissions. EGo hostfs supports creation modes but not chmod, and creating
+// the file with its final mode also avoids any transient wider permissions.
+func createTempFile(dirPath, prefix string, perm os.FileMode) (*os.File, error) {
+	const maxAttempts = 128
+	var suffix [16]byte
+	for range maxAttempts {
+		if _, err := cryptorand.Read(suffix[:]); err != nil {
+			return nil, fmt.Errorf("read temporary file randomness: %w", err)
+		}
+		path := filepath.Join(dirPath, fmt.Sprintf("%s%x", prefix, suffix))
+		file, err := os.OpenFile(path, os.O_RDWR|os.O_CREATE|os.O_EXCL, perm)
+		if errors.Is(err, fs.ErrExist) {
+			continue
+		}
+		return file, err
+	}
+	return nil, fmt.Errorf("create temporary file: too many name collisions")
 }
 
 func syncDirectory(path string) error {
