@@ -282,6 +282,30 @@ func TestEnsureDirectorySyncsExistingDirectoryAncestors(t *testing.T) {
 	}
 }
 
+func TestSyncDirectoryAncestorsStopsAtMissingMountParent(t *testing.T) {
+	previous := syncDirectoryFn
+	t.Cleanup(func() { syncDirectoryFn = previous })
+
+	mountDir := filepath.Join(t.TempDir(), "mounted")
+	mountParent := filepath.Dir(mountDir)
+	var synced []string
+	syncDirectoryFn = func(path string) error {
+		path = filepath.Clean(path)
+		synced = append(synced, path)
+		if path == mountParent {
+			return fs.ErrNotExist
+		}
+		return nil
+	}
+
+	if err := syncDirectoryAncestors(mountDir); err != nil {
+		t.Fatalf("sync mount directory ancestors: %v", err)
+	}
+	if want := []string{filepath.Clean(mountDir), filepath.Clean(mountParent)}; !slices.Equal(synced, want) {
+		t.Fatalf("synced=%v want=%v", synced, want)
+	}
+}
+
 func TestEnsureDirectoryRetriesSyncAfterCreationFailure(t *testing.T) {
 	previous := syncDirectoryFn
 	t.Cleanup(func() { syncDirectoryFn = previous })
@@ -341,6 +365,29 @@ func TestAtomicWriteFileWritesContentWithPerm(t *testing.T) {
 	}
 	if len(entries) != 1 {
 		t.Fatalf("expected only the target file, found %d entries", len(entries))
+	}
+}
+
+func TestCreateTempFileUsesRequestedPermissions(t *testing.T) {
+	for _, wantPerm := range []os.FileMode{0o600, 0o644} {
+		t.Run(wantPerm.String(), func(t *testing.T) {
+			file, err := createTempFile(t.TempDir(), "bootstrap.tmp-", wantPerm)
+			if err != nil {
+				t.Fatalf("create temp file: %v", err)
+			}
+			path := file.Name()
+			if err := file.Close(); err != nil {
+				t.Fatalf("close temp file: %v", err)
+			}
+
+			info, err := os.Stat(path)
+			if err != nil {
+				t.Fatalf("stat temp file: %v", err)
+			}
+			if got := info.Mode().Perm(); got != wantPerm {
+				t.Fatalf("temp file permissions: got %#o want %#o", got, wantPerm)
+			}
+		})
 	}
 }
 
