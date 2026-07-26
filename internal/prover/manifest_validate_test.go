@@ -522,6 +522,113 @@ func TestValidateManifestAnchorNumbersRejectsNormalSourceThatDoesNotAdvance(t *t
 	}
 }
 
+// Forced-inclusion sources inherit the parent anchor, so when the parent anchor has
+// stalled more than shastaMaxAnchorOffset behind the proposal origin the inherited
+// anchor is outside the protocol window. Canonical derivation
+// (taiko-client-rs validate_anchor_numbers) applies the window to every source and
+// exempts forced inclusions only from the strict-advance rule, replacing the whole
+// source with the default manifest. Keeping the source here would derive a forced
+// block that still carries its transactions where canonical derivation derives an
+// anchor-only block.
+func TestValidateManifestAnchorNumbersRejectsForcedSourceBelowAnchorWindow(t *testing.T) {
+	const parentAnchor = 800
+	manifest := shastaSourceManifest{
+		Blocks: []shastaManifestBlock{{AnchorBlockNumber: parentAnchor}},
+	}
+
+	// origin-parentAnchor = 200, beyond the 128-block non-mainnet offset.
+	if validateManifestAnchorNumbers(manifest, 1_000, parentAnchor, true, 167001) {
+		t.Fatalf("expected forced source below the anchor window to be rejected")
+	}
+}
+
+func TestValidateManifestAnchorNumbersRejectsForcedSourceAboveOrigin(t *testing.T) {
+	const parentAnchor = 1_001
+	manifest := shastaSourceManifest{
+		Blocks: []shastaManifestBlock{{AnchorBlockNumber: parentAnchor}},
+	}
+
+	if validateManifestAnchorNumbers(manifest, 1_000, parentAnchor, true, 167001) {
+		t.Fatalf("expected forced source above the proposal origin to be rejected")
+	}
+}
+
+// The window is the only rule forced inclusions gain: they must still be accepted
+// without advancing the anchor, which is what distinguishes them from normal sources.
+func TestValidateManifestAnchorNumbersAcceptsForcedSourceInsideAnchorWindow(t *testing.T) {
+	const parentAnchor = 900
+	manifest := shastaSourceManifest{
+		Blocks: []shastaManifestBlock{{AnchorBlockNumber: parentAnchor}},
+	}
+
+	if !validateManifestAnchorNumbers(manifest, 1_000, parentAnchor, true, 167001) {
+		t.Fatalf("expected stalled-but-in-window forced source to be accepted")
+	}
+}
+
+// End-to-end shape of the same rule: a forced-inclusion source that is otherwise
+// well-formed (timestamps and gas limit in range) must still be invalidated when the
+// inherited anchor has stalled past the window, so prepareSourceManifest replaces it
+// with the transaction-free default manifest. Without this, gaiko2 derives a forced
+// block carrying the source's transactions while canonical derivation derives an
+// anchor-only block — the same proposal yielding two different block hashes.
+func TestValidateSourceManifestInvalidatesForcedSourceWithStalledAnchor(t *testing.T) {
+	const (
+		parentGasLimit = uint64(30_000_000)
+		parentTime     = uint64(1_700_000_000)
+		origin         = uint64(1_000)
+		stalledAnchor  = uint64(800) // 200 behind origin, past the 128-block window
+		chainID        = uint64(167001)
+	)
+
+	parent := shastaManifestParentContext{
+		Header: &types.Header{
+			Number:   new(big.Int).SetUint64(10),
+			Time:     parentTime,
+			GasLimit: parentGasLimit,
+		},
+		AnchorBlockNumber: stalledAnchor,
+	}
+	proposal := shastaProposalView{
+		Timestamp:         parentTime + 12,
+		OriginBlockNumber: origin,
+		Proposer:          common.HexToAddress("0x1111111111111111111111111111111111111111"),
+	}
+	source := shastaDerivationSourceView{IsForcedInclusion: true}
+
+	manifest := shastaSourceManifest{Blocks: []shastaManifestBlock{{
+		Timestamp:         parentTime + 1,
+		Coinbase:          proposal.Proposer,
+		AnchorBlockNumber: stalledAnchor,
+		GasLimit:          parentGasLimit - shastaAnchorGasLimit,
+		Transactions: types.Transactions{types.NewTx(&types.DynamicFeeTx{
+			ChainID:   new(big.Int).SetUint64(chainID),
+			Gas:       21_000,
+			GasFeeCap: big.NewInt(1_000_000_000),
+			GasTipCap: big.NewInt(0),
+		})},
+	}}}
+
+	if validateSourceManifest(manifest, source, parent, proposal, chainID, 0) {
+		t.Fatalf("expected stalled-anchor forced source to be invalidated so the caller defaults it")
+	}
+}
+
+func TestValidateManifestAnchorNumbersAcceptsForcedSourceAtMainnetWindowEdge(t *testing.T) {
+	const origin = 10_000
+	parentAnchor := uint64(origin - shastaMaxAnchorOffsetMainnet)
+	manifest := shastaSourceManifest{
+		Blocks: []shastaManifestBlock{{AnchorBlockNumber: parentAnchor}},
+	}
+
+	if !validateManifestAnchorNumbers(manifest, origin, parentAnchor, true, shastaManifestMainnetChain) {
+		t.Fatalf("expected forced source at the mainnet window edge to be accepted")
+	}
+	if validateManifestAnchorNumbers(manifest, origin+1, parentAnchor, true, shastaManifestMainnetChain) {
+		t.Fatalf("expected forced source one block past the mainnet window to be rejected")
+	}
+}
+
 func TestDecodeGuestInputL1HeadersReadsOriginAndAncestors(t *testing.T) {
 	raw := mustRawMessage(t, `{"l1_header":{`+minimalHeaderJSON(100)+`},
 		"l1_ancestor_headers":[{`+minimalHeaderJSON(99)+`},{`+minimalHeaderJSON(100)+`}]}`)
