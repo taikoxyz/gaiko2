@@ -566,19 +566,23 @@ func TestValidateManifestAnchorNumbersAcceptsForcedSourceInsideAnchorWindow(t *t
 	}
 }
 
-// End-to-end shape of the same rule: a forced-inclusion source that is otherwise
-// well-formed (timestamps and gas limit in range) must still be invalidated when the
-// inherited anchor has stalled past the window, so prepareSourceManifest replaces it
-// with the transaction-free default manifest. Without this, gaiko2 derives a forced
-// block carrying the source's transactions while canonical derivation derives an
-// anchor-only block — the same proposal yielding two different block hashes.
-func TestValidateSourceManifestInvalidatesForcedSourceWithStalledAnchor(t *testing.T) {
+// stalledAnchorForcedSourceFixture builds a forced-inclusion source whose parent anchor
+// has stalled past the [origin-MAX_ANCHOR_OFFSET, origin] window, carrying a manifest that
+// is well-formed in every other respect (timestamp and gas limit land in range once
+// inherited metadata is applied).
+func stalledAnchorForcedSourceFixture(t *testing.T) (
+	blobSourceDataView,
+	shastaDerivationSourceView,
+	shastaManifestParentContext,
+	shastaProposalView,
+) {
+	t.Helper()
+
 	const (
 		parentGasLimit = uint64(30_000_000)
 		parentTime     = uint64(1_700_000_000)
 		origin         = uint64(1_000)
 		stalledAnchor  = uint64(800) // 200 behind origin, past the 128-block window
-		chainID        = uint64(167001)
 	)
 
 	parent := shastaManifestParentContext{
@@ -594,22 +598,97 @@ func TestValidateSourceManifestInvalidatesForcedSourceWithStalledAnchor(t *testi
 		OriginBlockNumber: origin,
 		Proposer:          common.HexToAddress("0x1111111111111111111111111111111111111111"),
 	}
-	source := shastaDerivationSourceView{IsForcedInclusion: true}
 
-	manifest := shastaSourceManifest{Blocks: []shastaManifestBlock{{
-		Timestamp:         parentTime + 1,
-		Coinbase:          proposal.Proposer,
-		AnchorBlockNumber: stalledAnchor,
-		GasLimit:          parentGasLimit - shastaAnchorGasLimit,
-		Transactions: types.Transactions{types.NewTx(&types.DynamicFeeTx{
-			ChainID:   new(big.Int).SetUint64(chainID),
-			Gas:       21_000,
-			GasFeeCap: big.NewInt(1_000_000_000),
-			GasTipCap: big.NewInt(0),
-		})},
-	}}}
+	payload := encodeTestManifestPayload(t, testDerivationSourceManifest{
+		Blocks: []testManifestBlock{{
+			Timestamp:         parentTime + 1,
+			Coinbase:          proposal.Proposer,
+			AnchorBlockNumber: stalledAnchor,
+			GasLimit:          parentGasLimit - shastaAnchorGasLimit,
+			Transactions: types.Transactions{types.NewTx(&types.DynamicFeeTx{
+				ChainID:   new(big.Int).SetUint64(stalledAnchorFixtureChainID),
+				Gas:       21_000,
+				GasFeeCap: big.NewInt(1_000_000_000),
+				GasTipCap: big.NewInt(0),
+			})},
+		}},
+	})
+	dataSource := blobSourceDataView{TxDataFromBlob: [][]byte{encodeTestKonaBlob(t, payload)}}
+	source := shastaDerivationSourceView{
+		IsForcedInclusion: true,
+		BlobSlice:         shastaBlobSliceView{BlobHashes: []common.Hash{{0x01}}},
+	}
 
-	if validateSourceManifest(manifest, source, parent, proposal, chainID, 0) {
+	return dataSource, source, parent, proposal
+}
+
+const stalledAnchorFixtureChainID = uint64(167001)
+
+// The consensus-critical outcome: prepareSourceManifest must hand back the
+// transaction-free default manifest for a forced-inclusion source whose inherited anchor
+// has stalled outside the window. Canonical derivation replaces such a source wholesale
+// (taiko-client-rs validate_anchor_numbers -> DefaultManifest), so keeping the source's
+// transactions would derive a different block — same proposal, two block hashes.
+func TestPrepareSourceManifestDropsForcedSourceTransactionsWithStalledAnchor(t *testing.T) {
+	dataSource, source, parent, proposal := stalledAnchorForcedSourceFixture(t)
+
+	manifest, err := prepareSourceManifest(
+		dataSource,
+		source,
+		parent,
+		proposal,
+		stalledAnchorFixtureChainID,
+		0,
+		shastaDerivationSourceMaxBlocks,
+	)
+	if err != nil {
+		t.Fatalf("prepare source manifest: %v", err)
+	}
+
+	if len(manifest.Blocks) != 1 {
+		t.Fatalf("expected exactly one default block, got %d", len(manifest.Blocks))
+	}
+	block := manifest.Blocks[0]
+	if len(block.Transactions) != 0 {
+		t.Fatalf("expected the stalled-anchor forced source to be replaced by a transaction-free default manifest, got %d transactions", len(block.Transactions))
+	}
+
+	wantTimestamp := manifestTimestampLowerBound(
+		parent.Header.Time,
+		proposal.Timestamp,
+		0,
+		stalledAnchorFixtureChainID,
+	)
+	if block.Timestamp != wantTimestamp {
+		t.Fatalf("inherited timestamp: got %d want %d", block.Timestamp, wantTimestamp)
+	}
+	if block.Coinbase != proposal.Proposer {
+		t.Fatalf("inherited coinbase: got %s want %s", block.Coinbase.Hex(), proposal.Proposer.Hex())
+	}
+	if block.AnchorBlockNumber != parent.AnchorBlockNumber {
+		t.Fatalf("inherited anchor: got %d want %d", block.AnchorBlockNumber, parent.AnchorBlockNumber)
+	}
+	wantGasLimit := effectiveManifestParentGasLimit(
+		parent.Header.Number.Uint64(),
+		parent.Header.GasLimit,
+	)
+	if block.GasLimit != wantGasLimit {
+		t.Fatalf("inherited gas limit: got %d want %d", block.GasLimit, wantGasLimit)
+	}
+}
+
+// The predicate that drives the replacement above, isolated: the source is well-formed on
+// timestamps and gas limit, so the anchor window is the only thing that can reject it.
+func TestValidateSourceManifestInvalidatesForcedSourceWithStalledAnchor(t *testing.T) {
+	dataSource, source, parent, proposal := stalledAnchorForcedSourceFixture(t)
+
+	decoded, err := decodeBlobBackedSourceManifest(dataSource, 0, shastaDerivationSourceMaxBlocks)
+	if err != nil {
+		t.Fatalf("decode blob-backed manifest: %v", err)
+	}
+	applyInheritedManifestMetadata(&decoded, parent, proposal, stalledAnchorFixtureChainID, 0)
+
+	if validateSourceManifest(decoded, source, parent, proposal, stalledAnchorFixtureChainID, 0) {
 		t.Fatalf("expected stalled-anchor forced source to be invalidated so the caller defaults it")
 	}
 }
