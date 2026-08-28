@@ -73,6 +73,9 @@ func ValidateAggregateRequest(req protocol.ShastaAggregateRequest) (*ValidatedAg
 	if !validateShastaProofCarryDataVec(carries) {
 		return nil, fmt.Errorf("invalid shasta proof carry data")
 	}
+	if _, err := chainConfigFor(carries[0].ChainID); err != nil {
+		return nil, fmt.Errorf("validate aggregate proof chain: %w", err)
+	}
 	expectedInstanceID := proofs[0].InstanceID
 	expectedInstanceAddress := proofs[0].InstanceAddress
 	for index, proof := range proofs[1:] {
