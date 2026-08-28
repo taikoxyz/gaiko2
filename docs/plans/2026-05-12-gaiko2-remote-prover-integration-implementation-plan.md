@@ -150,11 +150,10 @@ git add testdata/shasta_request_taiko_mainnet_proposal_2222_l2_5412225_5412416.j
 git commit -m "test: update shared remote prover fixture schema"
 ```
 
-### Task 5: Synchronize Deployment and Regression Documentation
+### Task 5: Synchronize Documentation
 
 **Files:**
 - Modify: `README.md`
-- Modify: `docs/deployment/masaya-fork-window-regression.md`
 
 **Step 1: Update schema references**
 
@@ -175,7 +174,7 @@ Expected:
 **Step 3: Commit**
 
 ```bash
-git add README.md docs/deployment/masaya-fork-window-regression.md
+git add README.md
 git commit -m "docs: update remote prover schema references"
 ```
 
