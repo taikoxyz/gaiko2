@@ -129,7 +129,6 @@ Tests and fixtures that must be updated:
 Documentation that should be synchronized:
 
 - [README.md](https://github.com/taikoxyz/gaiko2/blob/main/README.md)
-- [docs/deployment/masaya-fork-window-regression.md](https://github.com/taikoxyz/gaiko2/blob/main/docs/deployment/masaya-fork-window-regression.md)
 
 ## Testing Strategy
 
@@ -166,7 +165,7 @@ Several tests read checked-in JSON fixtures instead of constructing requests inl
 
 ### 3. Doc drift
 
-The top-level README, Masaya regression notes, and shared testdata documentation still mention the old schema names. Leaving those stale will create operator confusion during future regression runs.
+The top-level README and shared testdata documentation still mention the old schema names. Leaving those stale will create operator confusion during future regression runs.
 
 ## Non-Goals
 

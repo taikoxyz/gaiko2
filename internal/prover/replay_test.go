@@ -816,34 +816,12 @@ func TestReplayServiceRejectsTransactionRootMismatch(t *testing.T) {
 	}
 }
 
-func TestChainConfigForMasayaEnablesBlobForkAtUnzen(t *testing.T) {
-	const unzenTime uint64 = 0
+func TestChainConfigForRejectsRetiredNetwork(t *testing.T) {
+	const retiredChainID uint64 = 167011
 
-	cfg, err := chainConfigFor(params.MasayaDevnetNetworkID.Uint64())
-	if err != nil {
-		t.Fatalf("chain config: %v", err)
-	}
-
-	if cfg.UnzenTime == nil || *cfg.UnzenTime != unzenTime {
-		t.Fatalf("unexpected unzen time: %v", cfg.UnzenTime)
-	}
-	if cfg.CancunTime == nil || *cfg.CancunTime != unzenTime {
-		t.Fatalf("unexpected cancun time: %v", cfg.CancunTime)
-	}
-	if cfg.PragueTime == nil || *cfg.PragueTime != unzenTime {
-		t.Fatalf("unexpected prague time: %v", cfg.PragueTime)
-	}
-	if cfg.OsakaTime == nil || *cfg.OsakaTime != unzenTime {
-		t.Fatalf("unexpected osaka time: %v", cfg.OsakaTime)
-	}
-	if cfg.BlobScheduleConfig == nil || cfg.BlobScheduleConfig.Cancun == nil || cfg.BlobScheduleConfig.Prague == nil || cfg.BlobScheduleConfig.Osaka == nil {
-		t.Fatalf("missing blob schedule config: %+v", cfg.BlobScheduleConfig)
-	}
-	if !cfg.IsCancun(common.Big0, unzenTime) {
-		t.Fatalf("expected cancun activation at unzen")
-	}
-	if !cfg.IsUnzen(unzenTime) {
-		t.Fatalf("expected unzen activation at unzen")
+	_, err := chainConfigFor(retiredChainID)
+	if err == nil {
+		t.Fatalf("expected retired chain ID to be unsupported, got %v", err)
 	}
 }
 
@@ -1055,30 +1033,20 @@ func TestChainConfigForMainnetEnablesBlobForkAtUnzen(t *testing.T) {
 }
 
 func TestUnzenZkGasScheduleForFollowsTaikoGethDefaultSchedule(t *testing.T) {
-	for _, tc := range []struct {
-		name    string
-		chainID uint64
-	}{
-		{name: "masaya", chainID: params.MasayaDevnetNetworkID.Uint64()},
-		{name: "hoodi", chainID: params.TaikoHoodiNetworkID.Uint64()},
-	} {
-		t.Run(tc.name, func(t *testing.T) {
-			cfg, err := chainConfigFor(tc.chainID)
-			if err != nil {
-				t.Fatalf("chain config: %v", err)
-			}
+	cfg, err := chainConfigFor(params.TaikoHoodiNetworkID.Uint64())
+	if err != nil {
+		t.Fatalf("chain config: %v", err)
+	}
 
-			schedule := unzenZkGasScheduleFor(cfg)
-			if schedule != &vm.UnzenZkGasSchedule {
-				t.Fatalf("unexpected unzen zk-gas schedule: %p", schedule)
-			}
-			if schedule.BlockLimit != vm.BlockZkGasLimit {
-				t.Fatalf("unexpected block zk-gas limit: %d", schedule.BlockLimit)
-			}
-			if schedule.TxIntrinsicZkGas != vm.TxIntrinsicZkGas {
-				t.Fatalf("unexpected tx intrinsic zk gas: %d", schedule.TxIntrinsicZkGas)
-			}
-		})
+	schedule := unzenZkGasScheduleFor(cfg)
+	if schedule != &vm.UnzenZkGasSchedule {
+		t.Fatalf("unexpected unzen zk-gas schedule: %p", schedule)
+	}
+	if schedule.BlockLimit != vm.BlockZkGasLimit {
+		t.Fatalf("unexpected block zk-gas limit: %d", schedule.BlockLimit)
+	}
+	if schedule.TxIntrinsicZkGas != vm.TxIntrinsicZkGas {
+		t.Fatalf("unexpected tx intrinsic zk gas: %d", schedule.TxIntrinsicZkGas)
 	}
 }
 
@@ -1112,14 +1080,14 @@ func TestChainConfigForInternalDevnetUsesGenesisForks(t *testing.T) {
 }
 
 func TestReplayExecutionBlockZeroesDifficultyForUnzen(t *testing.T) {
-	cfg, err := chainConfigFor(params.MasayaDevnetNetworkID.Uint64())
+	cfg, err := chainConfigFor(params.TaikoHoodiNetworkID.Uint64())
 	if err != nil {
 		t.Fatalf("chain config: %v", err)
 	}
 
 	originalBlock := types.NewBlockWithHeader(&types.Header{
 		Number:     big.NewInt(4140811),
-		Time:       core.MasayaUnzenTime,
+		Time:       core.HoodiUnzenTime,
 		Difficulty: big.NewInt(1236639),
 	})
 	executionBlock, expectedDifficulty := replayExecutionBlock(cfg, originalBlock)
@@ -1133,16 +1101,12 @@ func TestReplayExecutionBlockZeroesDifficultyForUnzen(t *testing.T) {
 		t.Fatalf("expected original difficulty to remain unchanged, got %s", originalBlock.Difficulty())
 	}
 
-	hoodiConfig, err := chainConfigFor(params.TaikoHoodiNetworkID.Uint64())
-	if err != nil {
-		t.Fatalf("hoodi chain config: %v", err)
-	}
 	preUnzenBlock := types.NewBlockWithHeader(&types.Header{
 		Number:     big.NewInt(4140810),
 		Time:       core.HoodiUnzenTime - 1,
 		Difficulty: big.NewInt(7),
 	})
-	preExecutionBlock, preExpectedDifficulty := replayExecutionBlock(hoodiConfig, preUnzenBlock)
+	preExecutionBlock, preExpectedDifficulty := replayExecutionBlock(cfg, preUnzenBlock)
 	if preExpectedDifficulty != nil {
 		t.Fatalf("expected no separate imported difficulty before Unzen, got %v", preExpectedDifficulty)
 	}

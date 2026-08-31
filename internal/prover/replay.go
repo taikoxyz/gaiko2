@@ -787,16 +787,6 @@ func chainConfigFor(chainID uint64) (*params.ChainConfig, error) {
 			return nil, err
 		}
 		return cfg, nil
-	case params.MasayaDevnetNetworkID.Uint64():
-		cfg := cloneChainConfig(params.TaikoChainConfig)
-		cfg.ChainID = bigIntFromUint64(chainID)
-		cfg.OntakeBlock = cloneBigInt(core.MasayaDevnetOntakeBlock)
-		cfg.PacayaBlock = cloneBigInt(core.MasayaDevnetPacayaBlock)
-		cfg.ShastaTime = cloneUint64(core.MasayaShastaTime)
-		if err := enableUnzenForksFrom(cfg, core.MasayaUnzenTime); err != nil {
-			return nil, err
-		}
-		return cfg, nil
 	case params.TaikoHoodiNetworkID.Uint64():
 		cfg := cloneChainConfig(params.TaikoChainConfig)
 		cfg.ChainID = bigIntFromUint64(chainID)
@@ -878,8 +868,6 @@ func unzenZkGasScheduleFor(config *params.ChainConfig) *vm.ZkGasSchedule {
 	// mainnet fixture is pre-Unzen and does not exercise this path — add a
 	// canonical Unzen fixture when one becomes available.
 	//
-	// taiko-geth no longer selects Unzen zk-gas schedules by chain ID; taiko-geth
-	// #569 reset Masaya to the default Unzen schedule.
 	_ = config
 	return &vm.UnzenZkGasSchedule
 }

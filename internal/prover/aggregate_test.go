@@ -220,6 +220,28 @@ func TestReplayServiceRejectsAggregateUint48MutationAfterValidation(t *testing.T
 	}
 }
 
+func TestValidateAggregateRequestRejectsRetiredNetwork(t *testing.T) {
+	carry := mustRawMessage(t, strings.Replace(nativeAggregateCarry, "167013", "167011", 1))
+	childHash, err := hashShastaSubproofInput(carry)
+	if err != nil {
+		t.Fatalf("hash child: %v", err)
+	}
+	child, err := buildProofResult(childHash, NewNativeProofSigner(shastaNativeMockInstance))
+	if err != nil {
+		t.Fatalf("build child: %v", err)
+	}
+
+	_, err = ValidateAggregateRequest(protocol.ShastaAggregateRequest{
+		Schema: protocol.ShastaAggregateRequestSchemaV1,
+		Payload: protocol.ShastaAggregatePayload{Proofs: []protocol.AggregateProof{{
+			Input: child.Input, Proof: *child.Proof, ProofCarryData: carry,
+		}}},
+	})
+	if err == nil || !strings.Contains(err.Error(), "unsupported chain ID: 167011") {
+		t.Fatalf("expected retired chain ID to be unsupported, got %v", err)
+	}
+}
+
 func TestValidateAggregateRequestRejectsUint48Overflow(t *testing.T) {
 	low := mustRawMessage(t, `{
 		"chain_id": 167013,
