@@ -112,26 +112,35 @@ move to `unzen`:
 - `init` under the new fork bootstraps a **new sealed enclave key**, so you must
   re-register the new quote with your verifier. The old key and its registered
   instance id do not carry over.
-- The old stack keeps running under its own compose project, so the only
-  resource the two contend for is the host port. Either take the old one down
+- The old stack keeps running under its own compose project, and the host port
+  is the only Compose binding the two contend for. Either take the old one down
   first with `./scripts/deploy-tee.sh --fork shasta --release <release> down`,
   or give the new release its own port with `--port` and run both side by side
-  while you register and verify it. Nothing else is shared: config and secrets
-  are bind mounts under each release directory, and containers and networks are
-  namespaced per compose project.
+  while you register and verify it. Config, secrets, containers, and networks
+  are separated: config and secrets are bind mounts under each release
+  directory, and containers and networks are namespaced per compose project.
+  Host resources are not separated. Both stacks map the same
+  `/dev/sgx_enclave` and `/dev/sgx_provision`, compete for the same EPC, and
+  use the same PCCS, so treat side-by-side operation as a cutover window rather
+  than a steady state.
 
 To leave an existing deployment untouched, keep passing `--fork shasta`. The
 fork name is only a lookup key into `registered.gaiko2.json`; it does not change
 proving behavior or which API routes are served.
 
-Use a canonical lowercase fork name. Deploy directories use the fork name
-verbatim, while the compose project name is slugified (lowercased, with runs of
-non-alphanumerics collapsed to `-`). `Unzen` and `unzen` would therefore write
-to two different deploy trees but share one compose project, so `down` under
-one spelling would stop the other's containers. The `registered.gaiko2.json`
-key is matched byte-for-byte as well, so `GAIKO2_FORK=Unzen` will not resolve
-`{"unzen": 1234}`, and that failure surfaces only when the server starts. Stick
-to `unzen`.
+Keep fork and release names canonical. Deploy directories use both names
+verbatim, while the compose project name slugifies them (lowercased, with runs
+of non-alphanumerics collapsed to `-`). Two names differing only in case or
+punctuation therefore get separate deploy trees but collide on one compose
+project, so `up` or `down` under one spelling will replace or stop the other's
+containers. This applies to releases as much as forks: `v1.0.0`, `v1-0-0`, and
+`v1_0_0` all slugify to `v1-0-0`. Pick one spelling per fork and per release
+and stay with it.
+
+The fork name carries a second constraint: the `registered.gaiko2.json` key is
+matched byte-for-byte, so `GAIKO2_FORK=Unzen` will not resolve
+`{"unzen": 1234}`, and that failure surfaces only when the server starts. Use
+`unzen`.
 
 Example:
 

@@ -147,11 +147,46 @@ EOF
     assert_file_exists "${release_dir}/config/registered.gaiko2.json"
 }
 
+# Deploy directories use FORK and RELEASE verbatim, but compose_project_name
+# slugifies both. Names differing only in case or punctuation therefore own
+# separate deploy trees while sharing one compose project, so up/down under one
+# spelling acts on the other's containers. Pin that so a slugify change cannot
+# silently re-home running deployments.
+test_project_name_slugifies_both_identifiers() {
+    local saved_fork="${FORK}" saved_release="${RELEASE}"
+    local fork release project
+    local -a seen_dirs=()
+
+    for fork in unzen Unzen UNZEN; do
+        for release in v1.0.0 v1-0-0 v1_0_0; do
+            FORK="${fork}"
+            RELEASE="${release}"
+            project=$(compose_project_name)
+            if [[ "${project}" != "gaiko2-unzen-v1-0-0" ]]; then
+                echo "expected gaiko2-unzen-v1-0-0 for --fork ${fork} --release ${release}, got ${project}" >&2
+                exit 1
+            fi
+            seen_dirs+=("$(release_dir)")
+        done
+    done
+
+    local unique_dirs
+    unique_dirs=$(printf '%s\n' "${seen_dirs[@]}" | sort -u | wc -l | tr -d ' ')
+    if [[ "${unique_dirs}" != "9" ]]; then
+        echo "expected 9 distinct deploy dirs colliding on one project, got ${unique_dirs}" >&2
+        exit 1
+    fi
+
+    FORK="${saved_fork}"
+    RELEASE="${saved_release}"
+}
+
 test_status_reports_missing_bootstrap
 test_init_creates_release_state_and_uses_release_project
 test_status_reports_generated_release_env
 test_up_persists_port_override_for_existing_release
 test_down_targets_only_the_release_service
 test_register_hook_receives_attestation_path
+test_project_name_slugifies_both_identifiers
 
 echo "ok"
