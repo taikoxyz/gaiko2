@@ -103,11 +103,52 @@ ghcr.io/taikoxyz/gaiko2-tee:v1.0.0
 Choose a fork and a release name. A release name is usually the image tag or an
 operator-friendly alias such as `v1.0.0` or `2026-04-15-hotfix`.
 
+The fork name is more than an env value: it selects the deploy tree
+(`deploy/<fork>/<release>/`) and the Docker Compose project name
+(`gaiko2-<fork>-<release>`). Changing it starts a fresh deployment rather than
+migrating an existing one. If you already run a `shasta` release and want to
+move to `unzen`:
+
+- `init` under the new fork bootstraps a **new sealed enclave key**, so you must
+  re-register the new quote with your verifier. The old key and its registered
+  instance id do not carry over.
+- The old stack keeps running under its own compose project, and the host port
+  is the only Compose binding the two contend for. Either take the old one down
+  first with `./scripts/deploy-tee.sh --fork shasta --release <release> down`,
+  or give the new release its own port with `--port` and run both side by side
+  while you register and verify it. Config, secrets, containers, and networks
+  are separated: config and secrets are bind mounts under each release
+  directory, and containers and networks are namespaced per compose project.
+  Host resources are not separated. Both stacks map the same
+  `/dev/sgx_enclave` and `/dev/sgx_provision` and compete for the same EPC and
+  host capacity, so treat side-by-side operation as a cutover window rather
+  than a steady state. They also share a PCCS endpoint by default, though
+  `PCCS_HOST` is stored per release, so `--pccs-host` can point them at
+  different ones.
+
+To leave an existing deployment untouched, keep passing `--fork shasta`. The
+fork name is only a lookup key into `registered.gaiko2.json`; it does not change
+proving behavior or which API routes are served.
+
+Keep fork and release names canonical. Deploy directories use both names
+verbatim, while the compose project name slugifies them (lowercased, with runs
+of non-alphanumerics collapsed to `-`). Two names differing only in case or
+punctuation therefore get separate deploy trees but collide on one compose
+project, so `up` or `down` under one spelling will replace or stop the other's
+containers. This applies to releases as much as forks: `v1.0.0`, `v1-0-0`, and
+`v1_0_0` all slugify to `v1-0-0`. Pick one spelling per fork and per release
+and stay with it.
+
+The fork name carries a second constraint: the `registered.gaiko2.json` key is
+matched byte-for-byte, so `GAIKO2_FORK=Unzen` will not resolve
+`{"unzen": 1234}`, and that failure surfaces only when the server starts. Use
+`unzen`.
+
 Example:
 
 ```bash
 ./scripts/deploy-tee.sh \
-  --fork shasta \
+  --fork unzen \
   --release v1.0.0 \
   --tee-image ghcr.io/taikoxyz/gaiko2-tee:v1.0.0 \
   --pccs-host host.docker.internal:8081 \
@@ -116,17 +157,17 @@ Example:
 
 What `init` does:
 
-- creates `deploy/shasta/v1.0.0/`
-- creates `deploy/shasta/v1.0.0/.env`
+- creates `deploy/unzen/v1.0.0/`
+- creates `deploy/unzen/v1.0.0/.env`
 - creates `config/` and `secrets/`
 - copies the embedded tee image attestation metadata into `config/`
 - runs the tee bootstrap container
 
 Expected result:
 
-- `deploy/shasta/v1.0.0/config/bootstrap.gaiko2.json`
-- `deploy/shasta/v1.0.0/config/attestation.gaiko2.json`
-- `deploy/shasta/v1.0.0/secrets/priv.gaiko2.key`
+- `deploy/unzen/v1.0.0/config/bootstrap.gaiko2.json`
+- `deploy/unzen/v1.0.0/config/attestation.gaiko2.json`
+- `deploy/unzen/v1.0.0/secrets/priv.gaiko2.key`
 
 The bootstrap JSON includes:
 
@@ -161,21 +202,21 @@ binary.
 Use your existing verifier registration flow with the quote from:
 
 ```bash
-deploy/shasta/v1.0.0/config/bootstrap.gaiko2.json
+deploy/unzen/v1.0.0/config/bootstrap.gaiko2.json
 ```
 
 Then write:
 
 ```json
 {
-  "shasta": 1234
+  "unzen": 1234
 }
 ```
 
 to:
 
 ```bash
-deploy/shasta/v1.0.0/config/registered.gaiko2.json
+deploy/unzen/v1.0.0/config/registered.gaiko2.json
 ```
 
 ### Option B: register hook
@@ -184,7 +225,7 @@ Configure a hook while bootstrapping:
 
 ```bash
 ./scripts/deploy-tee.sh \
-  --fork shasta \
+  --fork unzen \
   --release v1.0.0 \
   --register-hook /abs/path/to/register-hook.sh \
   init
@@ -193,7 +234,7 @@ Configure a hook while bootstrapping:
 Then invoke:
 
 ```bash
-./scripts/deploy-tee.sh --fork shasta --release v1.0.0 register
+./scripts/deploy-tee.sh --fork unzen --release v1.0.0 register
 ```
 
 An example hook contract is included at:
@@ -218,7 +259,7 @@ JSON paths and exits without modifying state.
 Once bootstrap and registration are complete:
 
 ```bash
-./scripts/deploy-tee.sh --fork shasta --release v1.0.0 up
+./scripts/deploy-tee.sh --fork unzen --release v1.0.0 up
 ```
 
 This runs:
@@ -231,7 +272,7 @@ waits until the container is healthy.
 If startup fails, the script tells you to inspect logs with:
 
 ```bash
-./scripts/deploy-tee.sh --fork shasta --release v1.0.0 logs
+./scripts/deploy-tee.sh --fork unzen --release v1.0.0 logs
 ```
 
 Expected healthy startup logs include:
@@ -243,7 +284,7 @@ Expected healthy startup logs include:
 Check release status:
 
 ```bash
-./scripts/deploy-tee.sh --fork shasta --release v1.0.0 status
+./scripts/deploy-tee.sh --fork unzen --release v1.0.0 status
 ```
 
 This reports:
@@ -259,19 +300,19 @@ This reports:
 Follow logs:
 
 ```bash
-./scripts/deploy-tee.sh --fork shasta --release v1.0.0 logs
+./scripts/deploy-tee.sh --fork unzen --release v1.0.0 logs
 ```
 
 Print the copied release attestation metadata:
 
 ```bash
-./scripts/deploy-tee.sh --fork shasta --release v1.0.0 metadata
+./scripts/deploy-tee.sh --fork unzen --release v1.0.0 metadata
 ```
 
 Check liveness:
 
 ```bash
-./scripts/deploy-tee.sh --fork shasta --release v1.0.0 health
+./scripts/deploy-tee.sh --fork unzen --release v1.0.0 health
 ```
 
 Expected:
@@ -283,7 +324,7 @@ Expected:
 Stop and remove the release:
 
 ```bash
-./scripts/deploy-tee.sh --fork shasta --release v1.0.0 down
+./scripts/deploy-tee.sh --fork unzen --release v1.0.0 down
 ```
 
 ## 8. Rollback
@@ -295,13 +336,13 @@ Example:
 1. new release fails:
 
 ```bash
-./scripts/deploy-tee.sh --fork shasta --release v1.0.1 down
+./scripts/deploy-tee.sh --fork unzen --release v1.0.1 down
 ```
 
 2. start the previous release again:
 
 ```bash
-./scripts/deploy-tee.sh --fork shasta --release v1.0.0 up
+./scripts/deploy-tee.sh --fork unzen --release v1.0.0 up
 ```
 
 This restores the old release's exact:
@@ -313,7 +354,9 @@ This restores the old release's exact:
 - bootstrap quote metadata
 - registered instance id mapping
 
-No re-bootstrap is needed for rollback.
+No re-bootstrap is needed for rollback, as long as you roll back within the same
+fork. Passing a different `--fork` points at a different deploy tree and compose
+project, which is a new deployment rather than a rollback.
 
 ## 9. Example End-to-End Flow
 
@@ -321,22 +364,22 @@ No re-bootstrap is needed for rollback.
 ./scripts/build-image.sh tee latest
 
 ./scripts/deploy-tee.sh \
-  --fork shasta \
+  --fork unzen \
   --release local-latest \
   --tee-image gaiko2-tee:latest \
   --pccs-host host.docker.internal:8081 \
   init
 
 # register externally, then either:
-# 1. write deploy/shasta/local-latest/config/registered.gaiko2.json
+# 1. write deploy/unzen/local-latest/config/registered.gaiko2.json
 # or
-# 2. set GAIKO2_INSTANCE_ID in deploy/shasta/local-latest/.env
+# 2. set GAIKO2_INSTANCE_ID in deploy/unzen/local-latest/.env
 
-./scripts/deploy-tee.sh --fork shasta --release local-latest metadata
-./scripts/deploy-tee.sh --fork shasta --release local-latest up
-./scripts/deploy-tee.sh --fork shasta --release local-latest status
-./scripts/deploy-tee.sh --fork shasta --release local-latest health
-./scripts/deploy-tee.sh --fork shasta --release local-latest logs
+./scripts/deploy-tee.sh --fork unzen --release local-latest metadata
+./scripts/deploy-tee.sh --fork unzen --release local-latest up
+./scripts/deploy-tee.sh --fork unzen --release local-latest status
+./scripts/deploy-tee.sh --fork unzen --release local-latest health
+./scripts/deploy-tee.sh --fork unzen --release local-latest logs
 ```
 
 ## 10. Troubleshooting
