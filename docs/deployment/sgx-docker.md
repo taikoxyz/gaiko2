@@ -103,6 +103,23 @@ ghcr.io/taikoxyz/gaiko2-tee:v1.0.0
 Choose a fork and a release name. A release name is usually the image tag or an
 operator-friendly alias such as `v1.0.0` or `2026-04-15-hotfix`.
 
+The fork name is more than an env value: it selects the deploy tree
+(`deploy/<fork>/<release>/`) and the Docker Compose project name
+(`gaiko2-<fork>-<release>`). Changing it starts a fresh deployment rather than
+migrating an existing one. If you already run a `shasta` release and want to
+move to `unzen`:
+
+- `init` under the new fork bootstraps a **new sealed enclave key**, so you must
+  re-register the new quote with your verifier. The old key and its registered
+  instance id do not carry over.
+- The old stack keeps running under its own compose project. Take it down first
+  with `./scripts/deploy-tee.sh --fork shasta --release <release> down`, or the
+  new `up` will fail to bind the host port.
+
+To leave an existing deployment untouched, keep passing `--fork shasta`. The
+fork name is only a lookup key into `registered.gaiko2.json`; it does not change
+proving behavior or which API routes are served.
+
 Example:
 
 ```bash
@@ -313,7 +330,9 @@ This restores the old release's exact:
 - bootstrap quote metadata
 - registered instance id mapping
 
-No re-bootstrap is needed for rollback.
+No re-bootstrap is needed for rollback, as long as you roll back within the same
+fork. Passing a different `--fork` points at a different deploy tree and compose
+project, which is a new deployment rather than a rollback.
 
 ## 9. Example End-to-End Flow
 
