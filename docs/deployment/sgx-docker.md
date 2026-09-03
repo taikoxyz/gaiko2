@@ -120,9 +120,11 @@ move to `unzen`:
   are separated: config and secrets are bind mounts under each release
   directory, and containers and networks are namespaced per compose project.
   Host resources are not separated. Both stacks map the same
-  `/dev/sgx_enclave` and `/dev/sgx_provision`, compete for the same EPC, and
-  use the same PCCS, so treat side-by-side operation as a cutover window rather
-  than a steady state.
+  `/dev/sgx_enclave` and `/dev/sgx_provision` and compete for the same EPC and
+  host capacity, so treat side-by-side operation as a cutover window rather
+  than a steady state. They also share a PCCS endpoint by default, though
+  `PCCS_HOST` is stored per release, so `--pccs-host` can point them at
+  different ones.
 
 To leave an existing deployment untouched, keep passing `--fork shasta`. The
 fork name is only a lookup key into `registered.gaiko2.json`; it does not change
