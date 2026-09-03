@@ -112,13 +112,26 @@ move to `unzen`:
 - `init` under the new fork bootstraps a **new sealed enclave key**, so you must
   re-register the new quote with your verifier. The old key and its registered
   instance id do not carry over.
-- The old stack keeps running under its own compose project. Take it down first
-  with `./scripts/deploy-tee.sh --fork shasta --release <release> down`, or the
-  new `up` will fail to bind the host port.
+- The old stack keeps running under its own compose project, so the only
+  resource the two contend for is the host port. Either take the old one down
+  first with `./scripts/deploy-tee.sh --fork shasta --release <release> down`,
+  or give the new release its own port with `--port` and run both side by side
+  while you register and verify it. Nothing else is shared: config and secrets
+  are bind mounts under each release directory, and containers and networks are
+  namespaced per compose project.
 
 To leave an existing deployment untouched, keep passing `--fork shasta`. The
 fork name is only a lookup key into `registered.gaiko2.json`; it does not change
 proving behavior or which API routes are served.
+
+Use a canonical lowercase fork name. Deploy directories use the fork name
+verbatim, while the compose project name is slugified (lowercased, with runs of
+non-alphanumerics collapsed to `-`). `Unzen` and `unzen` would therefore write
+to two different deploy trees but share one compose project, so `down` under
+one spelling would stop the other's containers. The `registered.gaiko2.json`
+key is matched byte-for-byte as well, so `GAIKO2_FORK=Unzen` will not resolve
+`{"unzen": 1234}`, and that failure surfaces only when the server starts. Stick
+to `unzen`.
 
 Example:
 
