@@ -34,7 +34,7 @@ Commands:
   down       Stop and remove the tee server for this release
 
 Global options:
-  --fork <fork>                Fork name, e.g. shasta
+  --fork <fork>                Fork name, e.g. unzen
   --release <release>          Release name, e.g. v1.0.0
   --deploy-root <path>         Deploy root, defaults to ./deploy
   --tee-image <image>          Override GAIKO2_TEE_IMAGE in the release env

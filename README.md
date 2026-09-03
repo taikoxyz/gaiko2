@@ -1,7 +1,9 @@
 # gaiko2
 
-`gaiko2` is a lightweight Go service for replaying `raiko2` Shasta execution packets
-with `taiko-geth` and producing a TEE proof envelope.
+`gaiko2` is a lightweight Go service for replaying `raiko2` proposal execution
+packets with `taiko-geth` and producing a TEE proof envelope. The active proposal
+fork is Unzen. Existing `shasta` API routes, schemas, and fixture names remain
+unchanged as stable interfaces.
 
 ## Baseline
 
@@ -13,7 +15,7 @@ with `taiko-geth` and producing a TEE proof envelope.
 - `gaiko2` can decode `raiko2`-adapted execution packets and replay them with
   native `taiko-geth` stateless execution.
 - For proposal requests, `gaiko2` validates `GuestInput` carry data, raw blob hashes,
-  Shasta source manifests, canonical transaction lists, and block metadata before
+  proposal source manifests, canonical transaction lists, and block metadata before
   replaying the witness blocks.
 - `gaiko2` validates replay continuity against `proof_carry_data`.
 - proof output now supports two signer modes behind one envelope:
@@ -72,7 +74,7 @@ Proving configuration:
 - `GAIKO2_CONFIG_DIR=/path/to/config`
 - `GAIKO2_SECRET_DIR=/path/to/secrets`
 - `GAIKO2_INSTANCE_ID=0xDEADC0DE`
-- `GAIKO2_FORK=shasta`
+- `GAIKO2_FORK=unzen`
 - `GAIKO2_PORT=8080`
 - `GAIKO2_DEV_MODE=1` (native mode only; see below)
 
@@ -139,7 +141,7 @@ For tee Docker deployments, the container entrypoint copies the embedded
 enclave bootstrap runs.
 
 If an external registration script writes `registered.gaiko2.json` under
-`GAIKO2_CONFIG_DIR`, setting `GAIKO2_FORK=shasta` lets `gaiko2` resolve the tee
+`GAIKO2_CONFIG_DIR`, setting `GAIKO2_FORK=unzen` lets `gaiko2` resolve the tee
 instance id from that file instead of requiring `GAIKO2_INSTANCE_ID` directly.
 
 Inspect the embedded tee image metadata with:
@@ -196,8 +198,8 @@ docker compose --profile tee up --build gaiko2-tee
 For release-based SGX deployment, the operator entry point is:
 
 ```bash
-./scripts/deploy-tee.sh --fork shasta --release v1.0.0 init
-./scripts/deploy-tee.sh --fork shasta --release v1.0.0 up
+./scripts/deploy-tee.sh --fork unzen --release v1.0.0 init
+./scripts/deploy-tee.sh --fork unzen --release v1.0.0 up
 ```
 
 For the full runbook, including bootstrap, external registration, rollback, and

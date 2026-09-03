@@ -107,7 +107,7 @@ Example:
 
 ```bash
 ./scripts/deploy-tee.sh \
-  --fork shasta \
+  --fork unzen \
   --release v1.0.0 \
   --tee-image ghcr.io/taikoxyz/gaiko2-tee:v1.0.0 \
   --pccs-host host.docker.internal:8081 \
@@ -116,17 +116,17 @@ Example:
 
 What `init` does:
 
-- creates `deploy/shasta/v1.0.0/`
-- creates `deploy/shasta/v1.0.0/.env`
+- creates `deploy/unzen/v1.0.0/`
+- creates `deploy/unzen/v1.0.0/.env`
 - creates `config/` and `secrets/`
 - copies the embedded tee image attestation metadata into `config/`
 - runs the tee bootstrap container
 
 Expected result:
 
-- `deploy/shasta/v1.0.0/config/bootstrap.gaiko2.json`
-- `deploy/shasta/v1.0.0/config/attestation.gaiko2.json`
-- `deploy/shasta/v1.0.0/secrets/priv.gaiko2.key`
+- `deploy/unzen/v1.0.0/config/bootstrap.gaiko2.json`
+- `deploy/unzen/v1.0.0/config/attestation.gaiko2.json`
+- `deploy/unzen/v1.0.0/secrets/priv.gaiko2.key`
 
 The bootstrap JSON includes:
 
@@ -161,21 +161,21 @@ binary.
 Use your existing verifier registration flow with the quote from:
 
 ```bash
-deploy/shasta/v1.0.0/config/bootstrap.gaiko2.json
+deploy/unzen/v1.0.0/config/bootstrap.gaiko2.json
 ```
 
 Then write:
 
 ```json
 {
-  "shasta": 1234
+  "unzen": 1234
 }
 ```
 
 to:
 
 ```bash
-deploy/shasta/v1.0.0/config/registered.gaiko2.json
+deploy/unzen/v1.0.0/config/registered.gaiko2.json
 ```
 
 ### Option B: register hook
@@ -184,7 +184,7 @@ Configure a hook while bootstrapping:
 
 ```bash
 ./scripts/deploy-tee.sh \
-  --fork shasta \
+  --fork unzen \
   --release v1.0.0 \
   --register-hook /abs/path/to/register-hook.sh \
   init
@@ -193,7 +193,7 @@ Configure a hook while bootstrapping:
 Then invoke:
 
 ```bash
-./scripts/deploy-tee.sh --fork shasta --release v1.0.0 register
+./scripts/deploy-tee.sh --fork unzen --release v1.0.0 register
 ```
 
 An example hook contract is included at:
@@ -218,7 +218,7 @@ JSON paths and exits without modifying state.
 Once bootstrap and registration are complete:
 
 ```bash
-./scripts/deploy-tee.sh --fork shasta --release v1.0.0 up
+./scripts/deploy-tee.sh --fork unzen --release v1.0.0 up
 ```
 
 This runs:
@@ -231,7 +231,7 @@ waits until the container is healthy.
 If startup fails, the script tells you to inspect logs with:
 
 ```bash
-./scripts/deploy-tee.sh --fork shasta --release v1.0.0 logs
+./scripts/deploy-tee.sh --fork unzen --release v1.0.0 logs
 ```
 
 Expected healthy startup logs include:
@@ -243,7 +243,7 @@ Expected healthy startup logs include:
 Check release status:
 
 ```bash
-./scripts/deploy-tee.sh --fork shasta --release v1.0.0 status
+./scripts/deploy-tee.sh --fork unzen --release v1.0.0 status
 ```
 
 This reports:
@@ -259,19 +259,19 @@ This reports:
 Follow logs:
 
 ```bash
-./scripts/deploy-tee.sh --fork shasta --release v1.0.0 logs
+./scripts/deploy-tee.sh --fork unzen --release v1.0.0 logs
 ```
 
 Print the copied release attestation metadata:
 
 ```bash
-./scripts/deploy-tee.sh --fork shasta --release v1.0.0 metadata
+./scripts/deploy-tee.sh --fork unzen --release v1.0.0 metadata
 ```
 
 Check liveness:
 
 ```bash
-./scripts/deploy-tee.sh --fork shasta --release v1.0.0 health
+./scripts/deploy-tee.sh --fork unzen --release v1.0.0 health
 ```
 
 Expected:
@@ -283,7 +283,7 @@ Expected:
 Stop and remove the release:
 
 ```bash
-./scripts/deploy-tee.sh --fork shasta --release v1.0.0 down
+./scripts/deploy-tee.sh --fork unzen --release v1.0.0 down
 ```
 
 ## 8. Rollback
@@ -295,13 +295,13 @@ Example:
 1. new release fails:
 
 ```bash
-./scripts/deploy-tee.sh --fork shasta --release v1.0.1 down
+./scripts/deploy-tee.sh --fork unzen --release v1.0.1 down
 ```
 
 2. start the previous release again:
 
 ```bash
-./scripts/deploy-tee.sh --fork shasta --release v1.0.0 up
+./scripts/deploy-tee.sh --fork unzen --release v1.0.0 up
 ```
 
 This restores the old release's exact:
@@ -321,22 +321,22 @@ No re-bootstrap is needed for rollback.
 ./scripts/build-image.sh tee latest
 
 ./scripts/deploy-tee.sh \
-  --fork shasta \
+  --fork unzen \
   --release local-latest \
   --tee-image gaiko2-tee:latest \
   --pccs-host host.docker.internal:8081 \
   init
 
 # register externally, then either:
-# 1. write deploy/shasta/local-latest/config/registered.gaiko2.json
+# 1. write deploy/unzen/local-latest/config/registered.gaiko2.json
 # or
-# 2. set GAIKO2_INSTANCE_ID in deploy/shasta/local-latest/.env
+# 2. set GAIKO2_INSTANCE_ID in deploy/unzen/local-latest/.env
 
-./scripts/deploy-tee.sh --fork shasta --release local-latest metadata
-./scripts/deploy-tee.sh --fork shasta --release local-latest up
-./scripts/deploy-tee.sh --fork shasta --release local-latest status
-./scripts/deploy-tee.sh --fork shasta --release local-latest health
-./scripts/deploy-tee.sh --fork shasta --release local-latest logs
+./scripts/deploy-tee.sh --fork unzen --release local-latest metadata
+./scripts/deploy-tee.sh --fork unzen --release local-latest up
+./scripts/deploy-tee.sh --fork unzen --release local-latest status
+./scripts/deploy-tee.sh --fork unzen --release local-latest health
+./scripts/deploy-tee.sh --fork unzen --release local-latest logs
 ```
 
 ## 10. Troubleshooting
