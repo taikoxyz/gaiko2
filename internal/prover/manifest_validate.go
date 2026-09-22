@@ -523,15 +523,12 @@ func validateManifestAnchorNumbers(
 		anchors = append(anchors, block.AnchorBlockNumber)
 	}
 
-	if isForcedInclusion {
-		for _, anchor := range anchors {
-			if anchor != parentAnchorBlockNumber {
-				return false
-			}
-		}
-		return true
-	}
-
+	// The monotonicity and [origin-maxOffset, origin] window checks apply to every block
+	// of every source, forced inclusions included: canonical derivation exempts a forced
+	// source only from the strict-advance rule below, and replaces any source that leaves
+	// the window with the default manifest (taiko-client-rs validate_anchor_numbers).
+	// Forced blocks inherit the parent anchor, so a parent anchor that has stalled past
+	// the window takes this path and drops the source's transactions, matching canonical.
 	if err := validateManifestAnchorProgression(
 		anchors,
 		parentAnchorBlockNumber,
@@ -540,6 +537,10 @@ func validateManifestAnchorNumbers(
 	); err != nil {
 		return false
 	}
+	if isForcedInclusion {
+		return true
+	}
+
 	highestAnchorBlockNumber := parentAnchorBlockNumber
 	for _, anchor := range anchors {
 		if anchor > highestAnchorBlockNumber {
