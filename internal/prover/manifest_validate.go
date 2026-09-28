@@ -403,6 +403,9 @@ func decodeManifestPayload(payload []byte, offset uint64, maxBlocks int) (shasta
 	if err := rlp.DecodeBytes(decoded, &manifest); err != nil {
 		return shastaSourceManifest{}, fmt.Errorf("decode manifest rlp: %w", err)
 	}
+	if err := validateManifestTransactions(&manifest); err != nil {
+		return shastaSourceManifest{}, fmt.Errorf("validate manifest transactions: %w", err)
+	}
 	if len(manifest.Blocks) > maxBlocks {
 		return shastaSourceManifest{}, fmt.Errorf("manifest block count %d exceeds max %d", len(manifest.Blocks), maxBlocks)
 	}
