@@ -83,7 +83,21 @@ func decodeBlockEnvelope(raw json.RawMessage) (rawBlockEnvelope, error) {
 	return decoded, nil
 }
 
+// decodeHeader decodes an L2 header, which never carries a block access list hash.
 func decodeHeader(raw json.RawMessage) (*types.Header, error) {
+	header, err := decodeL1Header(raw)
+	if err != nil {
+		return nil, err
+	}
+	if header.BlockAccessListHash != nil {
+		return nil, fmt.Errorf("field block_access_list_hash is not supported by taiko-geth replay")
+	}
+	return header, nil
+}
+
+// decodeL1Header decodes an L1 header. Glamsterdam L1 headers carry the
+// EIP-7928 block access list hash, and their block hash commits to it.
+func decodeL1Header(raw json.RawMessage) (*types.Header, error) {
 	fields, err := decodeJSONObject(raw)
 	if err != nil {
 		return nil, fmt.Errorf("unmarshal header: %w", err)
@@ -210,8 +224,8 @@ func decodeHeader(raw json.RawMessage) (*types.Header, error) {
 	}
 	if blockAccessListHash, err := optionalHash(fields, "block_access_list_hash", "blockAccessListHash"); err != nil {
 		return nil, err
-	} else if blockAccessListHash != nil {
-		return nil, fmt.Errorf("field block_access_list_hash is not supported by taiko-geth replay")
+	} else {
+		header.BlockAccessListHash = blockAccessListHash
 	}
 
 	return header, nil

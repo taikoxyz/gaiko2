@@ -1289,7 +1289,7 @@ func decodeGuestInputL1Headers(raw json.RawMessage) (*types.Header, []*types.Hea
 	if !ok || isEmptyOrNullRawMessage(l1HeaderRaw) {
 		return nil, nil, fmt.Errorf("missing taiko.l1_header")
 	}
-	l1Header, err := decodeHeader(l1HeaderRaw)
+	l1Header, err := decodeL1Header(l1HeaderRaw)
 	if err != nil {
 		return nil, nil, fmt.Errorf("decode taiko.l1_header: %w", err)
 	}
@@ -1303,7 +1303,7 @@ func decodeGuestInputL1Headers(raw json.RawMessage) (*types.Header, []*types.Hea
 	}
 	ancestors := make([]*types.Header, len(rawList))
 	for i, r := range rawList {
-		h, err := decodeHeader(r)
+		h, err := decodeL1Header(r)
 		if err != nil {
 			return nil, nil, fmt.Errorf("decode taiko.l1_ancestor_headers[%d]: %w", i, err)
 		}
