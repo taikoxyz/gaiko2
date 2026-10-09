@@ -537,6 +537,36 @@ func TestDecodeGuestInputL1HeadersReadsOriginAndAncestors(t *testing.T) {
 	}
 }
 
+func TestDecodeGuestInputL1HeadersKeepsGlamsterdamHeaderHash(t *testing.T) {
+	header, err := os.ReadFile(testdataPath("l1_header_sepolia_11873940_glamsterdam.json"))
+	if err != nil {
+		t.Fatalf("read L1 header fixture: %v", err)
+	}
+	raw := mustRawMessage(t, fmt.Sprintf(`{"l1_header":%s,"l1_ancestor_headers":[%s]}`, header, header))
+
+	origin, ancestors, err := decodeGuestInputL1Headers(raw)
+	if err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	// Sepolia block 11873940 hash from eth_getBlockByNumber.
+	want := common.HexToHash("0xfd4eb21751cb7c7d94d75f61c9f6364558923a2db73599f9ed917ee65d8c5680")
+	if got := origin.Hash(); got != want {
+		t.Fatalf("origin hash: got %s, want %s", got, want)
+	}
+	if len(ancestors) != 1 || ancestors[0].Hash() != want {
+		t.Fatalf("ancestor hash mismatch")
+	}
+}
+
+func TestValidateManifestBindingAcceptsGlamsterdamL1Headers(t *testing.T) {
+	fixture := newManifestBindingFixture(t)
+	fixture.l1Glamsterdam = true
+
+	if err := ValidateGuestInputManifestBinding(fixture.view(t)); err != nil {
+		t.Fatalf("validate manifest binding: %v", err)
+	}
+}
+
 func TestValidateManifestBindingRejectsEmptyProposalSources(t *testing.T) {
 	view := newManifestBindingFixture(t).view(t)
 	taikoFields, err := decodeJSONObject(view.TaikoRaw)
@@ -1204,6 +1234,9 @@ type manifestBindingFixture struct {
 	anchorCheckpointBlockHash common.Hash
 	anchorCheckpointStateRoot common.Hash
 	omitL1Headers             bool
+	// l1Glamsterdam adds the Glamsterdam block access list hash and slot number
+	// to every synthetic L1 header.
+	l1Glamsterdam bool
 }
 
 type anchorSignatureMode uint8
@@ -1356,6 +1389,12 @@ func (f *manifestBindingFixture) buildL1Chain(t *testing.T) {
 			MixDigest:   common.Hash{},
 			Nonce:       types.BlockNonce{},
 			BaseFee:     new(big.Int).SetUint64(manifestTestBaseFee),
+		}
+		if f.l1Glamsterdam {
+			blockAccessListHash := common.HexToHash(fmt.Sprintf("0x%064x", 0x200000+number))
+			slotNumber := number
+			header.BlockAccessListHash = &blockAccessListHash
+			header.SlotNumber = &slotNumber
 		}
 		parentHash = header.Hash()
 		headers = append(headers, header)
@@ -2027,6 +2066,19 @@ func headerJSON(t *testing.T, header *types.Header) string {
 		binary.BigEndian.Uint64(header.Nonce[:]),
 		baseFee,
 	)
+	if header.BlockAccessListHash != nil || header.SlotNumber != nil {
+		fields, err := decodeJSONObject(json.RawMessage(raw))
+		if err != nil {
+			t.Fatalf("decode header object: %v", err)
+		}
+		if header.BlockAccessListHash != nil {
+			fields["blockAccessListHash"] = mustRawMessage(t, fmt.Sprintf("%q", header.BlockAccessListHash.Hex()))
+		}
+		if header.SlotNumber != nil {
+			fields["slotNumber"] = mustRawMessage(t, fmt.Sprintf(`"0x%x"`, *header.SlotNumber))
+		}
+		raw = string(mustMarshalRawMessage(t, fields))
+	}
 	return raw
 }
 

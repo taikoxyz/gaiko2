@@ -178,7 +178,11 @@ func loadSharedShastaFixture(t *testing.T) protocol.ShastaRequest {
 }
 
 func sharedShastaFixturePath() string {
+	return testdataPath(sharedFixtureName)
+}
+
+func testdataPath(name string) string {
 	_, file, _, _ := runtime.Caller(0)
 	root := filepath.Dir(filepath.Dir(filepath.Dir(file)))
-	return filepath.Join(root, "testdata", sharedFixtureName)
+	return filepath.Join(root, "testdata", name)
 }
