@@ -24,7 +24,7 @@ unchanged as stable interfaces.
     endpoint is disabled in native mode unless `GAIKO2_DEV_MODE=1` is set.
   - `tee`: sign with an enclave-managed key; the bootstrap step emits the `ego`
     quote used by external registration flows.
-- the checked-in shared fixture under `testdata/` is derived from a real
+- the retained local legacy fixture under `testdata/` is derived from a real
   `raiko2` GuestInput fixture and replays successfully.
 
 ## Verification
@@ -36,10 +36,13 @@ cd gaiko2
 go test ./...
 ```
 
-The main replay regression uses:
+The retained local unit and protocol replay regression uses:
 
 - [testdata/shasta_request_taiko_mainnet_proposal_2222_l2_5412225_5412416.json](testdata/shasta_request_taiko_mainnet_proposal_2222_l2_5412225_5412416.json)
 - [internal/prover/replay_fixture_test.go](internal/prover/replay_fixture_test.go)
+
+For optional native replay of shared external offline proposal fixtures, see
+[testdata/README.md](testdata/README.md#external-offline-proposal-regressions).
 
 The GuestInput soundness checks are covered by:
 
